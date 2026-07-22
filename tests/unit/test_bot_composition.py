@@ -1,0 +1,36 @@
+"""Composition-root tests without opening network connections."""
+
+from __future__ import annotations
+
+import pytest
+from aiogram.fsm.storage.redis import RedisStorage
+
+from app.bot import create_dispatcher
+from app.config import Settings
+from app.handlers import root_router
+from app.handlers.errors import handle_unexpected_error
+
+
+def make_settings() -> Settings:
+    return Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        BOT_TOKEN="123456:development-token",
+        DATABASE_URL="postgresql+asyncpg://user:password@localhost/database",
+        REDIS_URL="redis://localhost:6379/0",
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_uses_redis_and_includes_root_router() -> None:
+    dispatcher = create_dispatcher(make_settings())
+
+    assert isinstance(dispatcher.storage, RedisStorage)
+    assert root_router in dispatcher.sub_routers
+
+    await dispatcher.storage.close()
+
+
+def test_error_boundary_is_registered_on_root_router() -> None:
+    callbacks = [handler.callback for handler in root_router.errors.handlers]
+
+    assert handle_unexpected_error in callbacks
