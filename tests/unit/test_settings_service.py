@@ -40,6 +40,20 @@ def test_reminder_offsets_must_be_unique_and_non_empty() -> None:
         BusinessSettingsPatch(reminder_offsets_minutes=[60, 60])
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("portfolio_max_media", 11),
+        ("broadcast_messages_per_second", 21),
+        ("repeat_booking_reminder_days", 0),
+        ("client_page_size", 51),
+    ],
+)
+def test_v020_settings_enforce_documented_bounds(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        BusinessSettingsPatch.model_validate({field: value})
+
+
 @pytest.mark.asyncio
 async def test_setting_update_locks_row_increments_version_and_audits() -> None:
     unit_of_work = build_uow()

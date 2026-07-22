@@ -39,6 +39,7 @@ class Appointment(TimestampMixin, Base):
         ),
         Index("ix_appointments_client_status", "client_id", "status"),
         Index("ix_appointments_window", "window_id"),
+        Index("ix_appointments_design_reference", "design_reference_id"),
         Index(
             "uq_appointments_occupied_window",
             "window_id",
@@ -65,6 +66,11 @@ class Appointment(TimestampMixin, Base):
         ForeignKey("services.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    design_reference_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("portfolio_items.id", ondelete="RESTRICT"),
+    )
+    design_title_snapshot: Mapped[str | None] = mapped_column(String(255))
     rescheduled_from_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("appointments.id", ondelete="RESTRICT"),
@@ -82,6 +88,8 @@ class Appointment(TimestampMixin, Base):
     )
     client_comment: Mapped[str | None] = mapped_column(Text)
     client_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    no_show_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
 
