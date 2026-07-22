@@ -1,6 +1,6 @@
-# Архитектура lanrouge nails bot v0.1.0
+# Архитектура lanrouge nails bot v0.1.0 и расширение v0.2.0
 
-Статус: архитектура реализованного MVP v0.1.0; раздел 14 сохраняет последовательность этапов разработки.
+Статус: архитектура MVP v0.1.0 реализована; раздел 16 фиксирует согласованную спецификацию расширения v0.2.0 до начала реализации.
 
 ## 1. Цели и границы MVP
 
@@ -247,3 +247,169 @@ Audit log хранит изменения услуг, окон, настроек
 ## 15. Открытые решения
 
 Рабочие трактовки противоречивых или неполных требований собраны в [assumptions.md](assumptions.md). До реализации особо важны решения о дневном лимите, семантике `reserved`, модели переноса, повторном открытии окна и гарантиях доставки уведомлений.
+
+## 16. Архитектурное расширение v0.2.0: CRM и маркетинг
+
+### 16.1. Объём и совместимость
+
+v0.2.0 добавляет портфолио, карточки клиенток, теги и внутренние заметки, лист ожидания, отзывы, повторную запись, рекламные рассылки и историю согласий/маркетинговых действий. Существующие бронирование, ограничения PostgreSQL, статусная история, `NotificationJob`, настройки, admin-фильтр и Redis FSM расширяются, а не заменяются.
+
+В v0.2.0 по-прежнему не входят Mini App, web-панель, платежи, склад, бухгалтерия, лояльность, сертификаты, рефералы, несколько мастеров, сложная аналитика и AI. Миграции не удаляют таблицы или данные v0.1.0 и не изменяют применённую ревизию `20260722_0001`.
+
+### 16.2. Процессы и владение данными
+
+```text
+Telegram API
+   ^       ^                         ^
+   |       |                         |
+   |   notification-worker     broadcast-worker
+   |    /          |                 |
+   v   v           v                 v
+bot process ---- PostgreSQL <------ PostgreSQL advisory lock
+   |                ^                 + recipient leases
+   v                |
+Redis (FSM) --------+
+
+operator/CI ---- alembic upgrade head   # отдельный единичный шаг
+```
+
+- `bot` принимает updates, ведёт FSM, проверяет форму ввода и вызывает application services; массовых отправок внутри handler нет.
+- `notification-worker` обслуживает существующие напоминания, запросы отзывов, приглашения на повторную запись и надёжную очередь предложений листа ожидания.
+- `broadcast-worker` обслуживает только подтверждённые кампании и их зафиксированных получателей.
+- PostgreSQL остаётся единственным источником истины. Redis хранит только FSM и краткоживущие технические ключи.
+- Миграции не запускаются автоматически каждым процессом. Перед запуском процессов выполняется отдельная команда `alembic upgrade head` или единичный migration job.
+
+### 16.3. Модули и направление зависимостей
+
+В существующие слои добавляются предметные модули `portfolio`, `crm`, `waitlist`, `reviews` и `broadcasts`. Для каждого модуля сохраняется направление `handler/worker -> service -> domain -> repository/UoW -> SQLAlchemy/PostgreSQL`.
+
+- Portfolio service управляет draft/published/archived, порядком media и тегами; клиентский query возвращает только `published`.
+- CRM service строит карточку из `User` и агрегатов записей, управляет тегами, блокировкой самостоятельной записи и заметками.
+- Waitlist service валидирует предпочтения и сопоставляет открытые окна; финальная бронь всегда проходит через существующий `BookingService`.
+- Review service разрешает отзыв только владельцу `completed`-записи и отделяет неизменяемый клиентский текст от решения модератора.
+- Repeat booking service находит последнюю `completed`-запись, но передаёт актуальную активную услугу и выбранное окно обычному `BookingService`, который создаёт новый snapshot цены.
+- Broadcast service создаёт draft, preview/test send, фиксирует аудиторию при явном подтверждении и передаёт доставку worker'у.
+
+Telegram-типы, `Message`, `CallbackQuery` и FSM context не переходят границу handler. Репозитории не принимают продуктовых решений, а worker не обходит service-layer проверки.
+
+### 16.4. Новые модели и связи
+
+| Таблица / модель | Назначение, связи и ключевые ограничения |
+|---|---|
+| `portfolio_items` / `PortfolioItem` | Работа со статусом `draft/published/archived`; nullable FK на `services` и `users(created_by)`; `design_price NUMERIC(12,2) >= 0`; индекс `(status, sort_order, published_at)`; опубликованная работа архивируется, а не удаляется. |
+| `portfolio_media` / `PortfolioMedia` | FK на работу; Telegram `file_id`/`file_unique_id`, media type и position; `UNIQUE(portfolio_item_id, position)`; бинарные файлы в БД не хранятся. |
+| `portfolio_tags` / `PortfolioTag` | name, slug, `is_active`; уникальный slug и case-insensitive уникальность `lower(name)`. |
+| `portfolio_item_tags` / `PortfolioItemTag` | M:N работа-тег; составной PK/unique `(portfolio_item_id, tag_id)`. |
+| `client_tags` / `ClientTag` | Администраторские теги с nullable color/emoji и архивом; case-insensitive уникальность `lower(name)`. |
+| `user_client_tags` / `UserClientTag` | M:N клиент-тег; FK `assigned_by`; составной PK/unique `(user_id, tag_id)`. |
+| `client_notes` / `ClientNote` | Внутренняя заметка клиента с author, timestamps и nullable `archived_at`; ограниченная длина; текст никогда не попадает в лог/Audit diff. |
+| `consent_history` / `ConsentHistory` | Append-only история изменения privacy/marketing/repeat opt-out: user, type, previous/new value, source, timestamp. |
+| `waitlist_entries` / `WaitlistEntry` | Клиент, услуга, диапазон дат/времени, status `active/matched/booked/cancelled/expired`, `expires_at`; проверки `date_from <= date_to`, согласованности обеих границ времени; индексы активного поиска. |
+| `waitlist_notifications` / `WaitlistNotification` | Надёжная доставка пары request-window: status, scheduled/sent timestamps, attempts, lease, bounded error; `UNIQUE(waitlist_entry_id, window_id)`. Не зависит от appointment-oriented `NotificationJob`. |
+| `reviews` / `Review` | `UNIQUE(appointment_id)`, FK client; rating `1..5`, nullable text, publication consent, moderation `pending/approved/rejected/hidden`, published timestamp. Текст клиента не редактируется администратором. |
+| `broadcasts` / `Broadcast` | Draft и кампания: текст, parse mode, аудитория/параметры, button, nullable portfolio link и schedule; статусы `draft/scheduled/preparing/sending/completed/partially_failed/cancelled/failed`; creator и timestamps. |
+| `broadcast_media` / `BroadcastMedia` | Telegram media кампании с position; `UNIQUE(broadcast_id, position)`, без бинарных данных. |
+| `broadcast_recipients` / `BroadcastRecipient` | Замороженный при подтверждении пользователь аудитории; status `pending/processing/sent/retry/failed/skipped/unsubscribed/blocked`, attempts, schedule, lease, sent timestamp, bounded error/message id; `UNIQUE(broadcast_id, user_id)` и индекс очереди. |
+| `marketing_events` / `MarketingEvent` | Append-only внутренние клики по callback-кнопкам кампании; user/broadcast/type и минимальный безопасный JSON metadata. Просмотры сообщения не заявляются. |
+
+Существующие модели расширяются добавочно:
+
+- `appointments`: nullable `design_reference_id`, короткий `design_title_snapshot`, `completed_at`, `no_show_at`. FK на portfolio может стать `SET NULL`, snapshot сохраняет смысл архивированной работы.
+- `users`: отдельные поля блокировки самостоятельной записи (`is_self_booking_blocked`, причина, actor и timestamp) и `repeat_booking_opt_out_at`. `is_blocked` продолжает означать недоступный Telegram chat и не переиспользуется для CRM-блокировки.
+- `business_settings`: типизированные поля из раздела 16.10.
+- enum `notification_type`: добавляются `review_request` и `repeat_booking_reminder`; предложения листа ожидания остаются в отдельной таблице доставки.
+
+### 16.5. Права доступа
+
+| Действие/данные | Клиент | Администратор | Worker/system |
+|---|---:|---:|---:|
+| Published portfolio и публичные approved reviews | чтение | чтение/управление | чтение для отправки |
+| Draft/archived portfolio, media/tags | нет | CRUD с архивированием | нет |
+| Собственные записи, отзывы, consent и waitlist | только свои | чтение/управление по сценарию | только необходимое для задания |
+| Чужая карточка, теги, блокировка самостоятельной записи | нет | управление | агрегирование без UI-доступа |
+| Внутренние заметки | нет | создание/архивирование | нет |
+| Broadcast draft, preview, аудитория, запуск и результаты | нет | управление с явным подтверждением | только подтверждённая доставка |
+| Service notifications | нельзя отключить marketing-переключателем | настройка правил | доставка по действующему событию |
+
+Полномочия администратора по-прежнему определяются только числовым `ADMIN_TELEGRAM_IDS`. Router filter защищает UI, а service повторяет проверку actor/ownership; ID из callback не является авторизацией. Обычный пользователь никогда не получает общий список клиентов, заметки или данные чужой заявки.
+
+### 16.6. Транзакционные сценарии и идемпотентность
+
+- Публикация portfolio проверяет 1..`portfolio_max_media`, валидную услугу/цену и атомарно обновляет status, `published_at`, теги и AuditLog.
+- Назначение тега, блокировка самостоятельной записи и создание/архивирование заметки выполняются с AuditLog в одной UoW. В audit сохраняется факт и ID, но не текст заметки.
+- Открытие окна в любой точке (`create`, отмена, освобождение, перенос) после проверки инвариантов создаёт через `INSERT .. ON CONFLICT DO NOTHING` по одной `waitlist_notification` на каждую подходящую пару entry-window. Telegram I/O происходит только после commit.
+- Все подходящие участники листа ожидания получают сервисное предложение; эксклюзивного hold нет. Первая успешная транзакция существующего `BookingService` бронирует окно, остальные получают `SlotNoLongerAvailable`. Успешная бронь переводит подходящую заявку клиента в `booked` идемпотентно.
+- Первое завершение записи атомарно выставляет `completed/completed_at`, пишет историю и создаёт ровно один review request. Repeat job создаётся только при marketing consent и отсутствии opt-out; уникальные ключи не позволяют повторному нажатию создать дубли.
+- Отзыв создаётся только клиентом своей `completed`-записи; unique по appointment защищает от повтора. Approval допустим только при `publication_consent=true`; модератор меняет статус, но не текст.
+- Repeat booking использует последнюю completed-запись лишь как выбор услуги. Наличие активной услуги, текущая цена, открытое окно, дневной лимит и двойное бронирование заново проверяются `BookingService`.
+- Подтверждение broadcast атомарно фиксирует аудиторию в `broadcast_recipients`, исключая неподписанных и заблокированных. Перед каждой фактической отправкой worker повторно проверяет текущий marketing consent; отзыв подписки после snapshot переводит recipient в `unsubscribed`, а не отправляет рекламу.
+
+### 16.7. Workers, блокировки и завершение
+
+`notification-worker` сохраняет v0.1-механику коротких batch через `FOR UPDATE SKIP LOCKED`, status/lease и backoff. Eligibility становится type-specific: appointment reminder требует будущую активную запись, review request — `completed` и отсутствие review, repeat reminder — `completed`, действующий marketing consent, отсутствие opt-out/будущей записи и доступный chat. Этим же процессом отдельным repository обрабатывается очередь `waitlist_notifications`.
+
+`broadcast-worker` использует session-level PostgreSQL advisory lock, поэтому глобальный rate limiter и планировщик кампаний активны только в одном экземпляре. Получатели захватываются короткими транзакциями через `FOR UPDATE SKIP LOCKED`, переводятся в `processing` с lease и после Telegram-вызова получают терминальный status либо `retry` с `available_at`. `RetryAfter` имеет приоритет над exponential backoff с jitter. Ограничение по умолчанию — 15 сообщений/секунду.
+
+Оба worker обрабатывают SIGTERM: прекращают новые claims, завершают текущую отправку в ограниченный grace period, снимают/не продлевают lease и закрывают bot/DB resources. Просроченные leases возвращаются в очередь. Окончательное падение кампании/worker создаёт одно дедуплицированное техническое уведомление администраторам, а не цикл сообщений.
+
+Telegram Bot API не предоставляет idempotency key. Поэтому очереди гарантируют персистентность, уникальный recipient/job, отсутствие обычного повторного claim и at-least-once доставку; редкий дубль возможен при падении между успешным Telegram API call и commit `sent`. Строгое exactly-once не заявляется.
+
+### 16.8. Медиа, кнопки и распространение portfolio
+
+- Одна portfolio work содержит максимум 8 изображений, broadcast — максимум 5; сохраняются Telegram `file_id` и `file_unique_id`.
+- Broadcast с одним фото отправляется как media+caption+inline keyboard. Для альбома используется media group с caption, затем отдельное сообщение с кнопками, потому что Telegram не прикрепляет общую inline keyboard к media group.
+- Portfolio можно поделиться deep link вида `/start portfolio_<public_token-or-id>`; inline mode остаётся необязательным улучшением и не является зависимостью v0.2.0.
+- Пользовательский HTML/Markdown экранируется; произвольная URL-кнопка допускает только валидированный `https` URL.
+
+### 16.9. События, аудит и privacy
+
+Обязательные структурированные события: `portfolio_created`, `portfolio_published`, `client_tag_assigned`, `client_note_created`, `waitlist_created`, `waitlist_matched`, `review_submitted`, `review_approved`, `broadcast_created`, `broadcast_started`, `broadcast_completed`, `broadcast_cancelled`, `broadcast_recipient_failed`, `marketing_subscribed`, `marketing_unsubscribed`.
+
+События содержат correlation ID и внутренние IDs, status/reason code и безопасные счётчики. Они не содержат полный телефон, текст заметки/отзыва/приватной рассылки, токены, пароли или DSN. Case-insensitive поиск по телефону выполняется нормализованно; в списках телефон маскируется. В admin UI заметки сопровождаются предупреждением: «Не указывайте медицинские, банковские и другие чувствительные данные».
+
+`ConsentHistory` фиксирует источник каждого изменения marketing/repeat consent. Marketing opt-out не отменяет критические сообщения активной записи или явно запрошенные уведомления листа ожидания. Публикация отзыва требует отдельного consent и не выводится из marketing consent.
+
+### 16.10. Типизированные настройки v0.2.0
+
+| Поле | Default | Валидация / смысл |
+|---|---:|---|
+| `portfolio_page_size` | 5 | `1..20` |
+| `portfolio_max_media` | 8 | `1..10` |
+| `waitlist_default_expiration_days` | 31 | `1..180` |
+| `waitlist_notification_cooldown_minutes` | 180 | `0..10080`; cooldown между разными окнами, unique pair всегда обязателен |
+| `review_request_delay_minutes` | 60 | `0..10080` |
+| `repeat_booking_reminder_days` | 28 | `1..365` |
+| `broadcast_messages_per_second` | 15 | `1..20` |
+| `broadcast_max_media` | 5 | `0..10` |
+| `broadcast_max_retries` | 5 | `0..20` |
+| `broadcast_retry_base_seconds` | 15 | `1..3600` |
+| `client_page_size` | 10 | `1..50` |
+| `reviews_enabled` | `true` | feature flag |
+| `waitlist_enabled` | `true` | feature flag |
+| `broadcasts_enabled` | `false` | включается администратором только после migration/smoke test |
+| `portfolio_enabled` | `true` | feature flag |
+
+Поля являются колонками `BusinessSettings`, валидируются DTO/service и ограничениями БД. Изменение пишет старое и новое безопасное значение в AuditLog. Произвольный невалидируемый JSON для настроек не используется.
+
+### 16.11. Пагинация и стабильный порядок
+
+Общий DTO `PageRequest(limit, offset)` ограничивает limit, запрещает отрицательные значения и проверяет номер страницы/callback scope. Репозиторий применяет пагинацию до загрузки объектов. Порядок всегда имеет уникальный tie-breaker `id`: portfolio — `sort_order ASC, published_at DESC, id DESC`; клиенты — нормализованное имя и id; отзывы/broadcast/waitlist/history — предметная дата `DESC, id DESC`.
+
+Для масштаба одного мастера выбран limit/offset: он прост, поддерживает переход к номеру страницы и достаточен при заявленных объёмах. Cursor pagination может быть добавлена позже без изменения service API.
+
+### 16.12. План добавочных миграций
+
+Применённая `20260722_0001_initial_schema.py` остаётся неизменной. v0.2.0 разбивается на четыре последовательные ревизии:
+
+1. `0002_v020_crm_core`: nullable/default-safe поля `users`, `appointments`, типизированные `business_settings`, `consent_history`, client tags/notes и новые notification enum values.
+2. `0003_v020_portfolio`: portfolio items/media/tags/link table и FK design reference.
+3. `0004_v020_waitlist_reviews`: waitlist entries/delivery и reviews с индексами/constraints.
+4. `0005_v020_broadcasts`: broadcasts/media/recipients/marketing events и queue indexes.
+
+Проверяются пути clean database -> head, v0.1 revision -> head с сохранением существующих пользователей/записей/jobs/settings, downgrade каждой новой ревизии там, где он не уничтожает значимые production-данные, и повторный upgrade. Перед production upgrade обязательны backup, `alembic current`, применение миграций, smoke test и заранее проверенный план отката.
+
+Добавление значений native PostgreSQL enum не имеет простого безопасного downgrade при наличии строк с новыми значениями. Downgrade обязан сначала проверить/удалить или преобразовать зависимые v0.2-данные либо явно отказать; бесшумная потеря данных запрещена. Для новых enum предпочтительны именованные типы с явной migration lifecycle или `CHECK`, выбранные последовательно для всей группы.
+
+### 16.13. Порядок включения
+
+Сначала применяются миграции и запускаются regression/migration tests, затем обновляются процессы, выполняется smoke test и только после него включаются feature flags. `broadcasts_enabled` по умолчанию остаётся выключенным, чтобы незавершённый draft или ошибочно выбранная аудитория не запустили массовую отправку. Все этапы реализации имеют отдельный commit; переход к следующему этапу допускается только после зелёных относящихся проверок.
