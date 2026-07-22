@@ -24,6 +24,7 @@ from app.services import (
     ConsentService,
     CrmService,
     PortfolioService,
+    RepeatBookingService,
     RescheduleService,
     ReviewService,
     ServiceCatalog,
@@ -84,6 +85,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
     )
+    repeat_booking_service = RepeatBookingService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
@@ -98,6 +100,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         crm_service=crm_service,
         waitlist_service=waitlist_service,
         review_service=review_service,
+        repeat_booking_service=repeat_booking_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

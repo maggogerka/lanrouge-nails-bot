@@ -163,3 +163,30 @@ class AppointmentRepository:
             .group_by(Appointment.status)
         )
         return {status: int(count) for status, count in rows.all()}
+
+    async def latest_completed_for_client(self, client_id: int) -> Appointment | None:
+        return (
+            await self._session.scalars(
+                select(Appointment)
+                .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+                .where(
+                    Appointment.client_id == client_id,
+                    Appointment.status == AppointmentStatus.COMPLETED,
+                )
+                .order_by(AvailabilityWindow.start_at.desc(), Appointment.id.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+
+    async def has_future_active_for_client(self, client_id: int, now: datetime) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(func.count(Appointment.id))
+                .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+                .where(
+                    Appointment.client_id == client_id,
+                    Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                    AvailabilityWindow.start_at > now,
+                )
+            )
+        )

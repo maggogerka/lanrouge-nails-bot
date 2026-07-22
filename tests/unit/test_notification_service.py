@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -109,6 +110,7 @@ def build_uow(
     unit_of_work.notifications.get = AsyncMock(return_value=target_job)
     unit_of_work.notifications.claim_due = AsyncMock(return_value=[target_job])
     unit_of_work.appointments.get = AsyncMock(return_value=appointment(status=appointment_status))
+    unit_of_work.appointments.has_future_active_for_client = AsyncMock(return_value=False)
     unit_of_work.users.get_by_id = AsyncMock(return_value=recipient)
     unit_of_work.users.mark_blocked = AsyncMock()
     unit_of_work.windows.get = AsyncMock(return_value=window())
@@ -141,6 +143,30 @@ async def test_review_request_is_delivered_only_for_completed_without_existing_r
     cancelled = await service.prepare_delivery(21, "worker-1", now=NOW)
     assert cancelled is None
     assert target_job.status is NotificationJobStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_repeat_reminder_requires_live_marketing_consent_and_no_future_booking() -> None:
+    target_job = job()
+    target_job.notification_type = NotificationType.REPEAT_BOOKING_REMINDER
+    unit_of_work, target_job, recipient = build_uow(
+        target_job=target_job,
+        appointment_status=AppointmentStatus.COMPLETED,
+    )
+    recipient.marketing_consent_at = NOW
+    recipient.repeat_booking_opt_out_at = None
+    unit_of_work.services.get = AsyncMock(return_value=SimpleNamespace(is_active=True))
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is not None
+
+    unit_of_work.appointments.has_future_active_for_client.return_value = True
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is None
+    assert target_job.last_error == "repeat_booking_not_actionable"
 
 
 @pytest.mark.asyncio

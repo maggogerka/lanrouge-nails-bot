@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import NotificationType
 from app.keyboards.client.reminders import confirm_visit_keyboard
+from app.keyboards.client.repeat_booking import repeat_reminder_keyboard
 from app.keyboards.client.reviews import review_request_keyboard
 from app.schemas.notification import NotificationDelivery
 
@@ -19,6 +20,12 @@ def render_reminder(delivery: NotificationDelivery) -> str:
         return (
             "<b>Спасибо, что посетили lanrouge nails!</b>\n"
             "Будем рады узнать, как всё прошло. Оценка займёт меньше минуты."
+        )
+    if delivery.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+        return (
+            "<b>Возможно, пришло время обновить маникюр 💅</b>\n"
+            f"В прошлый раз вы выбирали: {escape(delivery.service_name)}.\n"
+            "Посмотреть новые свободные окна?"
         )
     if delivery.notification_type is NotificationType.CLIENT_REMINDER:
         return (
@@ -40,6 +47,8 @@ def render_reminder(delivery: NotificationDelivery) -> str:
 def reminder_keyboard(delivery: NotificationDelivery) -> InlineKeyboardMarkup:
     if delivery.notification_type is NotificationType.REVIEW_REQUEST:
         return review_request_keyboard(delivery.appointment_id)
+    if delivery.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+        return repeat_reminder_keyboard()
     if (
         delivery.notification_type is NotificationType.CLIENT_REMINDER
         and delivery.offset_minutes == 1440

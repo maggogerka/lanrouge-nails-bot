@@ -78,6 +78,21 @@ class NotificationService:
                     await self._cancel_job(unit_of_work, job, "review_not_actionable")
                     await unit_of_work.commit()
                     return None
+            elif job.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+                service = await unit_of_work.services.get(appointment.service_id)
+                if (
+                    appointment.status is not AppointmentStatus.COMPLETED
+                    or recipient.marketing_consent_at is None
+                    or recipient.repeat_booking_opt_out_at is not None
+                    or await unit_of_work.appointments.has_future_active_for_client(
+                        recipient.id, current_time
+                    )
+                    or service is None
+                    or not service.is_active
+                ):
+                    await self._cancel_job(unit_of_work, job, "repeat_booking_not_actionable")
+                    await unit_of_work.commit()
+                    return None
             elif appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
                 await self._cancel_job(unit_of_work, job, "appointment_inactive")
                 await unit_of_work.commit()
@@ -95,7 +110,10 @@ class NotificationService:
                 return None
             if (
                 job.notification_type
-                in {NotificationType.CLIENT_REMINDER, NotificationType.ADMIN_REMINDER}
+                in {
+                    NotificationType.CLIENT_REMINDER,
+                    NotificationType.ADMIN_REMINDER,
+                }
                 and window.start_at <= current_time
             ):
                 await self._cancel_job(unit_of_work, job, "appointment_started")

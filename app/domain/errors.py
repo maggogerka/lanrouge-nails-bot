@@ -61,6 +61,10 @@ class ReviewStateError(DomainError):
     """A review submission or moderation transition is invalid."""
 
 
+class RepeatBookingStateError(DomainError):
+    """A repeat-booking offer cannot be built from current history/catalog state."""
+
+
 class AppointmentNotFoundError(DomainError):
     """An appointment is absent or not visible to the current client."""
 

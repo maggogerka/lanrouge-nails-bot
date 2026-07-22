@@ -245,3 +245,26 @@ async def test_completed_visit_schedules_exactly_one_review_request() -> None:
 
     await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
     assert unit_of_work.notifications.add_all.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_visit_schedules_repeat_only_with_marketing_consent() -> None:
+    target_client = client()
+    target_client.marketing_consent_at = NOW
+    target_appointment = appointment()
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=window(hours_until=-4),
+        target_client=target_client,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+
+    batches = [call.args[0] for call in unit_of_work.notifications.add_all.await_args_list]
+    jobs = [job for batch in batches for job in batch]
+    assert [job.notification_type for job in jobs] == [
+        NotificationType.REVIEW_REQUEST,
+        NotificationType.REPEAT_BOOKING_REMINDER,
+    ]
+    assert jobs[1].available_at == NOW + timedelta(days=28)
