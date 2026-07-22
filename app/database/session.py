@@ -26,6 +26,7 @@ class Database:
             echo=echo,
             pool_pre_ping=True,
             pool_recycle=1800,
+            connect_args={"server_settings": {"timezone": "UTC"}},
         )
         sessions = async_sessionmaker(
             bind=engine,

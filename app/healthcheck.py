@@ -22,7 +22,11 @@ class DependencyUnavailableError(RuntimeError):
 async def check_database(database_url: str) -> None:
     """Open a fresh database connection and execute a side-effect-free query."""
 
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        connect_args={"server_settings": {"timezone": "UTC"}},
+    )
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
