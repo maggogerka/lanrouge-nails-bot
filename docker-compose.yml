@@ -33,7 +33,9 @@ services:
       - no-new-privileges:true
 
   migrate:
-    build: .
+    build:
+      context: .
+      target: runtime
     env_file: ${ENV_FILE:-.env}
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -44,7 +46,9 @@ services:
       - no-new-privileges:true
 
   bot:
-    build: .
+    build:
+      context: .
+      target: runtime
     restart: unless-stopped
     env_file: ${ENV_FILE:-.env}
     depends_on:
@@ -60,7 +64,9 @@ services:
       - no-new-privileges:true
 
   reminders:
-    build: .
+    build:
+      context: .
+      target: runtime
     command: ["python", "-m", "app.workers.reminders"]
     restart: unless-stopped
     env_file: ${ENV_FILE:-.env}

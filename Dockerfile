@@ -26,8 +26,9 @@ CMD ["python", "-m", "app.bot"]
 FROM runtime AS test
 
 USER root
-COPY tests ./tests
+COPY --chown=app:app tests ./tests
 RUN python -m pip install --no-cache-dir ".[dev]"
+RUN chown app:app /app
 USER app
 
 CMD ["pytest"]
