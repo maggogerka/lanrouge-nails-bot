@@ -8,6 +8,7 @@ from app.services.broadcast_service import BroadcastService
 from app.services.consent_service import ConsentService
 from app.services.crm_service import CrmService
 from app.services.marketing_event_service import MarketingEventService
+from app.services.master_profile_service import MasterProfileService
 from app.services.notification_service import NotificationService
 from app.services.portfolio_service import PortfolioService
 from app.services.repeat_booking_service import RepeatBookingService
@@ -27,6 +28,7 @@ __all__ = [
     "ConsentService",
     "CrmService",
     "MarketingEventService",
+    "MasterProfileService",
     "NotificationService",
     "PortfolioService",
     "RepeatBookingService",

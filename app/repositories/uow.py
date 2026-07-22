@@ -10,6 +10,7 @@ from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.broadcast_repository import BroadcastRepository
 from app.repositories.crm_repository import CrmRepository
+from app.repositories.master_profile_repository import MasterProfileRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.portfolio_repository import PortfolioRepository
 from app.repositories.reference_media_repository import ReferenceMediaRepository
@@ -36,6 +37,7 @@ class SqlAlchemyUnitOfWork:
         self.portfolio = PortfolioRepository(self.session)
         self.reference_media = ReferenceMediaRepository(self.session)
         self.crm = CrmRepository(self.session)
+        self.master_profile = MasterProfileRepository(self.session)
         self.waitlist = WaitlistRepository(self.session)
         self.reviews = ReviewRepository(self.session)
         self.broadcasts = BroadcastRepository(self.session)

@@ -14,6 +14,9 @@ CLIENT_REVIEWS_TEXT = "⭐ Отзывы"
 CLIENT_REPEAT_TEXT = "🔁 Повторить запись"
 
 
+CLIENT_MASTER_PROFILE_TEXT = "ℹ️ О мастере"
+
+
 def client_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -37,6 +40,7 @@ def client_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=CLIENT_REPEAT_TEXT),
                 KeyboardButton(text=CLIENT_REVIEWS_TEXT),
             ],
+            [KeyboardButton(text=CLIENT_MASTER_PROFILE_TEXT)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите раздел",

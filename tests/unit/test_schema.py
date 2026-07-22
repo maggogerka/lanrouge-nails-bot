@@ -20,6 +20,8 @@ from app.database.models import (
     ClientTag,
     ConsentHistory,
     MarketingEvent,
+    MasterProfile,
+    MasterPublicLink,
     NotificationJob,
     PortfolioItem,
     PortfolioItemTag,
@@ -61,6 +63,8 @@ EXPECTED_TABLES = {
     "broadcast_media",
     "broadcast_recipients",
     "marketing_events",
+    "master_profiles",
+    "master_public_links",
 }
 
 
@@ -91,6 +95,8 @@ def test_required_tables_are_registered() -> None:
     assert BroadcastMedia.__table__.name == "broadcast_media"
     assert BroadcastRecipient.__table__.name == "broadcast_recipients"
     assert MarketingEvent.__table__.name == "marketing_events"
+    assert MasterProfile.__table__.name == "master_profiles"
+    assert MasterPublicLink.__table__.name == "master_public_links"
 
 
 def test_every_datetime_column_is_timezone_aware() -> None:

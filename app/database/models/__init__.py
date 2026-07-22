@@ -11,6 +11,7 @@ from app.database.models.broadcast import (
     MarketingEvent,
 )
 from app.database.models.crm import ClientNote, ClientTag, ConsentHistory, UserClientTag
+from app.database.models.master_profile import MasterProfile, MasterPublicLink
 from app.database.models.notification import NotificationJob
 from app.database.models.portfolio import (
     PortfolioItem,
@@ -38,6 +39,8 @@ __all__ = [
     "ClientTag",
     "ConsentHistory",
     "MarketingEvent",
+    "MasterProfile",
+    "MasterPublicLink",
     "NotificationJob",
     "PortfolioItem",
     "PortfolioItemTag",

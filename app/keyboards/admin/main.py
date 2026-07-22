@@ -15,6 +15,9 @@ ADMIN_REVIEWS_TEXT = "⭐ Отзывы"
 ADMIN_BROADCASTS_TEXT = "📢 Рассылки"
 
 
+ADMIN_MASTER_PROFILE_TEXT = "ℹ️ Информация о мастере"
+
+
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
     """Return only implemented administrative sections."""
 
@@ -38,6 +41,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
             ],
             [KeyboardButton(text=ADMIN_REVIEWS_TEXT)],
             [KeyboardButton(text=ADMIN_BROADCASTS_TEXT)],
+            [KeyboardButton(text=ADMIN_MASTER_PROFILE_TEXT)],
             [KeyboardButton(text=ADMIN_SETTINGS_TEXT)],
         ],
         resize_keyboard=True,

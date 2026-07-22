@@ -5,6 +5,7 @@ from aiogram import Router
 from app.handlers.client.appointments import router as appointments_router
 from app.handlers.client.booking import router as booking_router
 from app.handlers.client.marketing import router as marketing_router
+from app.handlers.client.master_profile import router as master_profile_router
 from app.handlers.client.menu import router as menu_router
 from app.handlers.client.notifications import router as notifications_router
 from app.handlers.client.onboarding import router as onboarding_router
@@ -18,6 +19,7 @@ router = Router(name="client")
 router.include_routers(
     onboarding_router,
     marketing_router,
+    master_profile_router,
     reminders_router,
     reviews_router,
     repeat_booking_router,

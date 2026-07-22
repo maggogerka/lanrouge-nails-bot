@@ -28,6 +28,7 @@ async def integration_database() -> AsyncIterator[Database]:
                 "TRUNCATE TABLE audit_logs, notification_jobs, appointment_reference_media, "
                 "waitlist_notifications, waitlist_entries, review_revisions, reviews, "
                 "broadcast_recipients, broadcast_media, broadcasts, marketing_events, "
+                "master_public_links, master_profiles, "
                 "portfolio_item_tags, portfolio_media, portfolio_items, portfolio_tags, "
                 "user_client_tags, client_notes, client_tags, consent_history, "
                 "appointment_status_history, appointments, availability_windows, "
