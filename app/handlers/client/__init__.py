@@ -6,6 +6,7 @@ from app.handlers.client.appointments import router as appointments_router
 from app.handlers.client.booking import router as booking_router
 from app.handlers.client.marketing import router as marketing_router
 from app.handlers.client.menu import router as menu_router
+from app.handlers.client.notifications import router as notifications_router
 from app.handlers.client.onboarding import router as onboarding_router
 from app.handlers.client.portfolio import router as portfolio_router
 from app.handlers.client.reminders import router as reminders_router
@@ -20,6 +21,7 @@ router.include_routers(
     reminders_router,
     reviews_router,
     repeat_booking_router,
+    notifications_router,
     appointments_router,
     portfolio_router,
     waitlist_router,

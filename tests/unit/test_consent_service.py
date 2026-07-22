@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database.models import User
+from app.domain.enums import ConsentSource, ConsentType
 from app.domain.errors import PrivacyConsentRequiredError
 from app.schemas.booking import ClientActor
 from app.services.consent_service import ConsentService
@@ -41,6 +42,7 @@ def build_uow(client: User) -> MagicMock:
 
     unit_of_work.users.set_privacy_consent = AsyncMock(side_effect=set_privacy)
     unit_of_work.users.set_marketing_consent = AsyncMock(side_effect=set_marketing)
+    unit_of_work.crm.add_consent_history = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
@@ -64,6 +66,11 @@ async def test_privacy_and_marketing_are_separate_decisions() -> None:
         "consent.marketing_changed",
     ]
     assert unit_of_work.commit.await_count == 2
+    histories = [call.args[0] for call in unit_of_work.crm.add_consent_history.await_args_list]
+    assert [item.consent_type for item in histories] == [
+        ConsentType.PRIVACY,
+        ConsentType.MARKETING,
+    ]
 
 
 @pytest.mark.asyncio
@@ -97,3 +104,44 @@ async def test_deletion_request_disables_marketing_and_is_audited() -> None:
     assert audit["action"] == "privacy.deletion_requested"
     assert audit["correlation_id"] == "request-delete"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notification_settings_are_independent_and_audited() -> None:
+    client = user()
+    client.privacy_consent_at = NOW
+    client.marketing_unsubscribed_at = NOW
+    unit_of_work = build_uow(client)
+    service = ConsentService(lambda: unit_of_work)  # type: ignore[arg-type]
+
+    marketing = await service.set_marketing(
+        actor(),
+        accepted=True,
+        source=ConsentSource.NOTIFICATION_SETTINGS,
+        now=NOW,
+    )
+    repeat = await service.set_repeat_booking(actor(), accepted=False, now=NOW)
+
+    assert marketing.marketing_accepted
+    assert not repeat.repeat_booking_enabled
+    assert repeat.service_notifications_enabled
+    histories = [call.args[0] for call in unit_of_work.crm.add_consent_history.await_args_list]
+    assert [(item.consent_type, item.previous_value, item.new_value) for item in histories] == [
+        (ConsentType.MARKETING, False, True),
+        (ConsentType.REPEAT_BOOKING, True, False),
+    ]
+    assert all(item.source is ConsentSource.NOTIFICATION_SETTINGS for item in histories)
+
+
+@pytest.mark.asyncio
+async def test_repeating_same_preference_does_not_duplicate_history() -> None:
+    client = user()
+    client.privacy_consent_at = NOW
+    client.marketing_consent_at = NOW
+    unit_of_work = build_uow(client)
+    service = ConsentService(lambda: unit_of_work)  # type: ignore[arg-type]
+
+    await service.set_marketing(actor(), accepted=True, now=NOW)
+    await service.set_repeat_booking(actor(), accepted=True, now=NOW)
+
+    unit_of_work.crm.add_consent_history.assert_not_awaited()

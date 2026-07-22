@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database.models import Appointment, Service, User
-from app.domain.enums import AppointmentStatus
+from app.domain.enums import AppointmentStatus, ConsentType
 from app.domain.errors import RepeatBookingStateError
 from app.schemas.booking import ClientActor
 from app.services.repeat_booking_service import RepeatBookingService
@@ -54,6 +54,7 @@ def build_uow(*, previous: Appointment | None = None, active: bool = True) -> Ma
         return_value=SimpleNamespace(master_telegram_url="https://t.me/master")
     )
     unit_of_work.audit.add = AsyncMock()
+    unit_of_work.crm.add_consent_history = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
 
@@ -101,4 +102,7 @@ async def test_repeat_opt_out_is_independent_from_marketing_consent() -> None:
 
     assert client.repeat_booking_opt_out_at == NOW
     assert client.marketing_consent_at == NOW
+    history = unit_of_work.crm.add_consent_history.await_args.args[0]
+    assert history.consent_type is ConsentType.REPEAT_BOOKING
+    assert not history.new_value
     unit_of_work.commit.assert_awaited_once()

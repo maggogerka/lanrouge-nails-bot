@@ -8,7 +8,6 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.main import (
     CLIENT_CONTACTS_TEXT,
-    CLIENT_NOTIFICATIONS_TEXT,
     CLIENT_PREPARATION_TEXT,
     CLIENT_SERVICES_TEXT,
 )
@@ -54,6 +53,6 @@ async def show_contacts(message: Message, booking_service: BookingService) -> No
     )
 
 
-@router.message(F.text.in_({CLIENT_PREPARATION_TEXT, CLIENT_NOTIFICATIONS_TEXT}))
+@router.message(F.text == CLIENT_PREPARATION_TEXT)
 async def show_future_section(message: Message) -> None:
     await message.answer("Раздел появится в следующей версии.")

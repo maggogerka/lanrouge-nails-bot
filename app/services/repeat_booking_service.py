@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from app.database.models import User
+from app.database.models import ConsentHistory, User
+from app.domain.enums import ConsentSource, ConsentType
 from app.domain.errors import PrivacyConsentRequiredError, RepeatBookingStateError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import ClientActor
@@ -54,15 +55,25 @@ class RepeatBookingService:
             raise ValueError("now must be timezone-aware")
         async with self._unit_of_work_factory() as uow:
             client = await self._client(uow, actor.telegram_id, for_update=True)
-            client.repeat_booking_opt_out_at = current.astimezone(UTC)
-            await uow.audit.add(
-                actor_user_id=client.id,
-                action="repeat_booking.opted_out",
-                entity_type="user",
-                entity_id=str(client.id),
-                changes={"opted_out_at": current.astimezone(UTC).isoformat()},
-                correlation_id=correlation_id,
-            )
+            if client.repeat_booking_opt_out_at is None:
+                client.repeat_booking_opt_out_at = current.astimezone(UTC)
+                await uow.crm.add_consent_history(
+                    ConsentHistory(
+                        user_id=client.id,
+                        consent_type=ConsentType.REPEAT_BOOKING,
+                        previous_value=True,
+                        new_value=False,
+                        source=ConsentSource.NOTIFICATION_SETTINGS,
+                    )
+                )
+                await uow.audit.add(
+                    actor_user_id=client.id,
+                    action="repeat_booking.opted_out",
+                    entity_type="user",
+                    entity_id=str(client.id),
+                    changes={"opted_out_at": current.astimezone(UTC).isoformat()},
+                    correlation_id=correlation_id,
+                )
             await uow.commit()
 
     @staticmethod

@@ -29,6 +29,14 @@ class ConsentStatus(BaseModel):
     marketing_accepted: bool
 
 
+class NotificationPreferences(BaseModel):
+    """Client-visible notification choices; service messages cannot be disabled."""
+
+    service_notifications_enabled: bool = True
+    marketing_enabled: bool
+    repeat_booking_enabled: bool
+
+
 class BusinessInfo(BaseModel):
     """Public studio contacts loaded from business settings."""
 
