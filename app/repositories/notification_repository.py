@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,62 @@ class NotificationRepository:
     async def add_all(self, jobs: list[NotificationJob]) -> None:
         self._session.add_all(jobs)
         await self._session.flush()
+
+    async def get(
+        self,
+        job_id: int,
+        *,
+        for_update: bool = False,
+    ) -> NotificationJob | None:
+        statement = select(NotificationJob).where(NotificationJob.id == job_id)
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self._session.scalars(statement)
+        return result.one_or_none()
+
+    async def claim_due(
+        self,
+        *,
+        now: datetime,
+        lease_expired_before: datetime,
+        worker_id: str,
+        limit: int,
+    ) -> list[NotificationJob]:
+        """Claim pending jobs and expired processing leases without worker contention."""
+
+        result = await self._session.scalars(
+            select(NotificationJob)
+            .where(
+                or_(
+                    and_(
+                        NotificationJob.status == NotificationJobStatus.PENDING,
+                        NotificationJob.available_at <= now,
+                    ),
+                    and_(
+                        NotificationJob.status == NotificationJobStatus.PROCESSING,
+                        NotificationJob.available_at <= now,
+                        NotificationJob.locked_at <= lease_expired_before,
+                    ),
+                )
+            )
+            .order_by(NotificationJob.available_at, NotificationJob.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        jobs = list(result.all())
+        for job in jobs:
+            job.status = NotificationJobStatus.PROCESSING
+            job.attempts += 1
+            job.locked_at = now
+            job.locked_by = worker_id
+        await self._session.flush()
+        return jobs
+
+    async def list_for_appointment(self, appointment_id: int) -> list[NotificationJob]:
+        result = await self._session.scalars(
+            select(NotificationJob).where(NotificationJob.appointment_id == appointment_id)
+        )
+        return list(result.all())
 
     async def cancel_unsent(self, appointment_id: int) -> int:
         result = await self._session.execute(

@@ -1,1 +1,1 @@
-"""Background workers introduced in the reminders stage."""
+"""Independent persistent background workers."""

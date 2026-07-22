@@ -68,6 +68,30 @@ class Settings(BaseSettings):
         validation_alias="PRIVACY_POLICY_URL",
     )
     sentry_dsn: SecretStr | None = Field(default=None, validation_alias="SENTRY_DSN")
+    reminder_poll_interval_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=300,
+        validation_alias="REMINDER_POLL_INTERVAL_SECONDS",
+    )
+    reminder_batch_size: int = Field(
+        default=20,
+        gt=0,
+        le=200,
+        validation_alias="REMINDER_BATCH_SIZE",
+    )
+    reminder_max_attempts: int = Field(
+        default=5,
+        gt=0,
+        le=20,
+        validation_alias="REMINDER_MAX_ATTEMPTS",
+    )
+    reminder_lease_seconds: int = Field(
+        default=120,
+        gt=0,
+        le=3600,
+        validation_alias="REMINDER_LEASE_SECONDS",
+    )
 
     @field_validator("privacy_policy_url", "sentry_dsn", mode="before")
     @classmethod
@@ -160,6 +184,17 @@ class Settings(BaseSettings):
 
         if not self.database_url.get_secret_value():
             raise RuntimeConfigurationError(("DATABASE_URL",))
+
+    def validate_worker_runtime(self) -> None:
+        """Check values used by the independent reminder worker."""
+
+        missing: list[str] = []
+        if not self.bot_token.get_secret_value():
+            missing.append("BOT_TOKEN")
+        if not self.database_url.get_secret_value():
+            missing.append("DATABASE_URL")
+        if missing:
+            raise RuntimeConfigurationError(tuple(missing))
 
     def _missing_connections(self) -> list[str]:
         missing: list[str] = []

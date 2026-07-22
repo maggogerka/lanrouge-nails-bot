@@ -88,6 +88,21 @@ class AppointmentRepository:
         )
         return [(row[0], row[1]) for row in result.all()]
 
+    async def list_future_active(
+        self,
+        now: datetime,
+    ) -> list[tuple[Appointment, AvailabilityWindow]]:
+        result = await self._session.execute(
+            select(Appointment, AvailabilityWindow)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(
+                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                AvailabilityWindow.start_at > now,
+            )
+            .order_by(AvailabilityWindow.start_at, Appointment.id)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
     async def count_capacity_between(
         self,
         start_at: datetime,

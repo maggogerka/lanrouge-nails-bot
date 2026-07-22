@@ -183,3 +183,22 @@ async def test_admin_manual_confirmation_writes_history() -> None:
     assert target_appointment.client_confirmed_at == NOW
     unit_of_work.appointments.add_history.assert_awaited_once()
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_client_can_confirm_only_own_visit_from_reminder() -> None:
+    target_appointment = appointment()
+    unit_of_work = build_uow(target_appointment=target_appointment)
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    confirmed = await service.confirm_my_visit(
+        ClientActor(telegram_id=101),
+        11,
+        now=NOW,
+        correlation_id="request-reminder",
+    )
+
+    assert confirmed.status is AppointmentStatus.CLIENT_CONFIRMED
+    assert target_appointment.client_confirmed_at == NOW
+    assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-reminder"
+    unit_of_work.commit.assert_awaited_once()

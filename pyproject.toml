@@ -32,6 +32,7 @@ dev = [
 [project.scripts]
 lanrouge-bot = "app.bot:run"
 lanrouge-healthcheck = "app.healthcheck:run"
+lanrouge-reminders = "app.workers.reminders:run"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

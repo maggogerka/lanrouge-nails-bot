@@ -59,6 +59,23 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  reminders:
+    build: .
+    command: ["python", "-m", "app.workers.reminders"]
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    init: true
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   postgres-data:
   redis-data:

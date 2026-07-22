@@ -72,3 +72,13 @@ def test_secret_values_are_hidden_from_repr() -> None:
     assert "development-token" not in rendered
     assert "password" not in rendered
     assert "**********" in rendered
+
+
+def test_worker_runtime_requires_bot_and_database_but_not_redis() -> None:
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        BOT_TOKEN="123456:development-token",
+        DATABASE_URL="postgresql+asyncpg://user:password@localhost/db",
+    )
+
+    settings.validate_worker_runtime()

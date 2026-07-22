@@ -263,6 +263,52 @@ class AppointmentService:
                 current_time,
             )
 
+    async def confirm_my_visit(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> AppointmentView:
+        """Handle the explicit client confirmation from the 24-hour reminder."""
+
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            ensure_owner(appointment, client)
+            if appointment.status is not AppointmentStatus.CONFIRMED:
+                raise AppointmentStateError("Визит уже подтверждён или запись неактивна.")
+            appointment.status = AppointmentStatus.CLIENT_CONFIRMED
+            appointment.client_confirmed_at = current_time
+            await unit_of_work.appointments.add_history(
+                AppointmentStatusHistory(
+                    appointment_id=appointment.id,
+                    previous_status=AppointmentStatus.CONFIRMED,
+                    new_status=AppointmentStatus.CLIENT_CONFIRMED,
+                    changed_by_user_id=client.id,
+                    reason="Подтверждено клиенткой",
+                )
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=client.id,
+                action="appointment.visit_confirmed",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={
+                    "status": {
+                        "before": AppointmentStatus.CONFIRMED.value,
+                        "after": AppointmentStatus.CLIENT_CONFIRMED.value,
+                    }
+                },
+                correlation_id=correlation_id,
+            )
+            window = await self._window(unit_of_work, appointment.window_id)
+            settings = await self._settings(unit_of_work)
+            await unit_of_work.commit()
+            return appointment_view(appointment, window, settings, current_time)
+
     async def _lock_appointment_window(
         self,
         unit_of_work: SqlAlchemyUnitOfWork,

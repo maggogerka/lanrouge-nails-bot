@@ -86,6 +86,10 @@ class UserRepository:
         user.marketing_unsubscribed_at = None if accepted else changed_at
         await self._session.flush()
 
+    async def mark_blocked(self, user: User) -> None:
+        user.is_blocked = True
+        await self._session.flush()
+
     async def get_or_create_admin(self, actor: AdminActor) -> User:
         result = await self._session.execute(
             select(User).where(User.telegram_id == actor.telegram_id)
