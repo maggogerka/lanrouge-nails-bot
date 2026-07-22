@@ -8,10 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.broadcast_repository import BroadcastRepository
+from app.repositories.crm_repository import CrmRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.portfolio_repository import PortfolioRepository
+from app.repositories.review_repository import ReviewRepository
 from app.repositories.service_repository import ServiceRepository
 from app.repositories.settings_repository import SettingsRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.waitlist_repository import WaitlistRepository
 from app.repositories.window_repository import WindowRepository
 
 
@@ -27,6 +32,11 @@ class SqlAlchemyUnitOfWork:
         self.settings = SettingsRepository(self.session)
         self.users = UserRepository(self.session)
         self.audit = AuditRepository(self.session)
+        self.portfolio = PortfolioRepository(self.session)
+        self.crm = CrmRepository(self.session)
+        self.waitlist = WaitlistRepository(self.session)
+        self.reviews = ReviewRepository(self.session)
+        self.broadcasts = BroadcastRepository(self.session)
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         return self
