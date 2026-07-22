@@ -32,6 +32,10 @@ class UserRepository:
         result = await self._session.scalars(statement)
         return result.one_or_none()
 
+    async def get_by_id(self, user_id: int) -> User | None:
+        result = await self._session.scalars(select(User).where(User.id == user_id))
+        return result.one_or_none()
+
     async def get_or_create_client(self, actor: ClientActor) -> User:
         """Upsert a Telegram identity without overwriting authority or a booking name."""
 

@@ -43,3 +43,15 @@ class BookingConflictError(BookingUnavailableError):
 
 class BookingLimitError(BookingUnavailableError):
     """The business-day appointment capacity has been exhausted."""
+
+
+class AppointmentNotFoundError(DomainError):
+    """An appointment is absent or not visible to the current client."""
+
+
+class AppointmentStateError(DomainError):
+    """An appointment transition is invalid for its current state."""
+
+
+class CancellationDeadlineError(DomainError):
+    """A client-initiated change is too close to the appointment start."""

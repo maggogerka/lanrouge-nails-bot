@@ -79,6 +79,33 @@ class ConsentService:
             await unit_of_work.commit()
             return self._status(user)
 
+    async def request_deletion(
+        self,
+        actor: ClientActor,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        """Record a reviewable request without destroying required booking history."""
+
+        requested_at = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            user = await unit_of_work.users.get_or_create_client(actor)
+            await unit_of_work.users.set_marketing_consent(
+                user,
+                accepted=False,
+                changed_at=requested_at,
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=user.id,
+                action="privacy.deletion_requested",
+                entity_type="user",
+                entity_id=str(user.id),
+                changes={"requested_at": requested_at.isoformat()},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+
     @staticmethod
     def _status(user: User) -> ConsentStatus:
         return ConsentStatus(

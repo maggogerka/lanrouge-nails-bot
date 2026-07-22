@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.domain.booking import normalize_phone, validate_service_fits_window
+from app.domain.booking import (
+    normalize_phone,
+    validate_bookable_date,
+    validate_service_fits_window,
+)
 from app.domain.enums import NotificationType
 from app.domain.errors import BookingUnavailableError
 from app.domain.notifications import future_reminder_schedules
@@ -34,6 +38,18 @@ def test_service_fit_uses_maximum_duration() -> None:
             duration_max_minutes=211,
             start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
             end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
+        )
+
+
+def test_current_weekend_rule_is_rechecked_for_persisted_window() -> None:
+    with pytest.raises(BookingUnavailableError, match="субботу"):
+        validate_bookable_date(
+            start_at=datetime(2026, 7, 25, 7, tzinfo=UTC),
+            now=datetime(2026, 7, 22, 9, tzinfo=UTC),
+            timezone="Europe/Moscow",
+            booking_horizon_days=31,
+            allow_saturday=False,
+            allow_sunday=False,
         )
 
 

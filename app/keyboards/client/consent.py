@@ -41,3 +41,22 @@ def marketing_consent_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def deletion_request_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, отправить запрос",
+                    callback_data=ConsentCallback(action="deletion_confirm").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет",
+                    callback_data=ConsentCallback(action="deletion_cancel").pack(),
+                )
+            ],
+        ]
+    )

@@ -17,7 +17,7 @@ from app.database.models import (
     User,
 )
 from app.domain.availability import utc_day_bounds
-from app.domain.booking import validate_service_fits_window
+from app.domain.booking import validate_bookable_date, validate_service_fits_window
 from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
 from app.domain.errors import (
     BookingConflictError,
@@ -105,6 +105,10 @@ class BookingService:
                 candidate_date = window.start_at.astimezone(zone).date()
                 if local_date is not None and candidate_date != local_date:
                     continue
+                if candidate_date.weekday() == 5 and not settings.allow_saturday:
+                    continue
+                if candidate_date.weekday() == 6 and not settings.allow_sunday:
+                    continue
                 if self._service_fits(service, window.start_at, window.end_at):
                     candidates.append(window)
 
@@ -165,15 +169,21 @@ class BookingService:
                     await unit_of_work.services.get(values.service_id, for_update=True)
                 )
 
-                if window.start_at <= current_time:
-                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+                validated_local_date = validate_bookable_date(
+                    start_at=window.start_at,
+                    now=current_time,
+                    timezone=settings.timezone,
+                    booking_horizon_days=settings.booking_horizon_days,
+                    allow_saturday=settings.allow_saturday,
+                    allow_sunday=settings.allow_sunday,
+                )
                 validate_service_fits_window(
                     duration_max_minutes=service.duration_max_minutes,
                     start_at=window.start_at,
                     end_at=window.end_at,
                 )
                 actual_local_date = window.start_at.astimezone(ZoneInfo(settings.timezone)).date()
-                if actual_local_date != local_date:
+                if actual_local_date != local_date or validated_local_date != local_date:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 day_start, day_end = utc_day_bounds(local_date, settings.timezone)
                 daily_count = await unit_of_work.appointments.count_capacity_between(

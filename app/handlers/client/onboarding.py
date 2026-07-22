@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -11,6 +11,7 @@ from app.config import Settings
 from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.consent import (
     ConsentCallback,
+    deletion_request_keyboard,
     marketing_consent_keyboard,
     privacy_consent_keyboard,
 )
@@ -107,4 +108,38 @@ async def choose_marketing(
             "Можно переходить к записи.",
             reply_markup=client_main_keyboard(),
         )
+    await callback.answer()
+
+
+@router.message(Command("delete_my_data"))
+async def request_data_deletion(message: Message) -> None:
+    await message.answer(
+        "Отправить мастеру запрос на удаление или допустимую анонимизацию ваших данных? "
+        "История записей может сохраняться в обезличенном виде в пределах обязательных сроков.",
+        reply_markup=deletion_request_keyboard(),
+    )
+
+
+@router.callback_query(ConsentCallback.filter(F.action == "deletion_confirm"))
+async def confirm_data_deletion_request(
+    callback: CallbackQuery,
+    consent_service: ConsentService,
+    correlation_id: str,
+) -> None:
+    await consent_service.request_deletion(
+        actor_from_telegram(callback.from_user),
+        correlation_id=correlation_id,
+    )
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Запрос сохранён. Рекламная подписка отключена. Мастер свяжется с вами "
+            "для подтверждения допустимого состава удаления или анонимизации."
+        )
+    await callback.answer("Запрос отправлен.")
+
+
+@router.callback_query(ConsentCallback.filter(F.action == "deletion_cancel"))
+async def cancel_data_deletion_request(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Запрос на удаление данных отменён.")
     await callback.answer()

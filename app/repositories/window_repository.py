@@ -100,6 +100,17 @@ class WindowRepository:
         result = await self._session.scalars(statement)
         return result.one_or_none()
 
+    async def get_many_for_update(self, window_ids: set[int]) -> list[AvailabilityWindow]:
+        """Lock windows in a deterministic order to prevent reschedule deadlocks."""
+
+        result = await self._session.scalars(
+            select(AvailabilityWindow)
+            .where(AvailabilityWindow.id.in_(window_ids))
+            .order_by(AvailabilityWindow.id)
+            .with_for_update()
+        )
+        return list(result.all())
+
     async def add(self, window: AvailabilityWindow) -> AvailabilityWindow:
         self._session.add(window)
         await self._session.flush()

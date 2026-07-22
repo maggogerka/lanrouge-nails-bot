@@ -76,3 +76,24 @@ async def test_marketing_cannot_be_answered_before_privacy() -> None:
 
     unit_of_work.users.set_marketing_consent.assert_not_awaited()
     unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deletion_request_disables_marketing_and_is_audited() -> None:
+    client = user()
+    client.privacy_consent_at = NOW
+    client.marketing_consent_at = NOW
+    unit_of_work = build_uow(client)
+    service = ConsentService(lambda: unit_of_work)  # type: ignore[arg-type]
+
+    await service.request_deletion(actor(), now=NOW, correlation_id="request-delete")
+
+    unit_of_work.users.set_marketing_consent.assert_awaited_once_with(
+        client,
+        accepted=False,
+        changed_at=NOW,
+    )
+    audit = unit_of_work.audit.add.await_args.kwargs
+    assert audit["action"] == "privacy.deletion_requested"
+    assert audit["correlation_id"] == "request-delete"
+    unit_of_work.commit.assert_awaited_once()

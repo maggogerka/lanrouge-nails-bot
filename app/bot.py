@@ -17,7 +17,15 @@ from app.healthcheck import check_dependencies
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
 from app.repositories import SqlAlchemyUnitOfWork
-from app.services import AvailabilityService, BookingService, ConsentService, ServiceCatalog
+from app.services import (
+    AppointmentService,
+    AvailabilityService,
+    BookingService,
+    ConsentService,
+    RescheduleService,
+    ServiceCatalog,
+    SettingsService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +52,18 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         settings.admin_telegram_ids,
         privacy_policy_configured=settings.privacy_policy_url is not None,
     )
+    appointment_service = AppointmentService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
+    reschedule_service = RescheduleService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
+    settings_service = SettingsService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
@@ -51,6 +71,9 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         availability_service=availability_service,
         consent_service=consent_service,
         booking_service=booking_service,
+        appointment_service=appointment_service,
+        reschedule_service=reschedule_service,
+        settings_service=settings_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

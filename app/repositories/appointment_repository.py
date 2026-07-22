@@ -24,6 +24,70 @@ class AppointmentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get(
+        self,
+        appointment_id: int,
+        *,
+        for_update: bool = False,
+    ) -> Appointment | None:
+        statement = select(Appointment).where(Appointment.id == appointment_id)
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self._session.scalars(statement)
+        return result.one_or_none()
+
+    async def list_for_client(
+        self,
+        client_id: int,
+        now: datetime,
+    ) -> list[tuple[Appointment, AvailabilityWindow]]:
+        result = await self._session.execute(
+            select(Appointment, AvailabilityWindow)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(
+                Appointment.client_id == client_id,
+                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                AvailabilityWindow.start_at > now,
+            )
+            .order_by(AvailabilityWindow.start_at, Appointment.id)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
+    async def list_between(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[tuple[Appointment, AvailabilityWindow]]:
+        result = await self._session.execute(
+            select(Appointment, AvailabilityWindow)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(
+                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                AvailabilityWindow.start_at >= start_at,
+                AvailabilityWindow.start_at < end_at,
+            )
+            .order_by(AvailabilityWindow.start_at, Appointment.id)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
+    async def list_upcoming(
+        self,
+        now: datetime,
+        *,
+        limit: int = 50,
+    ) -> list[tuple[Appointment, AvailabilityWindow]]:
+        result = await self._session.execute(
+            select(Appointment, AvailabilityWindow)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(
+                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                AvailabilityWindow.start_at > now,
+            )
+            .order_by(AvailabilityWindow.start_at, Appointment.id)
+            .limit(limit)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
     async def count_capacity_between(
         self,
         start_at: datetime,
