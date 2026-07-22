@@ -1,0 +1,171 @@
+"""Browse and mutate existing availability windows."""
+
+from __future__ import annotations
+
+from aiogram import F, Router
+from aiogram.types import CallbackQuery, Message
+
+from app.domain.errors import DomainError, EntityNotFoundError
+from app.handlers.admin.service_common import actor_from_telegram
+from app.handlers.admin.window_common import render_window
+from app.keyboards.admin.main import ADMIN_WINDOWS_TEXT
+from app.keyboards.admin.windows import (
+    WindowCallback,
+    delete_window_confirmation_keyboard,
+    window_details_keyboard,
+    window_list_keyboard,
+)
+from app.schemas.service import AdminActor
+from app.services.availability_service import AvailabilityService
+
+router = Router(name="admin.window_browse")
+
+
+async def show_windows_message(
+    message: Message,
+    service: AvailabilityService,
+    actor: AdminActor,
+) -> None:
+    schedule = await service.list_windows(actor)
+    text = "Будущих окон пока нет." if not schedule.windows else "Будущие окна:"
+    await message.answer(text, reply_markup=window_list_keyboard(schedule.windows))
+
+
+async def show_windows_callback(
+    callback: CallbackQuery,
+    service: AvailabilityService,
+    actor: AdminActor,
+    *,
+    answer_text: str | None = None,
+) -> None:
+    schedule = await service.list_windows(actor)
+    text = "Будущих окон пока нет." if not schedule.windows else "Будущие окна:"
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(text, reply_markup=window_list_keyboard(schedule.windows))
+    await callback.answer(answer_text)
+
+
+async def show_window_details_callback(
+    callback: CallbackQuery,
+    service: AvailabilityService,
+    actor: AdminActor,
+    window_id: int,
+) -> None:
+    try:
+        window = await service.get_window(actor, window_id)
+    except EntityNotFoundError:
+        await callback.answer("Окно больше не существует.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_window(window),
+            reply_markup=window_details_keyboard(window),
+        )
+    await callback.answer()
+
+
+@router.message(F.text == ADMIN_WINDOWS_TEXT)
+async def show_windows(message: Message, availability_service: AvailabilityService) -> None:
+    if message.from_user is None:
+        return
+    await show_windows_message(
+        message,
+        availability_service,
+        actor_from_telegram(message.from_user),
+    )
+
+
+@router.callback_query(WindowCallback.filter(F.action == "list"))
+async def show_windows_from_callback(
+    callback: CallbackQuery,
+    availability_service: AvailabilityService,
+) -> None:
+    await show_windows_callback(
+        callback,
+        availability_service,
+        actor_from_telegram(callback.from_user),
+    )
+
+
+@router.callback_query(WindowCallback.filter(F.action == "view"))
+async def show_window_details(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+    availability_service: AvailabilityService,
+) -> None:
+    await show_window_details_callback(
+        callback,
+        availability_service,
+        actor_from_telegram(callback.from_user),
+        callback_data.window_id,
+    )
+
+
+@router.callback_query(WindowCallback.filter(F.action.in_({"close", "reopen"})))
+async def change_window_status(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+    availability_service: AvailabilityService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    try:
+        if callback_data.action == "close":
+            window = await availability_service.close_window(
+                actor,
+                callback_data.window_id,
+                correlation_id=correlation_id,
+            )
+        else:
+            window = await availability_service.reopen_window(
+                actor,
+                callback_data.window_id,
+                correlation_id=correlation_id,
+            )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_window(window),
+            reply_markup=window_details_keyboard(window),
+        )
+    await callback.answer("Статус окна обновлён.")
+
+
+@router.callback_query(WindowCallback.filter(F.action == "delete_prompt"))
+async def prompt_window_deletion(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Удалить это незанятое окно без возможности восстановления?",
+            reply_markup=delete_window_confirmation_keyboard(callback_data.window_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(WindowCallback.filter(F.action == "delete_confirm"))
+async def confirm_window_deletion(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+    availability_service: AvailabilityService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    try:
+        await availability_service.delete_unused_window(
+            actor,
+            callback_data.window_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await show_windows_callback(
+        callback,
+        availability_service,
+        actor,
+        answer_text="Окно удалено.",
+    )

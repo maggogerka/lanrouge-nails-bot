@@ -1,0 +1,204 @@
+"""Appointment ownership, cancellation and confirmation transaction tests."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
+from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.domain.errors import AppointmentNotFoundError, CancellationDeadlineError
+from app.schemas.booking import ClientActor
+from app.schemas.service import AdminActor
+from app.services.appointment_service import AppointmentService
+
+NOW = datetime(2026, 7, 22, 9, tzinfo=UTC)
+
+
+def settings() -> BusinessSettings:
+    return BusinessSettings(
+        id=1,
+        business_name="lanrouge nails",
+        timezone="Europe/Moscow",
+        address="Новоостаповская, д. 20",
+        map_url="https://yandex.ru/maps/-/CTbJz23i",
+        master_telegram_url="https://t.me/lanrouge",
+        booking_horizon_days=31,
+        cancellation_deadline_hours=36,
+        max_appointments_per_day=2,
+        default_window_duration_minutes=210,
+        minimum_gap_minutes=60,
+        allow_saturday=False,
+        allow_sunday=False,
+        reminder_offsets_minutes=[1440, 180, 60],
+        version=1,
+    )
+
+
+def client(user_id: int = 5, telegram_id: int = 101) -> User:
+    return User(id=user_id, telegram_id=telegram_id, first_name="Анна", phone="+79991234567")
+
+
+def appointment(*, client_id: int = 5) -> Appointment:
+    return Appointment(
+        id=11,
+        client_id=client_id,
+        window_id=7,
+        service_id=3,
+        service_name_snapshot="Маникюр",
+        price_snapshot=Decimal("2500.00"),
+        duration_min_snapshot=120,
+        duration_max_snapshot=180,
+        status=AppointmentStatus.CONFIRMED,
+    )
+
+
+def window(*, hours_until: int = 36) -> AvailabilityWindow:
+    start_at = NOW + timedelta(hours=hours_until)
+    return AvailabilityWindow(
+        id=7,
+        start_at=start_at,
+        end_at=start_at + timedelta(minutes=210),
+        status=AvailabilityWindowStatus.BOOKED,
+        created_by=9,
+    )
+
+
+def build_uow(
+    *,
+    target_appointment: Appointment | None = None,
+    target_window: AvailabilityWindow | None = None,
+    target_client: User | None = None,
+) -> MagicMock:
+    target_appointment = target_appointment or appointment()
+    target_window = target_window or window()
+    target_client = target_client or client()
+    unit_of_work = MagicMock()
+    unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
+    unit_of_work.__aexit__ = AsyncMock(return_value=None)
+    unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.appointments.get = AsyncMock(return_value=target_appointment)
+    unit_of_work.appointments.list_for_client = AsyncMock(return_value=[])
+    unit_of_work.appointments.add_history = AsyncMock()
+    unit_of_work.windows.get = AsyncMock(return_value=target_window)
+    unit_of_work.windows.get_many_for_update = AsyncMock(return_value=[target_window])
+    unit_of_work.windows.lock_local_date = AsyncMock()
+    unit_of_work.users.get_by_telegram_id = AsyncMock(return_value=target_client)
+    unit_of_work.users.get_by_id = AsyncMock(return_value=target_client)
+    unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
+    unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
+    unit_of_work.audit.add = AsyncMock()
+    unit_of_work.commit = AsyncMock()
+    return unit_of_work
+
+
+@pytest.mark.asyncio
+async def test_client_cannot_view_another_clients_appointment() -> None:
+    unit_of_work = build_uow(target_appointment=appointment(client_id=99))
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(AppointmentNotFoundError, match="не найдена"):
+        await service.get_my(ClientActor(telegram_id=101), 11, now=NOW)
+
+
+@pytest.mark.asyncio
+async def test_client_cancellation_at_exact_deadline_reopens_window() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=36)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    cancelled = await service.cancel_my(
+        ClientActor(telegram_id=101),
+        11,
+        now=NOW,
+        correlation_id="request-1",
+    )
+
+    assert cancelled.status is AppointmentStatus.CANCELLED_BY_CLIENT
+    assert target_window.status is AvailabilityWindowStatus.OPEN
+    unit_of_work.notifications.cancel_unsent.assert_awaited_once_with(11)
+    history = unit_of_work.appointments.add_history.await_args.args[0]
+    assert history.new_status is AppointmentStatus.CANCELLED_BY_CLIENT
+    assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-1"
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_client_cancellation_inside_deadline_does_not_mutate() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=35)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(CancellationDeadlineError):
+        await service.cancel_my(ClientActor(telegram_id=101), 11, now=NOW)
+
+    assert target_appointment.status is AppointmentStatus.CONFIRMED
+    assert target_window.status is AvailabilityWindowStatus.BOOKED
+    unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_cancel_inside_deadline_and_keep_window_closed() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=1)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    cancelled = await service.cancel_admin(
+        AdminActor(telegram_id=900),
+        11,
+        reopen_window=False,
+        now=NOW,
+    )
+
+    assert cancelled.status is AppointmentStatus.CANCELLED_BY_ADMIN
+    assert target_window.status is AvailabilityWindowStatus.CLOSED
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_admin_manual_confirmation_writes_history() -> None:
+    target_appointment = appointment()
+    unit_of_work = build_uow(target_appointment=target_appointment)
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    confirmed = await service.confirm_visit(AdminActor(telegram_id=900), 11, now=NOW)
+
+    assert confirmed.status is AppointmentStatus.CLIENT_CONFIRMED
+    assert target_appointment.client_confirmed_at == NOW
+    unit_of_work.appointments.add_history.assert_awaited_once()
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_client_can_confirm_only_own_visit_from_reminder() -> None:
+    target_appointment = appointment()
+    unit_of_work = build_uow(target_appointment=target_appointment)
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    confirmed = await service.confirm_my_visit(
+        ClientActor(telegram_id=101),
+        11,
+        now=NOW,
+        correlation_id="request-reminder",
+    )
+
+    assert confirmed.status is AppointmentStatus.CLIENT_CONFIRMED
+    assert target_appointment.client_confirmed_at == NOW
+    assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-reminder"
+    unit_of_work.commit.assert_awaited_once()
