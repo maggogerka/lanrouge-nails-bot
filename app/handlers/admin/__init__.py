@@ -5,6 +5,7 @@ from aiogram import Router
 from app.filters import IsAdmin
 from app.handlers.admin.appointments import router as appointments_router
 from app.handlers.admin.menu import router as menu_router
+from app.handlers.admin.portfolio import router as portfolio_router
 from app.handlers.admin.services import router as services_router
 from app.handlers.admin.settings import router as settings_router
 from app.handlers.admin.windows import router as windows_router
@@ -16,6 +17,7 @@ router.include_routers(
     menu_router,
     appointments_router,
     services_router,
+    portfolio_router,
     windows_router,
     settings_router,
 )

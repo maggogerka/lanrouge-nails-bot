@@ -85,6 +85,18 @@ class PortfolioRepository:
             await self._session.scalars(select(PortfolioTag).where(PortfolioTag.id == tag_id))
         ).one_or_none()
 
+    async def get_tag_by_name(self, name: str) -> PortfolioTag | None:
+        return (
+            await self._session.scalars(
+                select(PortfolioTag).where(func.lower(PortfolioTag.name) == name.casefold())
+            )
+        ).one_or_none()
+
+    async def get_tag_by_slug(self, slug: str) -> PortfolioTag | None:
+        return (
+            await self._session.scalars(select(PortfolioTag).where(PortfolioTag.slug == slug))
+        ).one_or_none()
+
     async def list_tags(self, *, active_only: bool = True) -> list[PortfolioTag]:
         statement = select(PortfolioTag)
         if active_only:

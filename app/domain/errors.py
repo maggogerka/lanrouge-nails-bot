@@ -45,6 +45,10 @@ class BookingLimitError(BookingUnavailableError):
     """The business-day appointment capacity has been exhausted."""
 
 
+class PortfolioStateError(DomainError):
+    """A portfolio work cannot perform the requested lifecycle transition."""
+
+
 class AppointmentNotFoundError(DomainError):
     """An appointment is absent or not visible to the current client."""
 

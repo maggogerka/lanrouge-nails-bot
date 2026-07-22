@@ -8,6 +8,7 @@ ADMIN_WINDOWS_TEXT = "🕒 Открытые окна"
 ADMIN_TODAY_TEXT = "📅 Сегодня"
 ADMIN_UPCOMING_TEXT = "🗓 Ближайшие записи"
 ADMIN_CLIENTS_TEXT = "👥 Клиентки"
+ADMIN_PORTFOLIO_TEXT = "🖼 Портфолио"
 ADMIN_SETTINGS_TEXT = "⚙️ Настройки"
 
 
@@ -28,6 +29,7 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=ADMIN_SERVICES_TEXT),
                 KeyboardButton(text=ADMIN_CLIENTS_TEXT),
             ],
+            [KeyboardButton(text=ADMIN_PORTFOLIO_TEXT)],
             [KeyboardButton(text=ADMIN_SETTINGS_TEXT)],
         ],
         resize_keyboard=True,
