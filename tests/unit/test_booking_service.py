@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import AvailabilityWindow, BusinessSettings, Service, User
-from app.domain.enums import AvailabilityWindowStatus
+from app.database.models import AvailabilityWindow, BusinessSettings, PortfolioItem, Service, User
+from app.domain.enums import AvailabilityWindowStatus, PortfolioStatus
 from app.domain.errors import (
     BookingConflictError,
     BookingLimitError,
@@ -114,6 +114,7 @@ def build_uow(
     )
     unit_of_work.services.get = AsyncMock(return_value=target_service)
     unit_of_work.services.list_active = AsyncMock(return_value=[target_service])
+    unit_of_work.portfolio.get = AsyncMock(return_value=None)
     unit_of_work.appointments.count_capacity_between = AsyncMock(return_value=0)
 
     async def add_appointment(appointment: object) -> object:
@@ -215,6 +216,29 @@ async def test_successful_booking_snapshots_service_and_schedules_only_future_jo
 
     service.price = Decimal("3000.00")
     assert appointment.price_snapshot == Decimal("2500.00")
+
+
+@pytest.mark.asyncio
+async def test_selected_design_is_snapshotted_on_booking() -> None:
+    unit_of_work = build_uow()
+    design = PortfolioItem(
+        id=21,
+        title="Красный френч",
+        linked_service_id=3,
+        status=PortfolioStatus.PUBLISHED,
+        sort_order=0,
+        created_by=9,
+    )
+    unit_of_work.portfolio.get = AsyncMock(return_value=design)
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    design_request = request().model_copy(update={"design_reference_id": 21})
+
+    receipt = await booking.book(actor(), design_request, now=NOW)
+
+    appointment = unit_of_work.appointments.add.await_args.args[0]
+    assert appointment.design_reference_id == 21
+    assert appointment.design_title_snapshot == "Красный френч"
+    assert receipt.design_title == "Красный френч"
 
 
 @pytest.mark.asyncio

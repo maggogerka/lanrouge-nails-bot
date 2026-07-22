@@ -242,6 +242,8 @@ class RescheduleService:
                         client_id=appointment.client_id,
                         window_id=new_window.id,
                         service_id=appointment.service_id,
+                        design_reference_id=appointment.design_reference_id,
+                        design_title_snapshot=appointment.design_title_snapshot,
                         rescheduled_from_id=appointment.id,
                         service_name_snapshot=appointment.service_name_snapshot,
                         price_snapshot=appointment.price_snapshot,

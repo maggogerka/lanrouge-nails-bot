@@ -182,6 +182,9 @@ async def capture_client_comment(
             window,
             info,
             client_name=client_name,
+            design_title=(
+                str(data["design_title"]) if data.get("design_title") is not None else None
+            ),
         ),
         reply_markup=confirmation_keyboard(),
     )
@@ -227,6 +230,7 @@ async def confirm_booking(
             client_name=data["client_name"],
             phone=data["phone"],
             client_comment=data.get("client_comment"),
+            design_reference_id=data.get("design_reference_id"),
         )
         receipt = await booking_service.book(
             actor_from_telegram(callback.from_user),

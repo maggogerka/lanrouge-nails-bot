@@ -65,6 +65,7 @@ class BookingRequest(BaseModel):
     client_name: Annotated[str, Field(min_length=1, max_length=255)]
     phone: Annotated[str, Field(max_length=32)]
     client_comment: Annotated[str, Field(max_length=2000)] | None = None
+    design_reference_id: Annotated[int, Field(gt=0)] | None = None
 
     @field_validator("client_name", mode="before")
     @classmethod
@@ -101,3 +102,4 @@ class BookingReceipt(BaseModel):
     master_telegram_url: str
     client_name: str
     phone: str
+    design_title: str | None = None

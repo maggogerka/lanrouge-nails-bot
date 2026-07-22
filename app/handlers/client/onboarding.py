@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.config import Settings
 from app.handlers.client.common import actor_from_telegram
+from app.handlers.client.portfolio import show_deep_linked_portfolio_item
 from app.keyboards.client.consent import (
     ConsentCallback,
     deletion_request_keyboard,
@@ -17,6 +18,7 @@ from app.keyboards.client.consent import (
 )
 from app.keyboards.client.main import client_main_keyboard
 from app.services.consent_service import ConsentService
+from app.services.portfolio_service import PortfolioService
 
 router = Router(name="client.onboarding")
 
@@ -37,6 +39,8 @@ async def handle_start(
     state: FSMContext,
     consent_service: ConsentService,
     settings: Settings,
+    portfolio_service: PortfolioService,
+    bot: Bot,
 ) -> None:
     if message.from_user is None:
         return
@@ -62,6 +66,13 @@ async def handle_start(
         "С возвращением в <b>lanrouge nails</b>!",
         reply_markup=client_main_keyboard(),
     )
+    payload = (message.text or "").split(maxsplit=1)
+    if len(payload) == 2 and payload[1].startswith("portfolio_"):
+        try:
+            item_id = int(payload[1].removeprefix("portfolio_"))
+        except ValueError:
+            return
+        await show_deep_linked_portfolio_item(message, portfolio_service, bot, item_id)
 
 
 @router.callback_query(ConsentCallback.filter(F.action == "privacy_accept"))

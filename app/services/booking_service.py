@@ -18,7 +18,7 @@ from app.database.models import (
 )
 from app.domain.availability import utc_day_bounds
 from app.domain.booking import validate_bookable_date, validate_service_fits_window
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, PortfolioStatus
 from app.domain.errors import (
     BookingConflictError,
     BookingLimitError,
@@ -168,6 +168,23 @@ class BookingService:
                 service = self._active_service(
                     await unit_of_work.services.get(values.service_id, for_update=True)
                 )
+                design = None
+                if values.design_reference_id is not None:
+                    design = await unit_of_work.portfolio.get(
+                        values.design_reference_id,
+                        for_update=True,
+                    )
+                    if design is None or design.status is not PortfolioStatus.PUBLISHED:
+                        raise BookingUnavailableError(
+                            "Выбранная работа больше недоступна. Выберите другой дизайн."
+                        )
+                    if (
+                        design.linked_service_id is not None
+                        and design.linked_service_id != service.id
+                    ):
+                        raise BookingUnavailableError(
+                            "Этот дизайн связан с другой услугой. Начните выбор заново."
+                        )
 
                 validated_local_date = validate_bookable_date(
                     start_at=window.start_at,
@@ -203,6 +220,8 @@ class BookingService:
                         client_id=client.id,
                         window_id=window.id,
                         service_id=service.id,
+                        design_reference_id=design.id if design is not None else None,
+                        design_title_snapshot=design.title if design is not None else None,
                         service_name_snapshot=service.name,
                         price_snapshot=service.price,
                         duration_min_snapshot=service.duration_min_minutes,
@@ -255,6 +274,7 @@ class BookingService:
                         "service_id": service.id,
                         "status": AppointmentStatus.CONFIRMED.value,
                         "has_client_comment": values.client_comment is not None,
+                        "design_reference_id": design.id if design is not None else None,
                     },
                     correlation_id=correlation_id,
                 )
@@ -273,6 +293,7 @@ class BookingService:
                     master_telegram_url=settings.master_telegram_url,
                     client_name=values.client_name,
                     phone=values.phone,
+                    design_title=appointment.design_title_snapshot,
                 )
         except IntegrityError as exc:
             raise BookingConflictError(_WINDOW_TAKEN_MESSAGE) from exc
@@ -291,6 +312,10 @@ class BookingService:
         if user is None or user.privacy_consent_at is None:
             raise PrivacyConsentRequiredError(
                 "Сначала примите условия обработки данных через команду /start."
+            )
+        if user.is_self_booking_blocked:
+            raise BookingUnavailableError(
+                "Самостоятельная запись временно недоступна. Напишите мастеру."
             )
         return user
 
