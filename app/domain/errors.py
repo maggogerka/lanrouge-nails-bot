@@ -49,6 +49,10 @@ class PortfolioStateError(DomainError):
     """A portfolio work cannot perform the requested lifecycle transition."""
 
 
+class CrmStateError(DomainError):
+    """A requested CRM mutation violates a tag, note or client-card rule."""
+
+
 class AppointmentNotFoundError(DomainError):
     """An appointment is absent or not visible to the current client."""
 

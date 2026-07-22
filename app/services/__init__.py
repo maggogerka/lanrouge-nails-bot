@@ -4,6 +4,7 @@ from app.services.appointment_service import AppointmentService
 from app.services.availability_service import AvailabilityService
 from app.services.booking_service import BookingService
 from app.services.consent_service import ConsentService
+from app.services.crm_service import CrmService
 from app.services.notification_service import NotificationService
 from app.services.portfolio_service import PortfolioService
 from app.services.reschedule_service import RescheduleService
@@ -15,6 +16,7 @@ __all__ = [
     "AvailabilityService",
     "BookingService",
     "ConsentService",
+    "CrmService",
     "NotificationService",
     "PortfolioService",
     "RescheduleService",

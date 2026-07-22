@@ -131,3 +131,35 @@ class AppointmentRepository:
     async def add_history(self, history: AppointmentStatusHistory) -> None:
         self._session.add(history)
         await self._session.flush()
+
+    async def list_history_for_client(
+        self,
+        client_id: int,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[tuple[Appointment, AvailabilityWindow]], int]:
+        filters = [Appointment.client_id == client_id]
+        rows = await self._session.execute(
+            select(Appointment, AvailabilityWindow)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(*filters)
+            .order_by(AvailabilityWindow.start_at.desc(), Appointment.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        count = int(
+            (await self._session.scalar(select(func.count(Appointment.id)).where(*filters))) or 0
+        )
+        return [(row[0], row[1]) for row in rows.all()], count
+
+    async def count_statuses_for_client(
+        self,
+        client_id: int,
+    ) -> dict[AppointmentStatus, int]:
+        rows = await self._session.execute(
+            select(Appointment.status, func.count(Appointment.id))
+            .where(Appointment.client_id == client_id)
+            .group_by(Appointment.status)
+        )
+        return {status: int(count) for status, count in rows.all()}

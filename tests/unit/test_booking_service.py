@@ -18,6 +18,7 @@ from app.domain.errors import (
     PrivacyConsentRequiredError,
 )
 from app.schemas.booking import BookingRequest, ClientActor
+from app.schemas.service import AdminActor
 from app.services.booking_service import BookingService
 
 NOW = datetime(2026, 7, 22, 9, tzinfo=UTC)
@@ -108,6 +109,7 @@ def build_uow(
     unit_of_work.windows.get = AsyncMock(return_value=target_window)
     unit_of_work.windows.lock_local_date = AsyncMock()
     unit_of_work.users.get_by_telegram_id = AsyncMock(return_value=target_client)
+    unit_of_work.users.get_by_id = AsyncMock(return_value=target_client)
     unit_of_work.users.update_booking_profile = AsyncMock()
     unit_of_work.users.list_by_telegram_ids = AsyncMock(
         return_value=[SimpleNamespace(id=9, is_blocked=False)]
@@ -239,6 +241,26 @@ async def test_selected_design_is_snapshotted_on_booking() -> None:
     assert appointment.design_reference_id == 21
     assert appointment.design_title_snapshot == "Красный френч"
     assert receipt.design_title == "Красный френч"
+
+
+@pytest.mark.asyncio
+async def test_admin_manual_booking_bypasses_only_self_booking_block() -> None:
+    blocked_client = client()
+    blocked_client.phone = "+79991234567"
+    blocked_client.is_self_booking_blocked = True
+    unit_of_work = build_uow(target_client=blocked_client)
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    receipt = await booking.book_for_client(
+        AdminActor(telegram_id=900),
+        client_id=5,
+        service_id=3,
+        window_id=7,
+        now=NOW,
+    )
+
+    assert receipt.appointment_id == 11
+    unit_of_work.appointments.add.assert_awaited_once()
 
 
 @pytest.mark.asyncio

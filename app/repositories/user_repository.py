@@ -32,8 +32,11 @@ class UserRepository:
         result = await self._session.scalars(statement)
         return result.one_or_none()
 
-    async def get_by_id(self, user_id: int) -> User | None:
-        result = await self._session.scalars(select(User).where(User.id == user_id))
+    async def get_by_id(self, user_id: int, *, for_update: bool = False) -> User | None:
+        statement = select(User).where(User.id == user_id)
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self._session.scalars(statement)
         return result.one_or_none()
 
     async def get_or_create_client(self, actor: ClientActor) -> User:

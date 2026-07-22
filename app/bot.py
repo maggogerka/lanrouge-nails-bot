@@ -22,6 +22,7 @@ from app.services import (
     AvailabilityService,
     BookingService,
     ConsentService,
+    CrmService,
     PortfolioService,
     RescheduleService,
     ServiceCatalog,
@@ -69,6 +70,10 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
     )
+    crm_service = CrmService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
@@ -80,6 +85,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         reschedule_service=reschedule_service,
         settings_service=settings_service,
         portfolio_service=portfolio_service,
+        crm_service=crm_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

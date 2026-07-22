@@ -35,7 +35,8 @@ from app.schemas.booking import (
     BusinessInfo,
     ClientActor,
 )
-from app.schemas.service import ServiceView
+from app.schemas.service import AdminActor, ServiceView
+from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -145,6 +146,7 @@ class BookingService:
         *,
         now: datetime | None = None,
         correlation_id: str | None = None,
+        allow_self_booking_blocked: bool = False,
     ) -> BookingReceipt:
         self._ensure_privacy_policy()
         current_time = self._aware_now(now)
@@ -164,6 +166,7 @@ class BookingService:
                     unit_of_work,
                     actor.telegram_id,
                     for_update=True,
+                    allow_self_booking_blocked=allow_self_booking_blocked,
                 )
                 service = self._active_service(
                     await unit_of_work.services.get(values.service_id, for_update=True)
@@ -298,12 +301,54 @@ class BookingService:
         except IntegrityError as exc:
             raise BookingConflictError(_WINDOW_TAKEN_MESSAGE) from exc
 
+    async def book_for_client(
+        self,
+        actor: AdminActor,
+        *,
+        client_id: int,
+        service_id: int,
+        window_id: int,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> BookingReceipt:
+        """Create a manual booking while preserving every transactional booking invariant."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await unit_of_work.users.get_by_id(client_id)
+            if client is None:
+                raise BookingUnavailableError("Клиентка больше не существует.")
+            if not client.first_name or not client.phone:
+                raise BookingUnavailableError(
+                    "В карточке клиентки должны быть заполнены имя и телефон."
+                )
+            client_actor = ClientActor(
+                telegram_id=client.telegram_id,
+                username=client.username,
+                first_name=client.first_name,
+                last_name=client.last_name,
+            )
+            request = BookingRequest(
+                service_id=service_id,
+                window_id=window_id,
+                client_name=client.first_name,
+                phone=client.phone,
+            )
+        return await self.book(
+            client_actor,
+            request,
+            now=now,
+            correlation_id=correlation_id,
+            allow_self_booking_blocked=True,
+        )
+
     @staticmethod
     async def _consented_client(
         unit_of_work: SqlAlchemyUnitOfWork,
         telegram_id: int,
         *,
         for_update: bool = False,
+        allow_self_booking_blocked: bool = False,
     ) -> User:
         user = await unit_of_work.users.get_by_telegram_id(
             telegram_id,
@@ -313,7 +358,7 @@ class BookingService:
             raise PrivacyConsentRequiredError(
                 "Сначала примите условия обработки данных через команду /start."
             )
-        if user.is_self_booking_blocked:
+        if user.is_self_booking_blocked and not allow_self_booking_blocked:
             raise BookingUnavailableError(
                 "Самостоятельная запись временно недоступна. Напишите мастеру."
             )
