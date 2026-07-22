@@ -108,6 +108,18 @@ def admin_appointment_details_keyboard(
     rows.append(
         [
             InlineKeyboardButton(
+                text="🖼 Референсы",
+                callback_data=AdminAppointmentCallback(
+                    action="references",
+                    appointment_id=appointment.id,
+                    object_id=0,
+                ).pack(),
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
                 text="⬅️ К ближайшим",
                 callback_data=AdminAppointmentCallback(
                     action="upcoming",

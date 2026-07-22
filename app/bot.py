@@ -94,6 +94,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
     marketing_event_service = MarketingEventService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     dispatcher = Dispatcher(
         storage=storage,
+        events_isolation=storage.create_isolation(),
         settings=settings,
         service_catalog=service_catalog,
         availability_service=availability_service,

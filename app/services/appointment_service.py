@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.database.models import (
     Appointment,
+    AppointmentReferenceMedia,
     AppointmentStatusHistory,
     AvailabilityWindow,
     BusinessSettings,
@@ -22,12 +23,17 @@ from app.domain.availability import utc_day_bounds
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
+    MediaType,
     NotificationType,
 )
-from app.domain.errors import AppointmentNotFoundError, AppointmentStateError
+from app.domain.errors import (
+    AppointmentNotFoundError,
+    AppointmentStateError,
+    CancellationDeadlineError,
+)
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
-from app.schemas.booking import ClientActor
+from app.schemas.booking import ClientActor, ReferenceMediaDraft, ReferenceMediaView
 from app.schemas.service import AdminActor
 from app.services.appointment_common import (
     admin_appointment_view,
@@ -82,6 +88,107 @@ class AppointmentService:
             window = await self._window(unit_of_work, appointment.window_id)
             settings = await self._settings(unit_of_work)
             return appointment_view(appointment, window, settings, current_time)
+
+    async def list_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+    ) -> list[ReferenceMediaView]:
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id)
+            ensure_owner(appointment, client)
+            rows = await unit_of_work.reference_media.list_active(appointment.id)
+            return [self._reference_view(row) for row in rows]
+
+    async def list_admin_reference_media(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+    ) -> list[ReferenceMediaView]:
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            appointment = await self._appointment(unit_of_work, appointment_id)
+            rows = await unit_of_work.reference_media.list_active(appointment.id)
+            return [self._reference_view(row) for row in rows]
+
+    async def add_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+        values: ReferenceMediaDraft,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> ReferenceMediaView:
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            ensure_owner(appointment, client)
+            settings = await self._settings(unit_of_work)
+            window = await self._window(unit_of_work, appointment.window_id)
+            self._ensure_reference_editable(appointment, window, settings, current_time)
+            active = await unit_of_work.reference_media.list_active(appointment.id)
+            if len(active) >= settings.booking_reference_max_media:
+                raise AppointmentStateError(
+                    f"Можно прикрепить не более {settings.booking_reference_max_media} фотографий."
+                )
+            if any(row.telegram_file_unique_id == values.telegram_file_unique_id for row in active):
+                raise AppointmentStateError("Эта фотография уже прикреплена к записи.")
+            position = max((row.position for row in active), default=-1) + 1
+            row = await unit_of_work.reference_media.add(
+                AppointmentReferenceMedia(
+                    appointment_id=appointment.id,
+                    telegram_file_id=values.telegram_file_id,
+                    telegram_file_unique_id=values.telegram_file_unique_id,
+                    media_type=MediaType.PHOTO,
+                    position=position,
+                    uploaded_by_user_id=client.id,
+                )
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=client.id,
+                action="booking_reference.added",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={"position": position, "reference_count": len(active) + 1},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._reference_view(row)
+
+    async def clear_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> int:
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            ensure_owner(appointment, client)
+            settings = await self._settings(unit_of_work)
+            window = await self._window(unit_of_work, appointment.window_id)
+            self._ensure_reference_editable(appointment, window, settings, current_time)
+            active = await unit_of_work.reference_media.list_active(appointment.id)
+            for row in active:
+                row.deleted_at = current_time
+            if active:
+                await unit_of_work.session.flush()
+                await unit_of_work.audit.add(
+                    actor_user_id=client.id,
+                    action="booking_reference.removed",
+                    entity_type="appointment",
+                    entity_id=str(appointment.id),
+                    changes={"removed_count": len(active)},
+                    correlation_id=correlation_id,
+                )
+                await unit_of_work.commit()
+            return len(active)
 
     async def list_admin_today(
         self,
@@ -552,3 +659,25 @@ class AppointmentService:
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         return current.astimezone(UTC)
+
+    @staticmethod
+    def _reference_view(row: object) -> ReferenceMediaView:
+        return ReferenceMediaView.model_validate(row, from_attributes=True)
+
+    @staticmethod
+    def _ensure_reference_editable(
+        appointment: Appointment,
+        window: AvailabilityWindow,
+        settings: BusinessSettings,
+        now: datetime,
+    ) -> None:
+        if appointment.status not in {
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.CLIENT_CONFIRMED,
+        }:
+            raise AppointmentStateError("Референсы можно менять только у активной записи.")
+        deadline = timedelta(hours=settings.booking_reference_edit_deadline_hours)
+        if window.start_at - now < deadline:
+            raise CancellationDeadlineError(
+                "Срок самостоятельного изменения референсов уже истёк. Напишите мастеру."
+            )

@@ -33,11 +33,15 @@ def render_booking_confirmation(
     *,
     client_name: str,
     design_title: str | None = None,
+    reference_media_count: int = 0,
 ) -> str:
     """Render the pre-commit confirmation without internal window data."""
 
     local = window.start_at.astimezone(ZoneInfo(window.timezone))
     design_line = f"Дизайн: {escape(design_title)}\n" if design_title else ""
+    reference_line = (
+        f"Фотографии-референсы: {reference_media_count}\n" if reference_media_count else ""
+    )
     return (
         "<b>Проверьте запись</b>\n\n"
         f"Услуга: {escape(service.name)}\n"
@@ -47,6 +51,7 @@ def render_booking_confirmation(
         f"{format_duration_range(service.duration_min_minutes, service.duration_max_minutes)}\n"
         f"Стоимость: {service.price:.2f} ₽\n"
         f"{design_line}"
+        f"{reference_line}"
         f"Имя: {escape(client_name)}\n"
         f"Адрес: {escape(info.address)}"
     )

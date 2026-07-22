@@ -10,4 +10,9 @@ class BookingFlow(StatesGroup):
     name = State()
     phone = State()
     comment = State()
+    references = State()
     confirm = State()
+
+
+class BookingReferenceEdit(StatesGroup):
+    uploading = State()

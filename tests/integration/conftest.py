@@ -25,7 +25,7 @@ async def integration_database() -> AsyncIterator[Database]:
     async with database.engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE audit_logs, notification_jobs, "
+                "TRUNCATE TABLE audit_logs, notification_jobs, appointment_reference_media, "
                 "waitlist_notifications, waitlist_entries, reviews, "
                 "broadcast_recipients, broadcast_media, broadcasts, marketing_events, "
                 "portfolio_item_tags, portfolio_media, portfolio_items, portfolio_tags, "

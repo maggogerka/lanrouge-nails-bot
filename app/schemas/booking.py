@@ -9,6 +9,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.booking import normalize_phone
+from app.domain.enums import MediaType
 from app.schemas.service import ServiceView
 
 
@@ -65,6 +66,24 @@ class BookingAvailability(BaseModel):
     windows: list[BookingWindowView]
 
 
+class ReferenceMediaDraft(BaseModel):
+    """Bounded Telegram metadata held in Redis until booking confirmation."""
+
+    telegram_file_id: Annotated[str, Field(min_length=1, max_length=512)]
+    telegram_file_unique_id: Annotated[str, Field(min_length=1, max_length=255)]
+    media_type: MediaType = MediaType.PHOTO
+
+
+class ReferenceMediaView(ReferenceMediaDraft):
+    id: int
+    position: Annotated[int, Field(ge=0)]
+
+
+class ReferenceMediaPolicy(BaseModel):
+    max_media: Annotated[int, Field(ge=1, le=10)]
+    edit_deadline_hours: Annotated[int, Field(ge=1, le=720)]
+
+
 class BookingRequest(BaseModel):
     """Final client-entered values submitted for transactional revalidation."""
 
@@ -74,6 +93,9 @@ class BookingRequest(BaseModel):
     phone: Annotated[str, Field(max_length=32)]
     client_comment: Annotated[str, Field(max_length=2000)] | None = None
     design_reference_id: Annotated[int, Field(gt=0)] | None = None
+    reference_media: Annotated[list[ReferenceMediaDraft], Field(max_length=10)] = Field(
+        default_factory=list
+    )
 
     @field_validator("client_name", mode="before")
     @classmethod
@@ -111,3 +133,4 @@ class BookingReceipt(BaseModel):
     client_name: str
     phone: str
     design_title: str | None = None
+    reference_media: list[ReferenceMediaView] = Field(default_factory=list)

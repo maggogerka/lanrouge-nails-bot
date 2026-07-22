@@ -27,6 +27,12 @@ class BookingCallback(CallbackData, prefix="book"):
     object_id: int
 
 
+class BookingReferenceCallback(CallbackData, prefix="bref"):
+    """Actions for the optional bounded reference-photo draft."""
+
+    action: str
+
+
 def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -106,6 +112,41 @@ def confirmation_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=BOOKING_CANCEL_TEXT,
                     callback_data=BookingCallback(action="cancel", object_id=0).pack(),
+                )
+            ],
+        ]
+    )
+
+
+def reference_media_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Готово",
+                    callback_data=BookingReferenceCallback(action="done").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="⏭ Без фотографий",
+                    callback_data=BookingReferenceCallback(action="skip").pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить фотографии",
+                    callback_data=BookingReferenceCallback(action="clear").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BOOKING_BACK_TEXT,
+                    callback_data=BookingReferenceCallback(action="back").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BOOKING_CANCEL_TEXT,
+                    callback_data=BookingReferenceCallback(action="cancel").pack(),
                 )
             ],
         ]

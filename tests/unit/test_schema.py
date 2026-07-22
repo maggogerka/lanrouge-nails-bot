@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from app.database.base import Base
 from app.database.models import (
     Appointment,
+    AppointmentReferenceMedia,
     AppointmentStatusHistory,
     AuditLog,
     AvailabilityWindow,
@@ -39,6 +40,7 @@ EXPECTED_TABLES = {
     "availability_windows",
     "appointments",
     "appointment_status_history",
+    "appointment_reference_media",
     "notification_jobs",
     "business_settings",
     "audit_logs",
@@ -67,6 +69,7 @@ def test_required_tables_are_registered() -> None:
     assert AvailabilityWindow.__table__.name == "availability_windows"
     assert Appointment.__table__.name == "appointments"
     assert AppointmentStatusHistory.__table__.name == "appointment_status_history"
+    assert AppointmentReferenceMedia.__table__.name == "appointment_reference_media"
     assert NotificationJob.__table__.name == "notification_jobs"
     assert BusinessSettings.__table__.name == "business_settings"
     assert AuditLog.__table__.name == "audit_logs"
@@ -169,6 +172,16 @@ def test_v020_delivery_and_ownership_keys_are_unique() -> None:
     assert "uq_waitlist_notifications_match" in waitlist_constraints
     assert "uq_broadcast_recipients_user" in broadcast_constraints
     assert "uq_reviews_appointment_id" in review_constraints
+
+
+def test_reference_media_has_stable_order_and_deduplication() -> None:
+    constraints = {
+        constraint.name for constraint in AppointmentReferenceMedia.__table__.constraints
+    }
+
+    assert "uq_appointment_reference_position" in constraints
+    assert "uq_appointment_reference_file" in constraints
+    assert "telegram_file_id" in AppointmentReferenceMedia.__table__.c
 
 
 def test_foreign_keys_restrict_history_deletion() -> None:

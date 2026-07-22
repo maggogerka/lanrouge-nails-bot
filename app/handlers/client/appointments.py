@@ -6,7 +6,14 @@ from datetime import date
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+)
 
 from app.domain.appointments import CLIENT_CHANGE_BLOCKED_MESSAGE
 from app.domain.errors import CancellationDeadlineError, DomainError
@@ -18,14 +25,18 @@ from app.keyboards.client.appointments import (
     appointment_details_keyboard,
     appointment_list_keyboard,
     cancel_confirmation_keyboard,
+    clear_references_confirmation_keyboard,
+    reference_edit_keyboard,
     reschedule_confirmation_keyboard,
     reschedule_dates_keyboard,
     reschedule_windows_keyboard,
 )
 from app.keyboards.client.booking import appointment_links_keyboard
 from app.keyboards.client.main import CLIENT_APPOINTMENTS_TEXT
+from app.schemas.booking import ReferenceMediaDraft
 from app.services.appointment_service import AppointmentService
 from app.services.reschedule_service import RescheduleService
+from app.states.booking import BookingReferenceEdit
 
 router = Router(name="client.appointments")
 
@@ -71,7 +82,9 @@ async def show_my_appointment(
     callback: CallbackQuery,
     callback_data: AppointmentCallback,
     appointment_service: AppointmentService,
+    state: FSMContext,
 ) -> None:
+    await state.clear()
     try:
         appointment = await appointment_service.get_my(
             actor_from_telegram(callback.from_user),
@@ -85,6 +98,144 @@ async def show_my_appointment(
             render_appointment(appointment),
             reply_markup=appointment_details_keyboard(appointment),
         )
+    await callback.answer()
+
+
+@router.callback_query(AppointmentCallback.filter(F.action == "references_add"))
+async def begin_reference_edit(
+    callback: CallbackQuery,
+    callback_data: AppointmentCallback,
+    state: FSMContext,
+    appointment_service: AppointmentService,
+) -> None:
+    try:
+        await appointment_service.list_my_reference_media(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.set_state(BookingReferenceEdit.uploading)
+    await state.set_data({"reference_appointment_id": callback_data.appointment_id})
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Отправьте одну или несколько фотографий. Альбом поддерживается.\n\n"
+            "Когда закончите, нажмите «Завершить».",
+            reply_markup=reference_edit_keyboard(callback_data.appointment_id),
+        )
+    await callback.answer()
+
+
+@router.message(BookingReferenceEdit.uploading, F.photo)
+async def add_reference_to_existing_appointment(
+    message: Message,
+    state: FSMContext,
+    appointment_service: AppointmentService,
+    correlation_id: str,
+) -> None:
+    if message.from_user is None or not message.photo:
+        return
+    data = await state.get_data()
+    try:
+        appointment_id = int(data["reference_appointment_id"])
+        await appointment_service.add_my_reference_media(
+            actor_from_telegram(message.from_user),
+            appointment_id,
+            ReferenceMediaDraft(
+                telegram_file_id=message.photo[-1].file_id,
+                telegram_file_unique_id=message.photo[-1].file_unique_id,
+            ),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await message.answer(str(exc))
+        return
+    if message.media_group_id is None:
+        await message.answer(
+            "Фотография добавлена.",
+            reply_markup=reference_edit_keyboard(appointment_id),
+        )
+
+
+@router.message(BookingReferenceEdit.uploading)
+async def reject_non_photo_reference_edit(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    appointment_id = int(data.get("reference_appointment_id", 0))
+    await message.answer(
+        "Отправьте фотографию или завершите редактирование.",
+        reply_markup=reference_edit_keyboard(appointment_id),
+    )
+
+
+@router.callback_query(AppointmentCallback.filter(F.action == "references_clear_prompt"))
+async def prompt_clear_references(
+    callback: CallbackQuery,
+    callback_data: AppointmentCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Удалить все референсы этой записи?",
+            reply_markup=clear_references_confirmation_keyboard(callback_data.appointment_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(AppointmentCallback.filter(F.action == "references_clear"))
+async def clear_references(
+    callback: CallbackQuery,
+    callback_data: AppointmentCallback,
+    appointment_service: AppointmentService,
+    correlation_id: str,
+) -> None:
+    try:
+        removed = await appointment_service.clear_my_reference_media(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer(
+        "Референсы удалены." if removed else "У записи не было референсов.",
+        show_alert=True,
+    )
+    if isinstance(callback.message, Message):
+        appointment = await appointment_service.get_my(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+        )
+        await callback.message.edit_text(
+            render_appointment(appointment),
+            reply_markup=appointment_details_keyboard(appointment),
+        )
+
+
+@router.callback_query(AppointmentCallback.filter(F.action == "references"))
+async def show_my_reference_media(
+    callback: CallbackQuery,
+    callback_data: AppointmentCallback,
+    appointment_service: AppointmentService,
+) -> None:
+    try:
+        media = await appointment_service.list_my_reference_media(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not media:
+        await callback.answer("К этой записи референсы не прикреплены.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        if len(media) == 1:
+            await callback.message.answer_photo(media[0].telegram_file_id)
+        else:
+            await callback.message.answer_media_group(
+                [InputMediaPhoto(media=item.telegram_file_id) for item in media]
+            )
     await callback.answer()
 
 

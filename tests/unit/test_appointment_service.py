@@ -9,10 +9,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, NotificationType
+from app.database.models import (
+    Appointment,
+    AppointmentReferenceMedia,
+    AvailabilityWindow,
+    BusinessSettings,
+    User,
+)
+from app.domain.enums import (
+    AppointmentStatus,
+    AvailabilityWindowStatus,
+    MediaType,
+    NotificationType,
+)
 from app.domain.errors import AppointmentNotFoundError, CancellationDeadlineError
-from app.schemas.booking import ClientActor
+from app.schemas.booking import ClientActor, ReferenceMediaDraft
 from app.schemas.service import AdminActor
 from app.services.appointment_service import AppointmentService
 
@@ -116,6 +127,11 @@ def build_uow(
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.reference_media.list_active = AsyncMock(return_value=[])
+    unit_of_work.reference_media.add = AsyncMock(
+        side_effect=lambda row: setattr(row, "id", 8) or row
+    )
+    unit_of_work.session.flush = AsyncMock()
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -129,6 +145,76 @@ async def test_client_cannot_view_another_clients_appointment() -> None:
 
     with pytest.raises(AppointmentNotFoundError, match="не найдена"):
         await service.get_my(ClientActor(telegram_id=101), 11, now=NOW)
+
+
+@pytest.mark.asyncio
+async def test_reference_media_requires_owner_but_is_visible_to_admin() -> None:
+    foreign_appointment = appointment(client_id=99)
+    unit_of_work = build_uow(target_appointment=foreign_appointment)
+    unit_of_work.reference_media.list_active.return_value = [
+        AppointmentReferenceMedia(
+            id=4,
+            appointment_id=11,
+            telegram_file_id="file-1",
+            telegram_file_unique_id="unique-1",
+            media_type=MediaType.PHOTO,
+            position=0,
+            uploaded_by_user_id=99,
+        )
+    ]
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(AppointmentNotFoundError):
+        await service.list_my_reference_media(ClientActor(telegram_id=101), 11)
+    media = await service.list_admin_reference_media(AdminActor(telegram_id=900), 11)
+
+    assert media[0].telegram_file_unique_id == "unique-1"
+    unit_of_work.reference_media.list_active.assert_awaited_once_with(11)
+
+
+@pytest.mark.asyncio
+async def test_client_can_add_reference_only_before_configured_deadline() -> None:
+    unit_of_work = build_uow(target_window=window(hours_until=37))
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    values = ReferenceMediaDraft(
+        telegram_file_id="file-2",
+        telegram_file_unique_id="unique-2",
+    )
+
+    added = await service.add_my_reference_media(
+        ClientActor(telegram_id=101),
+        11,
+        values,
+        now=NOW,
+        correlation_id="request-ref",
+    )
+
+    assert added.position == 0
+    assert added.telegram_file_unique_id == "unique-2"
+    assert unit_of_work.audit.add.await_args.kwargs["action"] == "booking_reference.added"
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reference_removal_inside_deadline_is_rejected_without_mutation() -> None:
+    row = AppointmentReferenceMedia(
+        id=4,
+        appointment_id=11,
+        telegram_file_id="file-1",
+        telegram_file_unique_id="unique-1",
+        media_type=MediaType.PHOTO,
+        position=0,
+        uploaded_by_user_id=5,
+    )
+    unit_of_work = build_uow(target_window=window(hours_until=35))
+    unit_of_work.reference_media.list_active.return_value = [row]
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(CancellationDeadlineError, match="истёк"):
+        await service.clear_my_reference_media(ClientActor(telegram_id=101), 11, now=NOW)
+
+    assert row.deleted_at is None
+    unit_of_work.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

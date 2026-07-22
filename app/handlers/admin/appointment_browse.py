@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app.domain.errors import DomainError
 from app.handlers.admin.appointment_common import render_admin_appointment
@@ -109,6 +109,33 @@ async def show_appointment_details(
     appointment_service: AppointmentService,
 ) -> None:
     await _show_details(callback, appointment_service, callback_data.appointment_id)
+
+
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "references"))
+async def show_appointment_reference_media(
+    callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
+    appointment_service: AppointmentService,
+) -> None:
+    try:
+        media = await appointment_service.list_admin_reference_media(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not media:
+        await callback.answer("К этой записи референсы не прикреплены.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        if len(media) == 1:
+            await callback.message.answer_photo(media[0].telegram_file_id)
+        else:
+            await callback.message.answer_media_group(
+                [InputMediaPhoto(media=item.telegram_file_id) for item in media]
+            )
+    await callback.answer()
 
 
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "confirm"))

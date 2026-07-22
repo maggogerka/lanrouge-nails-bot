@@ -80,6 +80,34 @@ def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboard
         )
     rows.extend(
         [
+            [
+                InlineKeyboardButton(
+                    text="🖼 Референсы",
+                    callback_data=AppointmentCallback(
+                        action="references",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить референс",
+                    callback_data=AppointmentCallback(
+                        action="references_add",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить референсы",
+                    callback_data=AppointmentCallback(
+                        action="references_clear_prompt",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                ),
+            ],
             [InlineKeyboardButton(text="Написать мастеру", url=appointment.master_telegram_url)],
             [InlineKeyboardButton(text="📍 Открыть на карте", url=appointment.map_url)],
             [
@@ -95,6 +123,50 @@ def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboard
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reference_edit_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Завершить",
+                    callback_data=AppointmentCallback(
+                        action="view",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ]
+        ]
+    )
+
+
+def clear_references_confirmation_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить все",
+                    callback_data=AppointmentCallback(
+                        action="references_clear",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет",
+                    callback_data=AppointmentCallback(
+                        action="view",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+        ]
+    )
 
 
 def cancel_confirmation_keyboard(appointment_id: int) -> InlineKeyboardMarkup:

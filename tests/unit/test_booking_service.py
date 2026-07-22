@@ -17,7 +17,7 @@ from app.domain.errors import (
     BookingUnavailableError,
     PrivacyConsentRequiredError,
 )
-from app.schemas.booking import BookingRequest, ClientActor
+from app.schemas.booking import BookingRequest, ClientActor, ReferenceMediaDraft
 from app.schemas.service import AdminActor
 from app.services.booking_service import BookingService
 
@@ -44,6 +44,8 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        booking_reference_max_media=10,
+        booking_reference_edit_deadline_hours=36,
         version=1,
     )
 
@@ -126,6 +128,9 @@ def build_uow(
     unit_of_work.appointments.add = AsyncMock(side_effect=add_appointment)
     unit_of_work.appointments.add_history = AsyncMock()
     unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.reference_media.add_all = AsyncMock(
+        side_effect=lambda rows: [setattr(row, "id", index + 1) for index, row in enumerate(rows)]
+    )
     unit_of_work.waitlist.mark_booked_for_window = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -242,6 +247,59 @@ async def test_selected_design_is_snapshotted_on_booking() -> None:
     assert appointment.design_reference_id == 21
     assert appointment.design_title_snapshot == "Красный френч"
     assert receipt.design_title == "Красный френч"
+
+
+@pytest.mark.asyncio
+async def test_reference_media_is_created_atomically_after_appointment() -> None:
+    unit_of_work = build_uow()
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    values = request().model_copy(
+        update={
+            "reference_media": [
+                ReferenceMediaDraft(
+                    telegram_file_id="telegram-file-1",
+                    telegram_file_unique_id="unique-1",
+                ),
+                ReferenceMediaDraft(
+                    telegram_file_id="telegram-file-2",
+                    telegram_file_unique_id="unique-2",
+                ),
+            ]
+        }
+    )
+
+    receipt = await booking.book(actor(), values, now=NOW)
+
+    rows = unit_of_work.reference_media.add_all.await_args.args[0]
+    assert [row.appointment_id for row in rows] == [11, 11]
+    assert [row.position for row in rows] == [0, 1]
+    assert [row.uploaded_by_user_id for row in rows] == [5, 5]
+    assert [item.telegram_file_unique_id for item in receipt.reference_media] == [
+        "unique-1",
+        "unique-2",
+    ]
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_or_excess_reference_media_is_rejected_before_insert() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.settings.get.return_value.booking_reference_max_media = 1
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    media = ReferenceMediaDraft(
+        telegram_file_id="telegram-file-1",
+        telegram_file_unique_id="unique-1",
+    )
+
+    with pytest.raises(BookingUnavailableError, match="Превышено"):
+        await booking.book(
+            actor(),
+            request().model_copy(update={"reference_media": [media, media]}),
+            now=NOW,
+        )
+
+    unit_of_work.reference_media.add_all.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

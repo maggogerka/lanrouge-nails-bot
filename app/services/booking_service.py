@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database.models import (
     Appointment,
+    AppointmentReferenceMedia,
     AppointmentStatusHistory,
     BusinessSettings,
     NotificationJob,
@@ -34,6 +35,8 @@ from app.schemas.booking import (
     BookingWindowView,
     BusinessInfo,
     ClientActor,
+    ReferenceMediaPolicy,
+    ReferenceMediaView,
 )
 from app.schemas.service import AdminActor, ServiceView
 from app.services.appointment_common import ensure_admin
@@ -74,6 +77,16 @@ class BookingService:
                 address=settings.address,
                 map_url=settings.map_url,
                 master_telegram_url=settings.master_telegram_url,
+            )
+
+    async def get_reference_media_policy(self, actor: ClientActor) -> ReferenceMediaPolicy:
+        self._ensure_privacy_policy()
+        async with self._unit_of_work_factory() as unit_of_work:
+            await self._consented_client(unit_of_work, actor.telegram_id)
+            settings = await self._settings(unit_of_work)
+            return ReferenceMediaPolicy(
+                max_media=settings.booking_reference_max_media,
+                edit_deadline_hours=settings.booking_reference_edit_deadline_hours,
             )
 
     async def list_availability(
@@ -212,6 +225,17 @@ class BookingService:
                 )
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
+                if len(values.reference_media) > settings.booking_reference_max_media:
+                    raise BookingUnavailableError(
+                        "Превышено допустимое количество фотографий-референсов."
+                    )
+                unique_reference_ids = {
+                    item.telegram_file_unique_id for item in values.reference_media
+                }
+                if len(unique_reference_ids) != len(values.reference_media):
+                    raise BookingUnavailableError(
+                        "Одинаковые фотографии нельзя добавлять повторно."
+                    )
 
                 await unit_of_work.users.update_booking_profile(
                     client,
@@ -233,6 +257,19 @@ class BookingService:
                         client_comment=values.client_comment,
                     )
                 )
+                reference_rows = [
+                    AppointmentReferenceMedia(
+                        appointment_id=appointment.id,
+                        telegram_file_id=item.telegram_file_id,
+                        telegram_file_unique_id=item.telegram_file_unique_id,
+                        media_type=item.media_type,
+                        position=position,
+                        uploaded_by_user_id=client.id,
+                    )
+                    for position, item in enumerate(values.reference_media)
+                ]
+                if reference_rows:
+                    await unit_of_work.reference_media.add_all(reference_rows)
                 window.status = AvailabilityWindowStatus.BOOKED
                 await unit_of_work.appointments.add_history(
                     AppointmentStatusHistory(
@@ -278,6 +315,7 @@ class BookingService:
                         "status": AppointmentStatus.CONFIRMED.value,
                         "has_client_comment": values.client_comment is not None,
                         "design_reference_id": design.id if design is not None else None,
+                        "reference_media_count": len(reference_rows),
                     },
                     correlation_id=correlation_id,
                 )
@@ -312,6 +350,16 @@ class BookingService:
                     client_name=values.client_name,
                     phone=values.phone,
                     design_title=appointment.design_title_snapshot,
+                    reference_media=[
+                        ReferenceMediaView(
+                            id=row.id,
+                            telegram_file_id=row.telegram_file_id,
+                            telegram_file_unique_id=row.telegram_file_unique_id,
+                            media_type=row.media_type,
+                            position=row.position,
+                        )
+                        for row in reference_rows
+                    ],
                 )
         except IntegrityError as exc:
             raise BookingConflictError(_WINDOW_TAKEN_MESSAGE) from exc

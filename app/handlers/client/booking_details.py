@@ -9,7 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message, ReplyKeyboardRemove
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -26,16 +26,18 @@ from app.keyboards.client.booking import (
     BOOKING_BACK_TEXT,
     BOOKING_CANCEL_TEXT,
     BookingCallback,
+    BookingReferenceCallback,
     appointment_links_keyboard,
     booking_navigation_keyboard,
     confirmation_keyboard,
     dates_keyboard,
+    reference_media_keyboard,
     services_keyboard,
     windows_keyboard,
 )
 from app.keyboards.client.main import client_main_keyboard
 from app.logging import log_event
-from app.schemas.booking import BookingRequest
+from app.schemas.booking import BookingRequest, ReferenceMediaDraft
 from app.services.booking_service import BookingService
 from app.states.booking import BookingFlow
 
@@ -156,38 +158,152 @@ async def capture_client_comment(
         await message.answer("Комментарий не должен превышать 2000 символов.")
         return
     await state.update_data(client_comment=comment)
+    policy = await booking_service.get_reference_media_policy(
+        actor_from_telegram(message.from_user)
+    )
+    await state.update_data(reference_media=[])
+    await state.set_state(BookingFlow.references)
+    await message.answer(
+        "При желании прикрепите фотографии желаемого дизайна.\n\n"
+        "Можно отправить несколько фотографий по одной или одним альбомом. "
+        "Когда закончите, нажмите «Готово».\n\n"
+        f"Максимальное количество: {policy.max_media}.",
+        reply_markup=reference_media_keyboard(),
+    )
+
+
+@router.message(BookingFlow.references, F.photo)
+async def capture_reference_photo(
+    message: Message,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    if message.from_user is None or not message.photo:
+        return
+    policy = await booking_service.get_reference_media_policy(
+        actor_from_telegram(message.from_user)
+    )
+    data = await state.get_data()
+    media = [dict(item) for item in data.get("reference_media", []) if isinstance(item, dict)]
+    photo = message.photo[-1]
+    if any(item.get("telegram_file_unique_id") == photo.file_unique_id for item in media):
+        if message.media_group_id is None:
+            await message.answer("Эта фотография уже добавлена.")
+        return
+    if len(media) >= policy.max_media:
+        await message.answer(
+            f"Можно прикрепить не более {policy.max_media} фотографий. "
+            "Лишняя фотография не добавлена.",
+            reply_markup=reference_media_keyboard(),
+        )
+        return
+    media.append(
+        ReferenceMediaDraft(
+            telegram_file_id=photo.file_id,
+            telegram_file_unique_id=photo.file_unique_id,
+        ).model_dump(mode="json")
+    )
+    await state.update_data(reference_media=media)
+    log_event(
+        logger,
+        logging.INFO,
+        "booking_reference_added",
+        reference_count=len(media),
+        is_album=message.media_group_id is not None,
+    )
+    if message.media_group_id is None:
+        await message.answer(
+            f"Фотография добавлена. Сейчас: {len(media)} из {policy.max_media}.",
+            reply_markup=reference_media_keyboard(),
+        )
+
+
+@router.message(BookingFlow.references)
+async def reject_non_photo_reference(message: Message) -> None:
+    await message.answer(
+        "Отправьте фотографию или воспользуйтесь кнопками ниже.",
+        reply_markup=reference_media_keyboard(),
+    )
+
+
+@router.callback_query(BookingFlow.references, BookingReferenceCallback.filter())
+async def handle_reference_action(
+    callback: CallbackQuery,
+    callback_data: BookingReferenceCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    if callback_data.action == "cancel":
+        await cancel_booking_callback(callback, state)
+        return
+    if callback_data.action == "back":
+        await state.update_data(reference_media=[])
+        await state.set_state(BookingFlow.comment)
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text("Фотографии удалены из черновика.")
+            await callback.message.answer(
+                "Добавьте комментарий к записи или отправьте «-», если комментария нет:",
+                reply_markup=booking_navigation_keyboard(),
+            )
+        await callback.answer()
+        return
+    if callback_data.action == "clear":
+        await state.update_data(reference_media=[])
+        log_event(logger, logging.INFO, "booking_reference_removed", removed_all=True)
+        await callback.answer("Все фотографии удалены.")
+        return
+    if callback_data.action == "skip":
+        await state.update_data(reference_media=[])
+    elif callback_data.action != "done":
+        await callback.answer("Эта кнопка устарела.", show_alert=True)
+        return
+    await _show_booking_confirmation(callback, state, booking_service)
+
+
+async def _show_booking_confirmation(
+    callback: CallbackQuery,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
     data = await state.get_data()
     try:
         service_id = int(str(data["service_id"]))
         window_id = int(data["window_id"])
         local_date = date.fromisoformat(str(data["local_date"]))
         availability = await booking_service.list_availability(
-            actor_from_telegram(message.from_user),
+            actor_from_telegram(callback.from_user),
             service_id,
             local_date=local_date,
         )
         window = next(item for item in availability.windows if item.id == window_id)
-        info = await booking_service.get_business_info(actor_from_telegram(message.from_user))
+        info = await booking_service.get_business_info(actor_from_telegram(callback.from_user))
         client_name = str(data["client_name"])
-    except (DomainError, KeyError, StopIteration, ValueError) as exc:
+        reference_media = [
+            ReferenceMediaDraft.model_validate(item) for item in data.get("reference_media", [])
+        ]
+    except (DomainError, ValidationError, KeyError, StopIteration, ValueError) as exc:
         await state.clear()
-        await message.answer(str(exc) or "Выбранное время уже недоступно.")
-        await message.answer("Главное меню:", reply_markup=client_main_keyboard())
+        await callback.answer(str(exc) or "Выбранное время уже недоступно.", show_alert=True)
+        if isinstance(callback.message, Message):
+            await callback.message.answer("Главное меню:", reply_markup=client_main_keyboard())
         return
     await state.set_state(BookingFlow.confirm)
-    await message.answer("Проверьте данные:", reply_markup=ReplyKeyboardRemove())
-    await message.answer(
-        render_booking_confirmation(
-            availability.service,
-            window,
-            info,
-            client_name=client_name,
-            design_title=(
-                str(data["design_title"]) if data.get("design_title") is not None else None
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_booking_confirmation(
+                availability.service,
+                window,
+                info,
+                client_name=client_name,
+                design_title=(
+                    str(data["design_title"]) if data.get("design_title") is not None else None
+                ),
+                reference_media_count=len(reference_media),
             ),
-        ),
-        reply_markup=confirmation_keyboard(),
-    )
+            reply_markup=confirmation_keyboard(),
+        )
+        await callback.message.answer("Проверьте данные:", reply_markup=ReplyKeyboardRemove())
+    await callback.answer()
 
 
 @router.callback_query(
@@ -231,6 +347,9 @@ async def confirm_booking(
             phone=data["phone"],
             client_comment=data.get("client_comment"),
             design_reference_id=data.get("design_reference_id"),
+            reference_media=[
+                ReferenceMediaDraft.model_validate(item) for item in data.get("reference_media", [])
+            ],
         )
         receipt = await booking_service.book(
             actor_from_telegram(callback.from_user),
@@ -260,6 +379,27 @@ async def confirm_booking(
     for admin_telegram_id in settings.admin_telegram_ids:
         try:
             await bot.send_message(admin_telegram_id, admin_text)
+            if len(receipt.reference_media) == 1:
+                await bot.send_photo(
+                    admin_telegram_id,
+                    receipt.reference_media[0].telegram_file_id,
+                    caption=f"Референс к записи №{receipt.appointment_id}",
+                )
+            elif receipt.reference_media:
+                await bot.send_media_group(
+                    admin_telegram_id,
+                    [
+                        InputMediaPhoto(
+                            media=item.telegram_file_id,
+                            caption=(
+                                f"Референсы к записи №{receipt.appointment_id}"
+                                if item.position == 0
+                                else None
+                            ),
+                        )
+                        for item in receipt.reference_media
+                    ],
+                )
         except TelegramAPIError:
             log_event(
                 logger,

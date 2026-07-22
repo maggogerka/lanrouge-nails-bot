@@ -1,6 +1,7 @@
 """ORM model registry imported by Alembic and application repositories."""
 
 from app.database.models.appointment import Appointment, AppointmentStatusHistory
+from app.database.models.appointment_reference import AppointmentReferenceMedia
 from app.database.models.audit import AuditLog
 from app.database.models.availability_window import AvailabilityWindow
 from app.database.models.broadcast import (
@@ -25,6 +26,7 @@ from app.database.models.waitlist import WaitlistEntry, WaitlistNotification
 
 __all__ = [
     "Appointment",
+    "AppointmentReferenceMedia",
     "AppointmentStatusHistory",
     "AuditLog",
     "AvailabilityWindow",
