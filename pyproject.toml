@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanrouge-nails-bot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Telegram CRM and appointment booking bot for lanrouge nails"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -33,6 +33,7 @@ dev = [
 lanrouge-bot = "app.bot:run"
 lanrouge-healthcheck = "app.healthcheck:run"
 lanrouge-reminders = "app.workers.reminders:run"
+lanrouge-broadcasts = "app.workers.broadcasts:run"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

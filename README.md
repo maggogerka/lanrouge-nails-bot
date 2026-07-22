@@ -1,78 +1,50 @@
 # lanrouge nails bot
 
-Telegram CRM and appointment booking bot for **lanrouge nails**: ручные окна доступности, каталог услуг, транзакционная запись, отмена/перенос, напоминания и клиентские записи.
+Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.2.0**.
 
-> Статус: MVP v0.1.0 реализован и проходит pre-release проверку. Для production-запуска остаются операционные действия владельца: реальные секреты, опубликованная политика конфиденциальности, hosting, backups и мониторинг.
+## Возможности
 
-## Возможности v0.1.0
+- безопасная запись в ручные окна, отмена, перенос и сервисные напоминания;
+- админ-панель `/admin`, доступная только числовым ID из `ADMIN_TELEGRAM_IDS`;
+- портфолио с фотографиями, тегами, deep links и привязкой дизайна к записи;
+- CRM-карточки клиентов, теги, приватные заметки и блокировка самостоятельной записи;
+- лист ожидания с персистентными уведомлениями о подходящих окнах;
+- отзывы после завершённого визита и отдельное согласие на публикацию;
+- повторная запись по последней услуге с текущей ценой;
+- сегментированные рекламные рассылки с preview, test-send, явным подтверждением,
+  замороженной аудиторией, лимитом скорости и повторами;
+- независимые настройки рекламных и repeat-уведомлений с append-only историей согласий.
 
-- авторизация администратора только по числовому Telegram ID;
-- отдельное согласие на обработку данных и рекламу;
-- управление услугами, ценами и диапазонами длительности;
-- ручное создание открытых окон;
-- защищённое от гонок бронирование;
-- просмотр, отмена и перенос записей;
-- правило самостоятельной отмены за 36 часов;
-- персистентные напоминания за 24 часа, 3 часа и 1 час;
-- расписание и основные настройки администратора.
+## Быстрый запуск в Docker
 
-## Архитектура
-
-aiogram handlers являются транспортным слоем. Бизнес-правила находятся в services/domain, SQLAlchemy-запросы — в repositories, а транзакции координируются Unit of Work. PostgreSQL является источником истины; Redis хранит FSM. Bot и reminder worker запускаются отдельными процессами.
-
-Подробности:
-
-- [архитектура](docs/architecture.md);
-- [правила бронирования](docs/booking-rules.md);
-- [спорные предположения](docs/assumptions.md);
-- [развёртывание](docs/deployment.md);
-- [обработка персональных данных](docs/privacy.md);
-- [roadmap](docs/roadmap.md).
-
-## Стек
-
-Python 3.12, aiogram 3, PostgreSQL, SQLAlchemy 2 async, asyncpg, Alembic, Redis, Pydantic Settings, Docker Compose, pytest, Ruff, mypy и GitHub Actions.
-
-## Требования
-
-- Git;
-- Docker Desktop с Docker Compose — рекомендуемый путь;
-- либо Python 3.12, PostgreSQL и Redis для запуска без контейнеров;
-- Telegram-бот, созданный через BotFather.
-
-## Настройка BotFather
-
-1. Откройте `@BotFather` и выполните `/newbot`.
-2. Задайте отображаемое имя и уникальный username.
-3. Скопируйте токен только в локальный `.env`; не отправляйте его в чат и не коммитьте.
-4. При необходимости задайте команды `/setcommands`:
-
-   ```text
-   start - открыть главное меню
-   whoami - показать мой Telegram ID
-   admin - открыть меню администратора
-   delete_my_data - запросить удаление или анонимизацию данных
-   ```
-
-## Настройка окружения
+Требуются Git, Docker Desktop с Compose и бот от `@BotFather`.
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Заполните как минимум `BOT_TOKEN` и безопасный `POSTGRES_PASSWORD`. Значения `DATABASE_URL` и `REDIS_URL` в примере рассчитаны на Docker Compose. Настоящий `.env` игнорируется Git.
+Заполните в `.env`:
 
-`ADMIN_TELEGRAM_IDS` при первом запуске можно оставить пустым: административные handlers будут закрыты, но `/whoami` останется доступной. Владелец отправляет `/whoami`, копирует числовой ID в `.env` и перезапускает bot.
-
-Перед включением клиентского сценария нужен публичный `PRIVACY_POLICY_URL`.
-
-## Запуск через Docker Compose
-
-```powershell
-docker compose up --build
+```dotenv
+BOT_TOKEN=токен_из_BotFather
+ADMIN_TELEGRAM_IDS=ваш_числовой_Telegram_ID
+PRIVACY_POLICY_URL=https://example.com/privacy
+POSTGRES_PASSWORD=длинный_случайный_пароль
+DATABASE_URL=postgresql+asyncpg://lanrouge:тот_же_пароль@postgres:5432/lanrouge
 ```
 
-Compose запускает PostgreSQL, Redis, применяет Alembic migrations и затем запускает bot и персистентный reminder worker. Проверка зависимостей:
+`POSTGRES_PASSWORD` и пароль внутри `DATABASE_URL` должны совпадать. Настоящий `.env`
+игнорируется Git и не должен отправляться в чат или попадать в коммит.
+
+```powershell
+docker compose config
+docker compose up --build -d
+docker compose ps
+docker compose logs -f bot notification-worker broadcast-worker
+```
+
+Compose поднимает PostgreSQL, Redis, одноразовый `migrate`, бот, worker сервисных
+уведомлений и отдельный worker рассылок. Проверка подключений без Telegram polling:
 
 ```powershell
 docker compose run --rm bot python -m app.healthcheck
@@ -84,9 +56,41 @@ docker compose run --rm bot python -m app.healthcheck
 docker compose down
 ```
 
-## Локальный запуск на Windows 10
+## Администратор и мастер
 
-Установите Python 3.12, PostgreSQL и Redis, затем:
+1. Отправьте боту `/whoami` и скопируйте числовой ID.
+2. Запишите его в `.env`: `ADMIN_TELEGRAM_IDS=123456789`. Несколько ID разделяются
+   запятыми: `123456789,987654321`.
+3. После изменения `.env` обязательно пересоздайте процесс бота:
+
+   ```powershell
+   docker compose up -d --force-recreate bot
+   ```
+
+4. Отправьте `/admin`. Админские кнопки не заменяют клиентское меню: панель открывается
+   этой командой и закрыта фильтром по env-списку. Поле `role` в БД и username сами по
+   себе прав не дают. В текущей модели один и тот же авторизованный пользователь является
+   владельцем/мастером и администратором.
+
+Если панель не появилась, проверьте `docker compose exec bot printenv ADMIN_TELEGRAM_IDS`
+и что ID указан без `@`, пробелов и кавычек, затем пересоздайте контейнер.
+
+## Политика и согласие на рассылку
+
+- публичная юридически утверждённая политика размещается владельцем по адресу из
+  `PRIVACY_POLICY_URL`;
+- технический draft и границы обработки описаны в [docs/privacy.md](docs/privacy.md);
+- текст onboarding находится в `app/handlers/client/onboarding.py` (`_PRIVACY_TEXT` и
+  `_MARKETING_TEXT`), кнопки — в `app/keyboards/client/consent.py`;
+- решения сохраняет `app/services/consent_service.py`, текущие timestamps лежат в
+  `users`, а неизменяемая история — в `consent_history`;
+- клиент в любой момент меняет рекламную подписку через «🔔 Настройки уведомлений».
+  Отказ от рекламы не отключает сервисные сообщения по действующей записи.
+
+Технический draft не заменяет проверку политики владельцем и профильным специалистом до
+production-запуска.
+
+## Локальная разработка
 
 ```powershell
 py -3.12 -m venv .venv
@@ -97,26 +101,14 @@ alembic upgrade head
 python -m app.bot
 ```
 
-Во втором терминале с тем же окружением запустите обработчик напоминаний:
+В отдельных терминалах:
 
 ```powershell
 python -m app.workers.reminders
+python -m app.workers.broadcasts
 ```
 
-Для локальных PostgreSQL/Redis замените имена `postgres` и `redis` в URL на `localhost`. Частота опроса, размер batch, максимальное число попыток и lease worker настраиваются переменными `REMINDER_*` из `.env.example`.
-
-## Миграции
-
-```powershell
-alembic upgrade head
-alembic current
-```
-
-Новая миграция после изменения моделей:
-
-```powershell
-alembic revision --autogenerate -m "describe change"
-```
+Для запуска вне Compose замените хосты `postgres` и `redis` на `localhost`.
 
 ## Проверки
 
@@ -127,36 +119,33 @@ mypy app
 pytest
 ```
 
-Для автоформатирования используйте `ruff format .`. CI выполняет проверки на Python 3.12 с настоящим PostgreSQL, предварительно применяет миграции и запускает конкурентный тест бронирования.
+Интеграционные тесты требуют отдельную БД с `test` в имени через
+`TEST_DATABASE_URL`; fixture очищает её таблицы. Полная инструкция —
+[docs/testing.md](docs/testing.md).
 
-Интеграционные тесты намеренно пропускаются без `TEST_DATABASE_URL`. В этом URL разрешена только отдельная база, имя которой содержит `test`: fixture очищает её таблицы. Пример ручного запуска после применения миграций:
+## Документация
 
-```powershell
-$env:TEST_DATABASE_URL = "postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test"
-pytest tests/integration
-```
+- [архитектура](docs/architecture.md)
+- [portfolio](docs/portfolio.md)
+- [CRM](docs/crm.md)
+- [лист ожидания](docs/waitlist.md)
+- [рассылки](docs/broadcasts.md)
+- [правила бронирования](docs/booking-rules.md)
+- [миграция v0.1 → v0.2](docs/migration-v0.1-to-v0.2.md)
+- [развёртывание и rollback](docs/deployment.md)
+- [privacy и consent](docs/privacy.md)
+- [тестирование](docs/testing.md)
 
-## Роли
+## Ограничения
 
-- **Клиент** — любой пользователь Telegram, принявший необходимые условия. Может работать только со своими записями.
-- **Администратор** — пользователь, чей числовой Telegram ID находится в `ADMIN_TELEGRAM_IDS`. Username и роль в базе не предоставляют административных полномочий.
-
-## Ограничения первой версии
-
-- long polling вместо webhook;
-- один мастер и одна студия;
-- нет предоплаты, Mini App, портфолио, статистики и массовых рассылок;
-- GitHub хранит код и запускает CI, но не является hosting-платформой для процесса bot/PostgreSQL;
-- Telegram API не позволяет строго гарантировать exactly-once внешнюю доставку сообщения после аварийного сбоя.
-
-## Персональные данные
-
-Проект хранит Telegram ID, контакт, согласия и данные записей. Никогда не используйте реальные клиентские данные в тестах и не публикуйте `.env`, дампы БД или application logs. [Технический privacy draft](docs/privacy.md) не заменяет юридически утверждённую политику.
-
-## Roadmap
-
-Следующие версии планируют портфолио, рассылки, лист ожидания, клиентские карточки, статистику, лояльность и Telegram Mini App. Детали — в [roadmap](docs/roadmap.md).
+- один мастер и одна студия, long polling, без предоплаты и Mini App;
+- Telegram Bot API не предоставляет идемпотентный ключ отправки, поэтому после аварии
+  между успешной отправкой и commit теоретически возможен редкий дубль;
+- рассылки по умолчанию выключены настройкой бизнеса и включаются администратором только
+  после миграции и smoke test;
+- GitHub Actions проверяет код, но сам по себе не является hosting для постоянно
+  работающих bot/PostgreSQL/Redis.
 
 ## Лицензия
 
-[MIT](LICENSE). Перед публичным распространением следует отдельно подтвердить выбор лицензии владельцем.
+[MIT](LICENSE).
