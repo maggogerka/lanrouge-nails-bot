@@ -7,6 +7,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 
 from app.bot import create_dispatcher
 from app.config import Settings
+from app.database import Database
 from app.handlers import root_router
 from app.handlers.errors import handle_unexpected_error
 
@@ -22,12 +23,14 @@ def make_settings() -> Settings:
 
 @pytest.mark.asyncio
 async def test_dispatcher_uses_redis_and_includes_root_router() -> None:
-    dispatcher = create_dispatcher(make_settings())
+    database = Database.create("postgresql+asyncpg://user:password@localhost/database")
+    dispatcher = create_dispatcher(make_settings(), database)
 
     assert isinstance(dispatcher.storage, RedisStorage)
     assert root_router in dispatcher.sub_routers
 
     await dispatcher.storage.close()
+    await database.close()
 
 
 def test_error_boundary_is_registered_on_root_router() -> None:

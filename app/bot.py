@@ -11,15 +11,18 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 
 from app.config import RuntimeConfigurationError, Settings, get_settings
+from app.database import Database
 from app.handlers import root_router
 from app.healthcheck import check_dependencies
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
+from app.repositories import SqlAlchemyUnitOfWork
+from app.services import ServiceCatalog
 
 logger = logging.getLogger(__name__)
 
 
-def create_dispatcher(settings: Settings) -> Dispatcher:
+def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
     """Build a Dispatcher without opening Telegram connections."""
 
     storage = RedisStorage.from_url(
@@ -27,7 +30,15 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
         state_ttl=60 * 60,
         data_ttl=60 * 60,
     )
-    dispatcher = Dispatcher(storage=storage)
+    service_catalog = ServiceCatalog(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
+    dispatcher = Dispatcher(
+        storage=storage,
+        settings=settings,
+        service_catalog=service_catalog,
+    )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)
     return dispatcher
@@ -39,7 +50,8 @@ async def run_polling(settings: Settings) -> None:
     settings.validate_bot_runtime()
     await check_dependencies(settings)
 
-    dispatcher = create_dispatcher(settings)
+    database = Database.create(settings.database_url.get_secret_value())
+    dispatcher = create_dispatcher(settings, database)
     if not settings.admin_telegram_ids:
         log_event(logger, logging.WARNING, "configuration.admin_ids_empty")
 
@@ -51,19 +63,20 @@ async def run_polling(settings: Settings) -> None:
         admin_count=len(settings.admin_telegram_ids),
     )
 
-    async with Bot(
-        token=settings.bot_token.get_secret_value(),
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    ) as bot:
-        try:
+    try:
+        async with Bot(
+            token=settings.bot_token.get_secret_value(),
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        ) as bot:
             await bot.delete_webhook(drop_pending_updates=False)
             await dispatcher.start_polling(
                 bot,
                 allowed_updates=dispatcher.resolve_used_update_types(),
             )
-        finally:
-            await dispatcher.storage.close()
-            log_event(logger, logging.INFO, "bot.stopped")
+    finally:
+        await dispatcher.storage.close()
+        await database.close()
+        log_event(logger, logging.INFO, "bot.stopped")
 
 
 def run() -> None:
