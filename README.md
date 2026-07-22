@@ -2,7 +2,7 @@
 
 Telegram CRM and appointment booking bot for **lanrouge nails**: ручные окна доступности, каталог услуг, транзакционная запись, отмена/перенос, напоминания и клиентские записи.
 
-> Статус: v0.1.0 находится в разработке. Сейчас реализован инфраструктурный каркас; бизнес-сценарии добавляются последовательными проверяемыми этапами.
+> Статус: MVP v0.1.0 реализован и проходит pre-release проверку. Для production-запуска остаются операционные действия владельца: реальные секреты, опубликованная политика конфиденциальности, hosting, backups и мониторинг.
 
 ## Возможности v0.1.0
 
@@ -18,7 +18,7 @@ Telegram CRM and appointment booking bot for **lanrouge nails**: ручные о
 
 ## Архитектура
 
-aiogram handlers являются транспортным слоем. Бизнес-правила находятся в services/domain, SQLAlchemy-запросы — в repositories, а транзакции координируются Unit of Work. PostgreSQL является источником истины; Redis хранит FSM. Bot и reminder worker проектируются как отдельные процессы.
+aiogram handlers являются транспортным слоем. Бизнес-правила находятся в services/domain, SQLAlchemy-запросы — в repositories, а транзакции координируются Unit of Work. PostgreSQL является источником истины; Redis хранит FSM. Bot и reminder worker запускаются отдельными процессами.
 
 Подробности:
 
@@ -50,6 +50,8 @@ Python 3.12, aiogram 3, PostgreSQL, SQLAlchemy 2 async, asyncpg, Alembic, Redis,
    ```text
    start - открыть главное меню
    whoami - показать мой Telegram ID
+   admin - открыть меню администратора
+   delete_my_data - запросить удаление или анонимизацию данных
    ```
 
 ## Настройка окружения
@@ -70,7 +72,7 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Compose запускает PostgreSQL, Redis, применяет Alembic migrations и затем запускает bot. Проверка зависимостей:
+Compose запускает PostgreSQL, Redis, применяет Alembic migrations и затем запускает bot и персистентный reminder worker. Проверка зависимостей:
 
 ```powershell
 docker compose run --rm bot python -m app.healthcheck
@@ -95,7 +97,13 @@ alembic upgrade head
 python -m app.bot
 ```
 
-Для локальных PostgreSQL/Redis замените имена `postgres` и `redis` в URL на `localhost`.
+Во втором терминале с тем же окружением запустите обработчик напоминаний:
+
+```powershell
+python -m app.workers.reminders
+```
+
+Для локальных PostgreSQL/Redis замените имена `postgres` и `redis` в URL на `localhost`. Частота опроса, размер batch, максимальное число попыток и lease worker настраиваются переменными `REMINDER_*` из `.env.example`.
 
 ## Миграции
 
@@ -119,7 +127,14 @@ mypy app
 pytest
 ```
 
-Для автоформатирования используйте `ruff format .`. CI выполняет проверки на Python 3.12.
+Для автоформатирования используйте `ruff format .`. CI выполняет проверки на Python 3.12 с настоящим PostgreSQL, предварительно применяет миграции и запускает конкурентный тест бронирования.
+
+Интеграционные тесты намеренно пропускаются без `TEST_DATABASE_URL`. В этом URL разрешена только отдельная база, имя которой содержит `test`: fixture очищает её таблицы. Пример ручного запуска после применения миграций:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test"
+pytest tests/integration
+```
 
 ## Роли
 
@@ -144,4 +159,4 @@ pytest
 
 ## Лицензия
 
-[MIT](LICENSE). Перед публикацией private-репозитория следует отдельно провести аудит безопасности и подтвердить выбор лицензии владельцем.
+[MIT](LICENSE). Перед публичным распространением следует отдельно подтвердить выбор лицензии владельцем.
