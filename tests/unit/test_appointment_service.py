@@ -50,6 +50,15 @@ def settings() -> BusinessSettings:
         waitlist_enabled=True,
         broadcasts_enabled=False,
         portfolio_enabled=True,
+        availability_date_picker_days=31,
+        availability_time_step_minutes=60,
+        booking_reference_max_media=10,
+        booking_reference_edit_deadline_hours=36,
+        booking_reference_retention_days=None,
+        portfolio_mode="internal",
+        external_portfolio_url=None,
+        external_portfolio_button_text="Открыть портфолио",
+        master_profile_enabled=True,
         version=1,
     )
 

@@ -605,6 +605,7 @@ def _build_date_page(
         booking_horizon_days=settings.booking_horizon_days,
         allow_saturday=settings.allow_saturday,
         allow_sunday=settings.allow_sunday,
+        page_size=settings.availability_date_picker_days,
     )
 
 

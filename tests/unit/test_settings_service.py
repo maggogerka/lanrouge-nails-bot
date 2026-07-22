@@ -47,11 +47,27 @@ def test_reminder_offsets_must_be_unique_and_non_empty() -> None:
         ("broadcast_messages_per_second", 21),
         ("repeat_booking_reminder_days", 0),
         ("client_page_size", 51),
+        ("availability_date_picker_days", 63),
+        ("booking_reference_max_media", 11),
     ],
 )
 def test_v020_settings_enforce_documented_bounds(field: str, value: int) -> None:
     with pytest.raises(ValidationError):
         BusinessSettingsPatch.model_validate({field: value})
+
+
+def test_v030_time_step_and_external_url_are_validated() -> None:
+    with pytest.raises(ValidationError, match="divide"):
+        BusinessSettingsPatch(availability_time_step_minutes=61)
+    with pytest.raises(ValidationError, match="HTTPS"):
+        BusinessSettingsPatch(external_portfolio_url="http://example.com/portfolio")
+
+    assert (
+        BusinessSettingsPatch(
+            external_portfolio_url="https://example.com/portfolio"
+        ).external_portfolio_url
+        == "https://example.com/portfolio"
+    )
 
 
 @pytest.mark.asyncio

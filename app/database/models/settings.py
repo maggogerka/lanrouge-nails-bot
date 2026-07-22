@@ -8,6 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
 from app.database.models.mixins import TimestampMixin
+from app.database.types import database_enum
+from app.domain.enums import PortfolioDisplayMode
 
 
 class BusinessSettings(TimestampMixin, Base):
@@ -65,6 +67,28 @@ class BusinessSettings(TimestampMixin, Base):
             name="broadcast_retry_base_valid",
         ),
         CheckConstraint("client_page_size BETWEEN 1 AND 50", name="client_page_size_valid"),
+        CheckConstraint(
+            "availability_date_picker_days BETWEEN 1 AND 62",
+            name="availability_date_picker_days_valid",
+        ),
+        CheckConstraint(
+            "availability_time_step_minutes BETWEEN 1 AND 1440 "
+            "AND MOD(1440, availability_time_step_minutes) = 0",
+            name="availability_time_step_valid",
+        ),
+        CheckConstraint(
+            "booking_reference_max_media BETWEEN 1 AND 10",
+            name="booking_reference_max_media_valid",
+        ),
+        CheckConstraint(
+            "booking_reference_edit_deadline_hours BETWEEN 1 AND 720",
+            name="booking_reference_edit_deadline_valid",
+        ),
+        CheckConstraint(
+            "booking_reference_retention_days IS NULL "
+            "OR booking_reference_retention_days BETWEEN 1 AND 3650",
+            name="booking_reference_retention_valid",
+        ),
         CheckConstraint("version > 0", name="version_positive"),
     )
 
@@ -125,6 +149,32 @@ class BusinessSettings(TimestampMixin, Base):
         Boolean, nullable=False, default=False, server_default="false"
     )
     portfolio_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    availability_date_picker_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=31, server_default="31"
+    )
+    availability_time_step_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60"
+    )
+    booking_reference_max_media: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    booking_reference_edit_deadline_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=36, server_default="36"
+    )
+    booking_reference_retention_days: Mapped[int | None] = mapped_column(Integer)
+    portfolio_mode: Mapped[PortfolioDisplayMode] = mapped_column(
+        database_enum(PortfolioDisplayMode, name="portfolio_display_mode"),
+        nullable=False,
+        default=PortfolioDisplayMode.INTERNAL,
+        server_default=PortfolioDisplayMode.INTERNAL.value,
+    )
+    external_portfolio_url: Mapped[str | None] = mapped_column(String(2048))
+    external_portfolio_button_text: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="Открыть портфолио", server_default="Открыть портфолио"
+    )
+    master_profile_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
     version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1, server_default="1")

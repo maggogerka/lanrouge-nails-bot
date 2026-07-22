@@ -59,6 +59,14 @@ class PortfolioStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class PortfolioDisplayMode(StrEnum):
+    """Client-facing portfolio destination without deleting internal works."""
+
+    INTERNAL = "internal"
+    EXTERNAL_LINK = "external_link"
+    DISABLED = "disabled"
+
+
 class MediaType(StrEnum):
     """Telegram media supported by v0.2.0."""
 

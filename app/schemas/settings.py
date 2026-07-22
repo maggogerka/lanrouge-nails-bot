@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from typing import Annotated, Self
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.domain.enums import PortfolioDisplayMode
 
 
 class BusinessSettingsView(BaseModel):
@@ -38,6 +41,15 @@ class BusinessSettingsView(BaseModel):
     waitlist_enabled: bool = True
     broadcasts_enabled: bool = False
     portfolio_enabled: bool = True
+    availability_date_picker_days: int = 31
+    availability_time_step_minutes: int = 60
+    booking_reference_max_media: int = 10
+    booking_reference_edit_deadline_hours: int = 36
+    booking_reference_retention_days: int | None = None
+    portfolio_mode: PortfolioDisplayMode = PortfolioDisplayMode.INTERNAL
+    external_portfolio_url: str | None = None
+    external_portfolio_button_text: str = "Открыть портфолио"
+    master_profile_enabled: bool = True
     version: int
 
 
@@ -65,13 +77,43 @@ class BusinessSettingsPatch(BaseModel):
     waitlist_enabled: bool | None = None
     broadcasts_enabled: bool | None = None
     portfolio_enabled: bool | None = None
+    availability_date_picker_days: Annotated[int, Field(ge=1, le=62)] | None = None
+    availability_time_step_minutes: Annotated[int, Field(ge=1, le=1440)] | None = None
+    booking_reference_max_media: Annotated[int, Field(ge=1, le=10)] | None = None
+    booking_reference_edit_deadline_hours: Annotated[int, Field(ge=1, le=720)] | None = None
+    booking_reference_retention_days: Annotated[int, Field(ge=1, le=3650)] | None = None
+    portfolio_mode: PortfolioDisplayMode | None = None
+    external_portfolio_url: Annotated[str, Field(max_length=2048)] | None = None
+    external_portfolio_button_text: Annotated[str, Field(min_length=1, max_length=100)] | None = (
+        None
+    )
+    master_profile_enabled: bool | None = None
+
+    @field_validator("availability_time_step_minutes")
+    @classmethod
+    def time_step_must_divide_day(cls, value: int | None) -> int | None:
+        if value is not None and (24 * 60) % value:
+            raise ValueError("time step must divide 1440 minutes")
+        return value
+
+    @field_validator("external_portfolio_url")
+    @classmethod
+    def external_portfolio_url_must_be_https(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("external portfolio URL must be an absolute HTTPS URL")
+        return normalized
 
     @model_validator(mode="after")
     def require_exactly_one_change(self) -> Self:
         if len(self.model_fields_set) != 1:
             raise ValueError("exactly one setting must be supplied")
         field = next(iter(self.model_fields_set))
-        if getattr(self, field) is None:
+        nullable_fields = {"booking_reference_retention_days", "external_portfolio_url"}
+        if getattr(self, field) is None and field not in nullable_fields:
             raise ValueError("setting must not be null")
         if field == "reminder_offsets_minutes":
             offsets = self.reminder_offsets_minutes or []
