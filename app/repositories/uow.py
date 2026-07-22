@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.service_repository import ServiceRepository
+from app.repositories.settings_repository import SettingsRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.window_repository import WindowRepository
 
 
 class SqlAlchemyUnitOfWork:
@@ -17,6 +19,8 @@ class SqlAlchemyUnitOfWork:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session = session_factory()
         self.services = ServiceRepository(self.session)
+        self.windows = WindowRepository(self.session)
+        self.settings = SettingsRepository(self.session)
         self.users = UserRepository(self.session)
         self.audit = AuditRepository(self.session)
 

@@ -17,7 +17,7 @@ from app.healthcheck import check_dependencies
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
 from app.repositories import SqlAlchemyUnitOfWork
-from app.services import ServiceCatalog
+from app.services import AvailabilityService, ServiceCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,15 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
     )
+    availability_service = AvailabilityService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
         service_catalog=service_catalog,
+        availability_service=availability_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

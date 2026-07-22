@@ -13,9 +13,7 @@ from app.handlers.admin.service_common import (
     parse_price,
     render_service,
 )
-from app.keyboards.admin.main import admin_main_keyboard
 from app.keyboards.admin.services import (
-    CANCEL_TEXT,
     ServiceCallback,
     cancel_keyboard,
     service_details_keyboard,
@@ -34,15 +32,6 @@ async def begin_service_creation(callback: CallbackQuery, state: FSMContext) -> 
     if isinstance(callback.message, Message):
         await callback.message.answer("Введите название услуги:", reply_markup=cancel_keyboard())
     await callback.answer()
-
-
-@router.message(F.text.casefold() == CANCEL_TEXT.casefold())
-async def cancel_service_form(message: Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
-    if current_state is None:
-        return
-    await state.clear()
-    await message.answer("Действие отменено.", reply_markup=admin_main_keyboard())
 
 
 @router.message(AdminServiceCreate.name)

@@ -15,3 +15,15 @@ class EntityNotFoundError(DomainError):
 
 class ServiceInUseError(DomainError):
     """A service with appointment history cannot be physically removed."""
+
+
+class WindowValidationError(DomainError):
+    """A requested window violates a calendar or spacing rule."""
+
+
+class WindowStateError(DomainError):
+    """An operation is not valid for the current window status."""
+
+
+class WindowInUseError(DomainError):
+    """A window with booking history cannot be physically removed."""
