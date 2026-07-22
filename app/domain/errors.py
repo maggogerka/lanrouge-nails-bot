@@ -65,6 +65,10 @@ class RepeatBookingStateError(DomainError):
     """A repeat-booking offer cannot be built from current history/catalog state."""
 
 
+class BroadcastStateError(DomainError):
+    """A broadcast draft, audience snapshot or lifecycle transition is invalid."""
+
+
 class AppointmentNotFoundError(DomainError):
     """An appointment is absent or not visible to the current client."""
 

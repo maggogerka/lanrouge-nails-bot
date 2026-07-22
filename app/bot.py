@@ -21,8 +21,10 @@ from app.services import (
     AppointmentService,
     AvailabilityService,
     BookingService,
+    BroadcastService,
     ConsentService,
     CrmService,
+    MarketingEventService,
     PortfolioService,
     RepeatBookingService,
     RescheduleService,
@@ -86,6 +88,10 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         settings.admin_telegram_ids,
     )
     repeat_booking_service = RepeatBookingService(lambda: SqlAlchemyUnitOfWork(database.sessions))
+    broadcast_service = BroadcastService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions), settings.admin_telegram_ids
+    )
+    marketing_event_service = MarketingEventService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
@@ -101,6 +107,8 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         waitlist_service=waitlist_service,
         review_service=review_service,
         repeat_booking_service=repeat_booking_service,
+        broadcast_service=broadcast_service,
+        marketing_event_service=marketing_event_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

@@ -3,8 +3,11 @@
 from app.services.appointment_service import AppointmentService
 from app.services.availability_service import AvailabilityService
 from app.services.booking_service import BookingService
+from app.services.broadcast_delivery_service import BroadcastDeliveryService
+from app.services.broadcast_service import BroadcastService
 from app.services.consent_service import ConsentService
 from app.services.crm_service import CrmService
+from app.services.marketing_event_service import MarketingEventService
 from app.services.notification_service import NotificationService
 from app.services.portfolio_service import PortfolioService
 from app.services.repeat_booking_service import RepeatBookingService
@@ -19,8 +22,11 @@ __all__ = [
     "AppointmentService",
     "AvailabilityService",
     "BookingService",
+    "BroadcastDeliveryService",
+    "BroadcastService",
     "ConsentService",
     "CrmService",
+    "MarketingEventService",
     "NotificationService",
     "PortfolioService",
     "RepeatBookingService",

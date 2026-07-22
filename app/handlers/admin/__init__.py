@@ -4,6 +4,7 @@ from aiogram import Router
 
 from app.filters import IsAdmin
 from app.handlers.admin.appointments import router as appointments_router
+from app.handlers.admin.broadcasts import router as broadcasts_router
 from app.handlers.admin.crm import router as crm_router
 from app.handlers.admin.menu import router as menu_router
 from app.handlers.admin.portfolio import router as portfolio_router
@@ -19,6 +20,7 @@ router.callback_query.filter(IsAdmin())
 router.include_routers(
     menu_router,
     appointments_router,
+    broadcasts_router,
     crm_router,
     services_router,
     portfolio_router,

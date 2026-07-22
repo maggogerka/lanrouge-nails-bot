@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
+    Appointment,
+    AvailabilityWindow,
     Broadcast,
     BroadcastMedia,
     BroadcastRecipient,
     MarketingEvent,
     User,
+    UserClientTag,
 )
-from app.domain.enums import BroadcastRecipientStatus, BroadcastStatus
+from app.domain.enums import (
+    AppointmentStatus,
+    BroadcastAudienceType,
+    BroadcastRecipientStatus,
+    BroadcastStatus,
+    UserRole,
+)
 
 
 class BroadcastRepository:
@@ -93,17 +102,103 @@ class BroadcastRepository:
         )
         return len(result.scalars().all())
 
-    async def list_subscribed_user_ids(self) -> list[int]:
-        result = await self._session.scalars(
-            select(User.id)
-            .where(
-                User.marketing_consent_at.is_not(None),
-                User.marketing_unsubscribed_at.is_(None),
-                User.is_blocked.is_(False),
+    async def resolve_audience_user_ids(
+        self,
+        *,
+        audience_type: BroadcastAudienceType,
+        parameters: dict[str, object],
+        now: datetime,
+    ) -> list[int]:
+        filters = [
+            User.role == UserRole.CLIENT,
+            User.marketing_consent_at.is_not(None),
+            User.marketing_unsubscribed_at.is_(None),
+            User.is_blocked.is_(False),
+            User.is_self_booking_blocked.is_(False),
+        ]
+        completed_visit = exists(
+            select(Appointment.id).where(
+                Appointment.client_id == User.id,
+                Appointment.status == AppointmentStatus.COMPLETED,
             )
-            .order_by(User.id)
         )
+        future_booking = exists(
+            select(Appointment.id)
+            .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
+            .where(
+                Appointment.client_id == User.id,
+                Appointment.status.in_(
+                    (AppointmentStatus.CONFIRMED, AppointmentStatus.CLIENT_CONFIRMED)
+                ),
+                AvailabilityWindow.start_at > now,
+            )
+        )
+        if bool(parameters.get("completed_only")):
+            filters.append(completed_visit)
+        if bool(parameters.get("without_future_booking")):
+            filters.append(~future_booking)
+        if audience_type is BroadcastAudienceType.CLIENT_TAG:
+            tag_id = self._int_parameter(parameters.get("tag_id"), default=0)
+            filters.append(
+                exists(
+                    select(UserClientTag.user_id).where(
+                        UserClientTag.user_id == User.id,
+                        UserClientTag.tag_id == tag_id,
+                    )
+                )
+            )
+        elif audience_type is BroadcastAudienceType.SERVICE_HISTORY:
+            service_id = self._int_parameter(parameters.get("service_id"), default=0)
+            filters.append(
+                exists(
+                    select(Appointment.id).where(
+                        Appointment.client_id == User.id,
+                        Appointment.service_id == service_id,
+                        Appointment.status == AppointmentStatus.COMPLETED,
+                    )
+                )
+            )
+        elif audience_type is BroadcastAudienceType.INACTIVE_DAYS:
+            days = max(1, self._int_parameter(parameters.get("days"), default=30))
+            cutoff = now - timedelta(days=days)
+            filters.extend(
+                [
+                    completed_visit,
+                    ~exists(
+                        select(Appointment.id).where(
+                            Appointment.client_id == User.id,
+                            Appointment.status == AppointmentStatus.COMPLETED,
+                            Appointment.completed_at > cutoff,
+                        )
+                    ),
+                ]
+            )
+        elif audience_type is BroadcastAudienceType.MANUAL:
+            raw_ids = parameters.get("user_ids", [])
+            user_ids = [int(value) for value in raw_ids] if isinstance(raw_ids, list) else []
+            filters.append(User.id.in_(user_ids))
+        result = await self._session.scalars(select(User.id).where(*filters).order_by(User.id))
         return list(result.all())
+
+    async def get_recipient(
+        self, recipient_id: int, *, for_update: bool = False
+    ) -> BroadcastRecipient | None:
+        statement = select(BroadcastRecipient).where(BroadcastRecipient.id == recipient_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return (await self._session.scalars(statement)).one_or_none()
+
+    async def get_recipient_for_user(
+        self, broadcast_id: int, user_id: int
+    ) -> BroadcastRecipient | None:
+        return (
+            await self._session.scalars(
+                select(BroadcastRecipient).where(
+                    BroadcastRecipient.broadcast_id == broadcast_id,
+                    BroadcastRecipient.user_id == user_id,
+                )
+            )
+        ).one_or_none()
 
     async def claim_due_recipients(
         self,
@@ -111,14 +206,35 @@ class BroadcastRepository:
         now: datetime,
         worker_id: str,
         limit: int,
+        lease_expired_before: datetime,
     ) -> list[BroadcastRecipient]:
         result = await self._session.scalars(
             select(BroadcastRecipient)
+            .join(Broadcast, Broadcast.id == BroadcastRecipient.broadcast_id)
             .where(
-                BroadcastRecipient.status.in_(
-                    (BroadcastRecipientStatus.PENDING, BroadcastRecipientStatus.RETRY)
+                Broadcast.status.in_(
+                    (
+                        BroadcastStatus.SCHEDULED,
+                        BroadcastStatus.PREPARING,
+                        BroadcastStatus.SENDING,
+                    )
                 ),
-                BroadcastRecipient.available_at <= now,
+                Broadcast.scheduled_at <= now,
+                or_(
+                    and_(
+                        BroadcastRecipient.status.in_(
+                            (
+                                BroadcastRecipientStatus.PENDING,
+                                BroadcastRecipientStatus.RETRY,
+                            )
+                        ),
+                        BroadcastRecipient.available_at <= now,
+                    ),
+                    and_(
+                        BroadcastRecipient.status == BroadcastRecipientStatus.PROCESSING,
+                        BroadcastRecipient.locked_at <= lease_expired_before,
+                    ),
+                ),
             )
             .order_by(BroadcastRecipient.available_at, BroadcastRecipient.id)
             .with_for_update(skip_locked=True)
@@ -133,7 +249,53 @@ class BroadcastRepository:
         await self._session.flush()
         return recipients
 
+    async def cancel_open_recipients(self, broadcast_id: int) -> int:
+        recipients = list(
+            (
+                await self._session.scalars(
+                    select(BroadcastRecipient)
+                    .where(
+                        BroadcastRecipient.broadcast_id == broadcast_id,
+                        BroadcastRecipient.status.in_(
+                            (
+                                BroadcastRecipientStatus.PENDING,
+                                BroadcastRecipientStatus.RETRY,
+                                BroadcastRecipientStatus.PROCESSING,
+                            )
+                        ),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        for recipient in recipients:
+            recipient.status = BroadcastRecipientStatus.SKIPPED
+            recipient.locked_at = None
+            recipient.locked_by = None
+            recipient.last_error = "broadcast_cancelled"
+        await self._session.flush()
+        return len(recipients)
+
+    async def status_counts(self, broadcast_id: int) -> dict[BroadcastRecipientStatus, int]:
+        rows = await self._session.execute(
+            select(BroadcastRecipient.status, func.count(BroadcastRecipient.id))
+            .where(BroadcastRecipient.broadcast_id == broadcast_id)
+            .group_by(BroadcastRecipient.status)
+        )
+        return {status: int(count) for status, count in rows.all()}
+
     async def add_event(self, event: MarketingEvent) -> MarketingEvent:
         self._session.add(event)
         await self._session.flush()
         return event
+
+    @staticmethod
+    def _int_parameter(value: object, *, default: int) -> int:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return default
+        return default

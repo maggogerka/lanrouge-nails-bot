@@ -153,6 +153,26 @@ async def toggle_weekend(
     await callback.answer("Настройка обновлена.")
 
 
+@router.callback_query(SettingsCallback.filter(F.action == "toggle_broadcasts"))
+async def toggle_broadcasts(
+    callback: CallbackQuery,
+    settings_service: SettingsService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    current = await settings_service.get(actor)
+    settings = await settings_service.update(
+        actor,
+        BusinessSettingsPatch(broadcasts_enabled=not current.broadcasts_enabled),
+        correlation_id=correlation_id,
+    )
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_settings(settings), reply_markup=settings_keyboard(settings)
+        )
+    await callback.answer("Настройка рассылок обновлена.")
+
+
 @router.message(F.text == ADMIN_CLIENTS_TEXT)
 async def clients_placeholder(message: Message) -> None:
     await message.answer("Карточки клиенток появятся в v0.2.0.")

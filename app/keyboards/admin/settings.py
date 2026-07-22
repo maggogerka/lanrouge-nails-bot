@@ -32,6 +32,16 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
+                    text=(
+                        "✅ Рассылки включены"
+                        if settings.broadcasts_enabled
+                        else "⛔ Рассылки выключены"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_broadcasts").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=("✅ Суббота" if settings.allow_saturday else "⛔ Суббота"),
                     callback_data=SettingsCallback(action="toggle_saturday").pack(),
                 ),
