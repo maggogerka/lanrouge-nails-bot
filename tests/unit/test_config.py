@@ -55,7 +55,12 @@ def test_empty_optional_urls_are_none() -> None:
     assert settings.sentry_dsn is None
 
 
-def test_bot_runtime_lists_only_missing_variable_names() -> None:
+def test_bot_runtime_lists_only_missing_variable_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("BOT_TOKEN", "DATABASE_URL", "REDIS_URL"):
+        monkeypatch.delenv(variable, raising=False)
+
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     with pytest.raises(RuntimeConfigurationError) as error:
