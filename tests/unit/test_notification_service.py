@@ -84,6 +84,7 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        reviews_enabled=True,
         version=1,
     )
 
@@ -112,9 +113,34 @@ def build_uow(
     unit_of_work.users.mark_blocked = AsyncMock()
     unit_of_work.windows.get = AsyncMock(return_value=window())
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.reviews.get_for_appointment = AsyncMock(return_value=None)
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work, target_job, recipient
+
+
+@pytest.mark.asyncio
+async def test_review_request_is_delivered_only_for_completed_without_existing_review() -> None:
+    target_job = job()
+    target_job.notification_type = NotificationType.REVIEW_REQUEST
+    unit_of_work, target_job, _ = build_uow(
+        target_job=target_job,
+        appointment_status=AppointmentStatus.COMPLETED,
+    )
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    delivery = await service.prepare_delivery(21, "worker-1", now=NOW)
+    assert delivery is not None
+    assert delivery.notification_type is NotificationType.REVIEW_REQUEST
+
+    unit_of_work.reviews.get_for_appointment.return_value = object()
+    cancelled = await service.prepare_delivery(21, "worker-1", now=NOW)
+    assert cancelled is None
+    assert target_job.status is NotificationJobStatus.CANCELLED
 
 
 @pytest.mark.asyncio

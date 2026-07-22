@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, NotificationType
 from app.domain.errors import AppointmentNotFoundError, CancellationDeadlineError
 from app.schemas.booking import ClientActor
 from app.schemas.service import AdminActor
@@ -106,6 +106,7 @@ def build_uow(
     unit_of_work.users.get_by_id = AsyncMock(return_value=target_client)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
+    unit_of_work.notifications.add_all = AsyncMock()
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -218,3 +219,29 @@ async def test_client_can_confirm_only_own_visit_from_reminder() -> None:
     assert target_appointment.client_confirmed_at == NOW
     assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-reminder"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_completed_visit_schedules_exactly_one_review_request() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=-4)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    completed = await service.complete_visit(
+        AdminActor(telegram_id=900), 11, now=NOW, correlation_id="complete-1"
+    )
+
+    assert completed.status is AppointmentStatus.COMPLETED
+    assert target_appointment.completed_at == NOW
+    assert target_window.status is AvailabilityWindowStatus.CLOSED
+    jobs = unit_of_work.notifications.add_all.await_args.args[0]
+    assert len(jobs) == 1
+    assert jobs[0].notification_type is NotificationType.REVIEW_REQUEST
+    assert jobs[0].available_at == NOW + timedelta(minutes=60)
+
+    await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+    assert unit_of_work.notifications.add_all.await_count == 1

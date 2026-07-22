@@ -52,3 +52,21 @@ class ReviewRepository:
         return list((await self._session.scalars(rows)).all()), int(
             (await self._session.scalar(count)) or 0
         )
+
+    async def list_published(self, *, limit: int, offset: int) -> tuple[list[Review], int]:
+        filters = [
+            Review.moderation_status == ReviewModerationStatus.APPROVED,
+            Review.publication_consent.is_(True),
+            Review.published_at.is_not(None),
+        ]
+        rows = (
+            select(Review)
+            .where(*filters)
+            .order_by(Review.published_at.desc(), Review.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        count = select(func.count(Review.id)).where(*filters)
+        return list((await self._session.scalars(rows)).all()), int(
+            (await self._session.scalar(count)) or 0
+        )

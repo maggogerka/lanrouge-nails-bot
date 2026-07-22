@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.database.models import (
@@ -11,6 +11,7 @@ from app.database.models import (
     AppointmentStatusHistory,
     AvailabilityWindow,
     BusinessSettings,
+    NotificationJob,
     User,
 )
 from app.domain.appointments import (
@@ -18,7 +19,11 @@ from app.domain.appointments import (
     ensure_client_change_deadline,
 )
 from app.domain.availability import utc_day_bounds
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.domain.enums import (
+    AppointmentStatus,
+    AvailabilityWindowStatus,
+    NotificationType,
+)
 from app.domain.errors import AppointmentNotFoundError, AppointmentStateError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
@@ -323,6 +328,83 @@ class AppointmentService:
             settings = await self._settings(unit_of_work)
             await unit_of_work.commit()
             return appointment_view(appointment, window, settings, current_time)
+
+    async def complete_visit(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> AdminAppointmentView:
+        """Complete once and enqueue exactly one delayed review request."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            settings = await self._settings(unit_of_work)
+            appointment, window = await self._lock_appointment_window(
+                unit_of_work, appointment_id, settings.timezone
+            )
+            client = await unit_of_work.users.get_by_id(appointment.client_id)
+            if client is None:
+                raise RuntimeError("Appointment client is missing")
+            if appointment.status is AppointmentStatus.COMPLETED:
+                return admin_appointment_view(appointment, window, client, settings, current_time)
+            if appointment.status not in {
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.CLIENT_CONFIRMED,
+            }:
+                raise AppointmentStateError("Завершить можно только активную запись.")
+            if window.end_at > current_time:
+                raise AppointmentStateError("Завершить визит можно после окончания окна записи.")
+            previous = appointment.status
+            appointment.status = AppointmentStatus.COMPLETED
+            appointment.completed_at = current_time
+            window.status = AvailabilityWindowStatus.CLOSED
+            await unit_of_work.notifications.cancel_unsent(appointment.id)
+            await unit_of_work.appointments.add_history(
+                AppointmentStatusHistory(
+                    appointment_id=appointment.id,
+                    previous_status=previous,
+                    new_status=AppointmentStatus.COMPLETED,
+                    changed_by_user_id=actor_user.id,
+                    reason="Визит завершён",
+                )
+            )
+            if settings.reviews_enabled:
+                scheduled_at = current_time + timedelta(
+                    minutes=settings.review_request_delay_minutes
+                )
+                await unit_of_work.notifications.add_all(
+                    [
+                        NotificationJob(
+                            appointment_id=appointment.id,
+                            recipient_user_id=client.id,
+                            notification_type=NotificationType.REVIEW_REQUEST,
+                            offset_minutes=max(1, settings.review_request_delay_minutes),
+                            scheduled_at=scheduled_at,
+                            available_at=scheduled_at,
+                        )
+                    ]
+                )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="appointment.completed",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={
+                    "status": {
+                        "before": previous.value,
+                        "after": AppointmentStatus.COMPLETED.value,
+                    },
+                    "review_request_scheduled": settings.reviews_enabled,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return admin_appointment_view(appointment, window, client, settings, current_time)
 
     async def _lock_appointment_window(
         self,

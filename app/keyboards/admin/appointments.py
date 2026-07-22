@@ -75,6 +75,16 @@ def admin_appointment_details_keyboard(
             [
                 [
                     InlineKeyboardButton(
+                        text="Завершить визит",
+                        callback_data=AdminAppointmentCallback(
+                            action="complete",
+                            appointment_id=appointment.id,
+                            object_id=0,
+                        ).pack(),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         text="🔄 Перенести",
                         callback_data=AdminAppointmentCallback(
                             action="reschedule",

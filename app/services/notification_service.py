@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.database.models import NotificationJob
 from app.domain.appointments import ACTIVE_APPOINTMENT_STATUSES
-from app.domain.enums import NotificationJobStatus
+from app.domain.enums import AppointmentStatus, NotificationJobStatus, NotificationType
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.notification import NotificationDelivery
 
@@ -67,7 +67,18 @@ class NotificationService:
                 await self._fail_job(unit_of_work, job, "delivery_context_missing")
                 await unit_of_work.commit()
                 return None
-            if appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
+            if job.notification_type is NotificationType.REVIEW_REQUEST:
+                settings = await unit_of_work.settings.get()
+                if (
+                    appointment.status is not AppointmentStatus.COMPLETED
+                    or settings is None
+                    or not settings.reviews_enabled
+                    or await unit_of_work.reviews.get_for_appointment(appointment.id) is not None
+                ):
+                    await self._cancel_job(unit_of_work, job, "review_not_actionable")
+                    await unit_of_work.commit()
+                    return None
+            elif appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
                 await self._cancel_job(unit_of_work, job, "appointment_inactive")
                 await unit_of_work.commit()
                 return None
@@ -82,7 +93,11 @@ class NotificationService:
                 await self._fail_job(unit_of_work, job, "delivery_context_missing")
                 await unit_of_work.commit()
                 return None
-            if window.start_at <= current_time:
+            if (
+                job.notification_type
+                in {NotificationType.CLIENT_REMINDER, NotificationType.ADMIN_REMINDER}
+                and window.start_at <= current_time
+            ):
                 await self._cancel_job(unit_of_work, job, "appointment_started")
                 await unit_of_work.commit()
                 return None

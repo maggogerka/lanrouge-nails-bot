@@ -135,6 +135,30 @@ async def confirm_client_visit(
     await callback.answer("Визит подтверждён.")
 
 
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "complete"))
+async def complete_client_visit(
+    callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
+    appointment_service: AppointmentService,
+    correlation_id: str,
+) -> None:
+    try:
+        appointment = await appointment_service.complete_visit(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_admin_appointment(appointment),
+            reply_markup=admin_appointment_details_keyboard(appointment),
+        )
+    await callback.answer("Визит завершён. Запрос отзыва поставлен в очередь.")
+
+
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "cancel_prompt"))
 async def prompt_admin_cancellation(
     callback: CallbackQuery,

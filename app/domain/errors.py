@@ -57,6 +57,10 @@ class WaitlistStateError(DomainError):
     """A waitlist request or notification is no longer actionable."""
 
 
+class ReviewStateError(DomainError):
+    """A review submission or moderation transition is invalid."""
+
+
 class AppointmentNotFoundError(DomainError):
     """An appointment is absent or not visible to the current client."""
 
