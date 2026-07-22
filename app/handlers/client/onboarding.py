@@ -18,6 +18,7 @@ from app.keyboards.client.consent import (
 )
 from app.keyboards.client.main import client_main_keyboard
 from app.services.consent_service import ConsentService
+from app.services.menu_service import MenuService
 from app.services.portfolio_service import PortfolioService
 
 router = Router(name="client.onboarding")
@@ -41,6 +42,7 @@ async def handle_start(
     settings: Settings,
     portfolio_service: PortfolioService,
     bot: Bot,
+    menu_service: MenuService,
 ) -> None:
     if message.from_user is None:
         return
@@ -64,7 +66,7 @@ async def handle_start(
         return
     await message.answer(
         "С возвращением в <b>lanrouge nails</b>!",
-        reply_markup=client_main_keyboard(),
+        reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
     )
     payload = (message.text or "").split(maxsplit=1)
     if len(payload) == 2 and payload[1].startswith("portfolio_"):
@@ -102,6 +104,7 @@ async def choose_marketing(
     callback_data: ConsentCallback,
     consent_service: ConsentService,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     accepted = callback_data.action == "marketing_accept"
     await consent_service.set_marketing(
@@ -117,7 +120,7 @@ async def choose_marketing(
         )
         await callback.message.answer(
             "Можно переходить к записи.",
-            reply_markup=client_main_keyboard(),
+            reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
         )
     await callback.answer()
 

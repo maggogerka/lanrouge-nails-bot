@@ -26,6 +26,7 @@ from app.schemas.booking import ClientActor
 from app.schemas.pagination import PageRequest
 from app.schemas.portfolio import PortfolioItemView
 from app.services.booking_service import BookingService
+from app.services.menu_service import MenuService
 from app.services.portfolio_service import PortfolioService
 from app.states.booking import BookingFlow
 
@@ -163,9 +164,12 @@ async def start_booking_from_portfolio(
 
 
 @router.callback_query(PortfolioClientCallback.filter(F.action == "close"))
-async def close_portfolio(callback: CallbackQuery) -> None:
+async def close_portfolio(callback: CallbackQuery, menu_service: MenuService) -> None:
     if isinstance(callback.message, Message):
-        await callback.message.answer("Главное меню:", reply_markup=client_main_keyboard())
+        await callback.message.answer(
+            "Главное меню:",
+            reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
+        )
     await callback.answer()
 
 

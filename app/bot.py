@@ -26,6 +26,7 @@ from app.services import (
     CrmService,
     MarketingEventService,
     MasterProfileService,
+    MenuService,
     PortfolioService,
     RepeatBookingService,
     RescheduleService,
@@ -96,6 +97,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
     master_profile_service = MasterProfileService(
         lambda: SqlAlchemyUnitOfWork(database.sessions), settings.admin_telegram_ids
     )
+    menu_service = MenuService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     dispatcher = Dispatcher(
         storage=storage,
         events_isolation=storage.create_isolation(),
@@ -115,6 +117,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         broadcast_service=broadcast_service,
         marketing_event_service=marketing_event_service,
         master_profile_service=master_profile_service,
+        menu_service=menu_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

@@ -13,6 +13,7 @@ from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.admin.settings import SettingsCallback, settings_keyboard
 from app.schemas.service import AdminActor
 from app.schemas.settings import BusinessSettingsPatch, BusinessSettingsView
+from app.services.menu_service import MenuService
 from app.services.settings_service import SettingsService
 from app.states.admin_settings import AdminSettingsEdit
 
@@ -102,6 +103,7 @@ async def save_setting(
     state: FSMContext,
     settings_service: SettingsService,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     if message.from_user is None:
         return
@@ -128,7 +130,10 @@ async def save_setting(
         render_settings(settings),
         reply_markup=settings_keyboard(settings),
     )
-    await message.answer("Настройка сохранена.", reply_markup=admin_main_keyboard())
+    await message.answer(
+        "Настройка сохранена.",
+        reply_markup=admin_main_keyboard(await menu_service.get_capabilities()),
+    )
 
 
 @router.callback_query(SettingsCallback.filter(F.action.in_({"toggle_saturday", "toggle_sunday"})))

@@ -17,6 +17,7 @@ from app.handlers.admin.service_common import (
 from app.keyboards.admin.main import admin_main_keyboard
 from app.keyboards.admin.services import ServiceCallback, cancel_keyboard, service_details_keyboard
 from app.schemas.service import ServiceCreate, ServicePatch
+from app.services.menu_service import MenuService
 from app.services.service_catalog import ServiceCatalog
 from app.states.admin_service import AdminServiceEdit
 
@@ -104,6 +105,7 @@ async def finish_edit(
     catalog: ServiceCatalog,
     patch: ServicePatch,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     if message.from_user is None:
         return
@@ -116,7 +118,10 @@ async def finish_edit(
         correlation_id=correlation_id,
     )
     await state.clear()
-    await message.answer("Изменения сохранены.", reply_markup=admin_main_keyboard())
+    await message.answer(
+        "Изменения сохранены.",
+        reply_markup=admin_main_keyboard(await menu_service.get_capabilities()),
+    )
     await message.answer(render_service(service), reply_markup=service_details_keyboard(service))
 
 
@@ -126,13 +131,14 @@ async def finish_edit_name(
     state: FSMContext,
     service_catalog: ServiceCatalog,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     try:
         patch = ServicePatch(name=message.text or "")
     except ValidationError:
         await message.answer("Название должно содержать от 1 до 255 символов.")
         return
-    await finish_edit(message, state, service_catalog, patch, correlation_id)
+    await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)
 
 
 @router.message(AdminServiceEdit.description)
@@ -141,6 +147,7 @@ async def finish_edit_description(
     state: FSMContext,
     service_catalog: ServiceCatalog,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     raw = (message.text or "").strip()
     try:
@@ -148,7 +155,7 @@ async def finish_edit_description(
     except ValidationError:
         await message.answer("Описание не должно превышать 4000 символов.")
         return
-    await finish_edit(message, state, service_catalog, patch, correlation_id)
+    await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)
 
 
 @router.message(AdminServiceEdit.price)
@@ -157,6 +164,7 @@ async def finish_edit_price(
     state: FSMContext,
     service_catalog: ServiceCatalog,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     price = parse_price(message.text)
     try:
@@ -164,7 +172,7 @@ async def finish_edit_price(
     except ValidationError:
         await message.answer("Введите неотрицательную цену, максимум с двумя знаками после точки.")
         return
-    await finish_edit(message, state, service_catalog, patch, correlation_id)
+    await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)
 
 
 @router.message(AdminServiceEdit.duration)
@@ -173,6 +181,7 @@ async def finish_edit_duration(
     state: FSMContext,
     service_catalog: ServiceCatalog,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     match = DURATION_RANGE.fullmatch(message.text or "")
     if match is None:
@@ -193,4 +202,4 @@ async def finish_edit_duration(
     except ValidationError:
         await message.answer("Минимум не должен превышать максимум; допустимо 1–1440 минут.")
         return
-    await finish_edit(message, state, service_catalog, patch, correlation_id)
+    await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)

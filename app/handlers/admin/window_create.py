@@ -42,6 +42,7 @@ from app.schemas.service import AdminActor
 from app.schemas.settings import BusinessSettingsView
 from app.services.availability_service import AvailabilityService
 from app.services.date_picker_service import DatePickerPage, DatePickerService
+from app.services.menu_service import MenuService
 from app.services.settings_service import SettingsService
 from app.states.admin_window import AdminWindowCreate
 
@@ -115,9 +116,10 @@ async def handle_date_picker(
     state: FSMContext,
     settings_service: SettingsService,
     availability_service: AvailabilityService,
+    menu_service: MenuService,
 ) -> None:
     if callback_data.action == "cancel":
-        await _cancel_creation(callback, state)
+        await _cancel_creation(callback, state, menu_service)
         return
     if callback_data.action == "back":
         await state.clear()
@@ -197,9 +199,10 @@ async def handle_time_picker(
     state: FSMContext,
     settings_service: SettingsService,
     availability_service: AvailabilityService,
+    menu_service: MenuService,
 ) -> None:
     if callback_data.action == "cancel":
-        await _cancel_creation(callback, state)
+        await _cancel_creation(callback, state, menu_service)
         return
     current_state = await state.get_state()
     if callback_data.action == "date":
@@ -324,10 +327,11 @@ async def handle_window_form_action(
     settings_service: SettingsService,
     availability_service: AvailabilityService,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     action = callback_data.action
     if action == "cancel":
-        await _cancel_creation(callback, state)
+        await _cancel_creation(callback, state, menu_service)
         return
     if action == "list":
         await state.clear()
@@ -338,7 +342,7 @@ async def handle_window_form_action(
         )
         return
     if action == "done":
-        await _finish_creation(callback, state)
+        await _finish_creation(callback, state, menu_service)
         return
 
     current_state = await state.get_state()
@@ -573,19 +577,29 @@ async def _create_confirmed_window(
     await callback.answer("Окно создано.")
 
 
-async def _cancel_creation(callback: CallbackQuery, state: FSMContext) -> None:
+async def _cancel_creation(
+    callback: CallbackQuery, state: FSMContext, menu_service: MenuService
+) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Создание окна отменено.")
-        await callback.message.answer("Главное меню:", reply_markup=admin_main_keyboard())
+        await callback.message.answer(
+            "Главное меню:",
+            reply_markup=admin_main_keyboard(await menu_service.get_capabilities()),
+        )
     await callback.answer()
 
 
-async def _finish_creation(callback: CallbackQuery, state: FSMContext) -> None:
+async def _finish_creation(
+    callback: CallbackQuery, state: FSMContext, menu_service: MenuService
+) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer("Готово.", reply_markup=admin_main_keyboard())
+        await callback.message.answer(
+            "Готово.",
+            reply_markup=admin_main_keyboard(await menu_service.get_capabilities()),
+        )
     await callback.answer()
 
 

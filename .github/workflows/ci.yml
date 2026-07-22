@@ -62,7 +62,7 @@ jobs:
         run: ruff format --check .
       - name: Mypy
         run: mypy app
-      - name: Migrate v0.1 schema to v0.2 head
+      - name: Migrate v0.1 schema to v0.3 head
         run: |
           alembic upgrade 20260722_0001
           alembic upgrade head

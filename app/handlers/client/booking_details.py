@@ -39,6 +39,7 @@ from app.keyboards.client.main import client_main_keyboard
 from app.logging import log_event
 from app.schemas.booking import BookingRequest, ReferenceMediaDraft
 from app.services.booking_service import BookingService
+from app.services.menu_service import MenuService
 from app.states.booking import BookingFlow
 
 router = Router(name="client.booking_details")
@@ -46,11 +47,16 @@ logger = logging.getLogger(__name__)
 
 
 @router.callback_query(BookingCallback.filter(F.action == "cancel"))
-async def cancel_booking_callback(callback: CallbackQuery, state: FSMContext) -> None:
+async def cancel_booking_callback(
+    callback: CallbackQuery, state: FSMContext, menu_service: MenuService
+) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Оформление записи отменено.")
-        await callback.message.answer("Главное меню:", reply_markup=client_main_keyboard())
+        await callback.message.answer(
+            "Главное меню:",
+            reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
+        )
     await callback.answer()
 
 
@@ -58,9 +64,14 @@ async def cancel_booking_callback(callback: CallbackQuery, state: FSMContext) ->
     StateFilter(*BookingFlow.__all_states__),
     F.text == BOOKING_CANCEL_TEXT,
 )
-async def cancel_booking_message(message: Message, state: FSMContext) -> None:
+async def cancel_booking_message(
+    message: Message, state: FSMContext, menu_service: MenuService
+) -> None:
     await state.clear()
-    await message.answer("Оформление записи отменено.", reply_markup=client_main_keyboard())
+    await message.answer(
+        "Оформление записи отменено.",
+        reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
+    )
 
 
 @router.message(
@@ -232,6 +243,7 @@ async def handle_reference_action(
     callback_data: BookingReferenceCallback,
     state: FSMContext,
     booking_service: BookingService,
+    menu_service: MenuService,
 ) -> None:
     if callback_data.action == "cancel":
         await cancel_booking_callback(callback, state)
@@ -257,13 +269,14 @@ async def handle_reference_action(
     elif callback_data.action != "done":
         await callback.answer("Эта кнопка устарела.", show_alert=True)
         return
-    await _show_booking_confirmation(callback, state, booking_service)
+    await _show_booking_confirmation(callback, state, booking_service, menu_service)
 
 
 async def _show_booking_confirmation(
     callback: CallbackQuery,
     state: FSMContext,
     booking_service: BookingService,
+    menu_service: MenuService,
 ) -> None:
     data = await state.get_data()
     try:
@@ -285,7 +298,10 @@ async def _show_booking_confirmation(
         await state.clear()
         await callback.answer(str(exc) or "Выбранное время уже недоступно.", show_alert=True)
         if isinstance(callback.message, Message):
-            await callback.message.answer("Главное меню:", reply_markup=client_main_keyboard())
+            await callback.message.answer(
+                "Главное меню:",
+                reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
+            )
         return
     await state.set_state(BookingFlow.confirm)
     if isinstance(callback.message, Message):
@@ -337,6 +353,7 @@ async def confirm_booking(
     settings: Settings,
     bot: Bot,
     correlation_id: str,
+    menu_service: MenuService,
 ) -> None:
     data = await state.get_data()
     try:
@@ -372,7 +389,10 @@ async def confirm_booking(
                 receipt.master_telegram_url,
             ),
         )
-        await callback.message.answer("Главное меню:", reply_markup=client_main_keyboard())
+        await callback.message.answer(
+            "Главное меню:",
+            reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
+        )
     await callback.answer("Запись создана.")
 
     admin_text = render_admin_new_booking(receipt)

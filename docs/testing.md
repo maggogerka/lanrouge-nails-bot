@@ -3,10 +3,10 @@
 ## Локальный quality gate
 
 ```powershell
-.\.venv\Scripts\ruff.exe format --check .
-.\.venv\Scripts\ruff.exe check .
-.\.venv\Scripts\mypy.exe app
-.\.venv\Scripts\pytest.exe
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy app
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 ## PostgreSQL integration
@@ -17,7 +17,7 @@
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test"
 alembic upgrade head
-.\.venv\Scripts\pytest.exe tests/integration
+.\.venv\Scripts\python.exe -m pytest tests/integration
 ```
 
 Интеграционный набор проверяет гонку бронирования, snapshot аудитории рассылки,

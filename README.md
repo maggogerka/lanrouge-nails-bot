@@ -1,6 +1,10 @@
 # lanrouge nails bot
 
-Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.2.0**.
+Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.3.0**.
+
+В v0.3.0 добавлены кнопочный выбор даты и времени, фото-референсы к записи,
+редактирование и безопасное удаление отзывов, внутренний/внешний режимы
+портфолио, публичный профиль мастера и динамические меню по feature flags.
 
 ## Возможности
 
@@ -131,6 +135,12 @@ pytest
 - [лист ожидания](docs/waitlist.md)
 - [рассылки](docs/broadcasts.md)
 - [правила бронирования](docs/booking-rules.md)
+- [выбор даты и времени](docs/date-time-picker.md)
+- [фото-референсы записи](docs/booking-reference-media.md)
+- [управление отзывами](docs/review-administration.md)
+- [режимы портфолио](docs/portfolio-modes.md)
+- [профиль мастера](docs/master-profile.md)
+- [миграция v0.2 → v0.3](docs/migration-v0.2-to-v0.3.md)
 - [миграция v0.1 → v0.2](docs/migration-v0.1-to-v0.2.md)
 - [развёртывание и rollback](docs/deployment.md)
 - [privacy и consent](docs/privacy.md)

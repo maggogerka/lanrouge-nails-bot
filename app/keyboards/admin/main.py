@@ -2,6 +2,8 @@
 
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from app.schemas.menu import MenuCapabilities
+
 ADMIN_SERVICES_TEXT = "💅 Услуги"
 ADMIN_ADD_WINDOW_TEXT = "➕ Добавить окно"
 ADMIN_WINDOWS_TEXT = "🕒 Открытые окна"
@@ -18,32 +20,37 @@ ADMIN_BROADCASTS_TEXT = "📢 Рассылки"
 ADMIN_MASTER_PROFILE_TEXT = "ℹ️ Информация о мастере"
 
 
-def admin_main_keyboard() -> ReplyKeyboardMarkup:
+def admin_main_keyboard(capabilities: MenuCapabilities | None = None) -> ReplyKeyboardMarkup:
     """Return only implemented administrative sections."""
 
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text=ADMIN_TODAY_TEXT),
-                KeyboardButton(text=ADMIN_UPCOMING_TEXT),
-            ],
-            [
-                KeyboardButton(text=ADMIN_ADD_WINDOW_TEXT),
-                KeyboardButton(text=ADMIN_WINDOWS_TEXT),
-            ],
-            [
-                KeyboardButton(text=ADMIN_SERVICES_TEXT),
-                KeyboardButton(text=ADMIN_CLIENTS_TEXT),
-            ],
-            [
-                KeyboardButton(text=ADMIN_PORTFOLIO_TEXT),
-                KeyboardButton(text=ADMIN_WAITLIST_TEXT),
-            ],
-            [KeyboardButton(text=ADMIN_REVIEWS_TEXT)],
-            [KeyboardButton(text=ADMIN_BROADCASTS_TEXT)],
-            [KeyboardButton(text=ADMIN_MASTER_PROFILE_TEXT)],
-            [KeyboardButton(text=ADMIN_SETTINGS_TEXT)],
+    rows = [
+        [
+            KeyboardButton(text=ADMIN_TODAY_TEXT),
+            KeyboardButton(text=ADMIN_UPCOMING_TEXT),
         ],
+        [
+            KeyboardButton(text=ADMIN_ADD_WINDOW_TEXT),
+            KeyboardButton(text=ADMIN_WINDOWS_TEXT),
+        ],
+        [
+            KeyboardButton(text=ADMIN_SERVICES_TEXT),
+            KeyboardButton(text=ADMIN_CLIENTS_TEXT),
+        ],
+        [
+            KeyboardButton(text=ADMIN_PORTFOLIO_TEXT),
+            KeyboardButton(text=ADMIN_WAITLIST_TEXT),
+        ],
+        *(
+            [[KeyboardButton(text=ADMIN_REVIEWS_TEXT)]]
+            if capabilities is None or capabilities.reviews_visible
+            else []
+        ),
+        [KeyboardButton(text=ADMIN_BROADCASTS_TEXT)],
+        [KeyboardButton(text=ADMIN_MASTER_PROFILE_TEXT)],
+        [KeyboardButton(text=ADMIN_SETTINGS_TEXT)],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder="Меню администратора",
     )
