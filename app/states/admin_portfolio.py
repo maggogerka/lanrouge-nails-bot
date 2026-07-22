@@ -12,3 +12,8 @@ class AdminPortfolioCreate(StatesGroup):
     sort_order = State()
     tags = State()
     preview = State()
+
+
+class AdminPortfolioSettings(StatesGroup):
+    external_url = State()
+    button_text = State()

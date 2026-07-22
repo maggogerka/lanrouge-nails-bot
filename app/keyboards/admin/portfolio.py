@@ -5,8 +5,8 @@ from __future__ import annotations
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.domain.enums import PortfolioStatus
-from app.schemas.portfolio import PortfolioItemView
+from app.domain.enums import PortfolioDisplayMode, PortfolioStatus
+from app.schemas.portfolio import PortfolioDisplayConfig, PortfolioItemView
 from app.schemas.service import ServiceView
 
 
@@ -24,6 +24,7 @@ def portfolio_admin_menu() -> InlineKeyboardMarkup:
             [_button("🏷 Категории и теги", "tags")],
             [_button("👁 Опубликованные", "published")],
             [_button("🗄 Архив", "archived")],
+            [_button("⚙️ Режим показа", "display")],
         ]
     )
 
@@ -131,6 +132,38 @@ def portfolio_preview_keyboard() -> InlineKeyboardMarkup:
             [_button("📢 Опубликовать", "save_publish")],
             [_button("💾 Сохранить черновик", "save_draft")],
             [_button("❌ Отменить", "cancel")],
+        ]
+    )
+
+
+def portfolio_display_keyboard(config: PortfolioDisplayConfig) -> InlineKeyboardMarkup:
+    def marker(mode: PortfolioDisplayMode) -> str:
+        return "✅" if config.mode is mode else "▫️"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button(
+                    f"{marker(PortfolioDisplayMode.INTERNAL)} Встроенное",
+                    "mode_internal",
+                )
+            ],
+            [
+                _button(
+                    f"{marker(PortfolioDisplayMode.EXTERNAL_LINK)} Внешняя ссылка",
+                    "mode_external",
+                )
+            ],
+            [
+                _button(
+                    f"{marker(PortfolioDisplayMode.DISABLED)} Выключено",
+                    "mode_disabled",
+                )
+            ],
+            [_button("✏️ Изменить внешний URL", "edit_external_url")],
+            [_button("✏️ Текст внешней кнопки", "edit_external_text")],
+            [_button("👁 Предпросмотр", "display_preview")],
+            [_button("🔙 Портфолио", "menu")],
         ]
     )
 

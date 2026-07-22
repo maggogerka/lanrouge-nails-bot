@@ -6,13 +6,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.database.models import PortfolioItem, PortfolioItemTag, PortfolioMedia, PortfolioTag
-from app.domain.enums import PortfolioStatus
+from app.domain.enums import PortfolioDisplayMode, PortfolioStatus
 from app.domain.errors import EntityNotFoundError, PortfolioStateError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import ClientActor
 from app.schemas.pagination import PageRequest
 from app.schemas.portfolio import (
     PortfolioCreate,
+    PortfolioDisplayConfig,
+    PortfolioDisplayUpdate,
     PortfolioItemView,
     PortfolioMediaView,
     PortfolioPage,
@@ -42,6 +44,59 @@ class PortfolioService:
             if settings is None:
                 raise RuntimeError("Business settings row is missing")
             return settings.portfolio_max_media
+
+    async def get_display_config(self) -> PortfolioDisplayConfig:
+        async with self._unit_of_work_factory() as unit_of_work:
+            settings = await unit_of_work.settings.get()
+            if settings is None:
+                raise RuntimeError("Business settings row is missing")
+            return self._display_config(settings)
+
+    async def update_display_config(
+        self,
+        actor: AdminActor,
+        values: PortfolioDisplayUpdate,
+        *,
+        correlation_id: str | None = None,
+    ) -> PortfolioDisplayConfig:
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            admin = await unit_of_work.users.get_or_create_admin(actor)
+            settings = await unit_of_work.settings.get(for_update=True)
+            if settings is None:
+                raise RuntimeError("Business settings row is missing")
+            before = self._display_config(settings)
+            changes = values.model_dump(exclude_unset=True)
+            if "external_url" in changes:
+                settings.external_portfolio_url = changes["external_url"]
+            if "button_text" in changes:
+                settings.external_portfolio_button_text = changes["button_text"]
+            if "mode" in changes:
+                settings.portfolio_mode = changes["mode"]
+            if (
+                settings.portfolio_mode is PortfolioDisplayMode.EXTERNAL_LINK
+                and not settings.external_portfolio_url
+            ):
+                raise PortfolioStateError("Сначала укажите безопасную внешнюю ссылку портфолио.")
+            settings.portfolio_enabled = (
+                settings.portfolio_mode is not PortfolioDisplayMode.DISABLED
+            )
+            settings.version += 1
+            after = self._display_config(settings)
+            await unit_of_work.audit.add(
+                actor_user_id=admin.id,
+                action="portfolio.display_changed",
+                entity_type="business_settings",
+                entity_id="1",
+                changes={
+                    "mode": {"before": before.mode.value, "after": after.mode.value},
+                    "external_url_configured": after.external_url is not None,
+                    "button_text_changed": before.button_text != after.button_text,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return after
 
     async def create(
         self,
@@ -158,7 +213,7 @@ class PortfolioService:
             settings = await unit_of_work.settings.get()
             if settings is None:
                 raise RuntimeError("Business settings row is missing")
-            if not settings.portfolio_enabled:
+            if self._mode(settings) is not PortfolioDisplayMode.INTERNAL:
                 raise PortfolioStateError("Портфолио временно недоступно.")
             items, total = await unit_of_work.portfolio.list_page(
                 status=PortfolioStatus.PUBLISHED,
@@ -176,6 +231,11 @@ class PortfolioService:
     async def get_published(self, actor: ClientActor, item_id: int) -> PortfolioItemView:
         del actor
         async with self._unit_of_work_factory() as unit_of_work:
+            settings = await unit_of_work.settings.get()
+            if settings is None:
+                raise RuntimeError("Business settings row is missing")
+            if self._mode(settings) is not PortfolioDisplayMode.INTERNAL:
+                raise PortfolioStateError("Портфолио временно недоступно.")
             item = await unit_of_work.portfolio.get(item_id)
             if item is None or item.status is not PortfolioStatus.PUBLISHED:
                 raise EntityNotFoundError("Эта работа больше не опубликована.")
@@ -279,3 +339,24 @@ class PortfolioService:
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         return current.astimezone(UTC)
+
+    @staticmethod
+    def _mode(settings: object) -> PortfolioDisplayMode:
+        value = getattr(settings, "portfolio_mode", None)
+        if value is None:
+            return (
+                PortfolioDisplayMode.INTERNAL
+                if bool(getattr(settings, "portfolio_enabled", False))
+                else PortfolioDisplayMode.DISABLED
+            )
+        return PortfolioDisplayMode(value)
+
+    @classmethod
+    def _display_config(cls, settings: object) -> PortfolioDisplayConfig:
+        return PortfolioDisplayConfig(
+            mode=cls._mode(settings),
+            external_url=getattr(settings, "external_portfolio_url", None),
+            button_text=(
+                getattr(settings, "external_portfolio_button_text", None) or "Открыть портфолио"
+            ),
+        )

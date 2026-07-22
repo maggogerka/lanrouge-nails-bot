@@ -8,11 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database.models import PortfolioItem, PortfolioMedia, Service
-from app.domain.enums import MediaType, PortfolioStatus
-from app.domain.errors import AuthorizationError
+from app.domain.enums import MediaType, PortfolioDisplayMode, PortfolioStatus
+from app.domain.errors import AuthorizationError, PortfolioStateError
 from app.schemas.booking import ClientActor
 from app.schemas.pagination import PageRequest
-from app.schemas.portfolio import PortfolioCreate, PortfolioMediaInput
+from app.schemas.portfolio import (
+    PortfolioCreate,
+    PortfolioDisplayUpdate,
+    PortfolioMediaInput,
+)
 from app.schemas.service import AdminActor
 from app.services.portfolio_service import PortfolioService
 
@@ -52,7 +56,14 @@ def build_uow() -> MagicMock:
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.settings.get = AsyncMock(
-        return_value=SimpleNamespace(portfolio_max_media=8, portfolio_enabled=True)
+        return_value=SimpleNamespace(
+            portfolio_max_media=8,
+            portfolio_enabled=True,
+            portfolio_mode=PortfolioDisplayMode.INTERNAL,
+            external_portfolio_url=None,
+            external_portfolio_button_text="Открыть портфолио",
+            version=1,
+        )
     )
     unit_of_work.services.get = AsyncMock(
         return_value=Service(
@@ -152,3 +163,46 @@ async def test_archived_items_are_not_returned_by_client_query() -> None:
     )
 
     assert not page.items
+
+
+@pytest.mark.asyncio
+async def test_external_and_disabled_modes_block_internal_queries_without_deleting_items() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.portfolio.list_page = AsyncMock(return_value=([], 0))
+    service = PortfolioService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    for mode in (PortfolioDisplayMode.EXTERNAL_LINK, PortfolioDisplayMode.DISABLED):
+        unit_of_work.settings.get.return_value.portfolio_mode = mode
+        with pytest.raises(PortfolioStateError, match="недоступно"):
+            await service.list_published(ClientActor(telegram_id=101), PageRequest())
+
+    unit_of_work.portfolio.list_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_external_mode_requires_https_url_and_preserves_internal_content() -> None:
+    unit_of_work = build_uow()
+    service = PortfolioService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(PortfolioStateError, match="ссылку"):
+        await service.update_display_config(
+            admin(), PortfolioDisplayUpdate(mode=PortfolioDisplayMode.EXTERNAL_LINK)
+        )
+    with pytest.raises(ValueError, match="HTTPS"):
+        PortfolioDisplayUpdate(external_url="http://example.com/works")
+
+    await service.update_display_config(
+        admin(),
+        PortfolioDisplayUpdate(external_url="https://example.com/works"),
+    )
+    config = await service.update_display_config(
+        admin(),
+        PortfolioDisplayUpdate(mode=PortfolioDisplayMode.EXTERNAL_LINK),
+        correlation_id="portfolio-mode",
+    )
+
+    assert config.mode is PortfolioDisplayMode.EXTERNAL_LINK
+    assert config.external_url == "https://example.com/works"
+    assert unit_of_work.settings.get.return_value.portfolio_enabled
+    unit_of_work.portfolio.delete_media.assert_not_called()
+    assert unit_of_work.audit.add.await_args.kwargs["action"] == "portfolio.display_changed"

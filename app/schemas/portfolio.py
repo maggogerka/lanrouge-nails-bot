@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.enums import MediaType, PortfolioStatus
+from app.domain.enums import MediaType, PortfolioDisplayMode, PortfolioStatus
 
 
 class PortfolioMediaInput(BaseModel):
@@ -95,3 +96,37 @@ class PortfolioPage(BaseModel):
     @property
     def pages(self) -> int:
         return max(1, (self.total + self.page_size - 1) // self.page_size)
+
+
+class PortfolioDisplayConfig(BaseModel):
+    mode: PortfolioDisplayMode
+    external_url: str | None
+    button_text: str
+
+
+class PortfolioDisplayUpdate(BaseModel):
+    mode: PortfolioDisplayMode | None = None
+    external_url: Annotated[str, Field(max_length=2048)] | None = None
+    button_text: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+
+    @field_validator("external_url")
+    @classmethod
+    def url_must_be_absolute_https(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("portfolio URL must be an absolute HTTPS URL")
+        return normalized
+
+    @field_validator("button_text", mode="before")
+    @classmethod
+    def normalize_button_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_change(self) -> PortfolioDisplayUpdate:
+        if not self.model_fields_set:
+            raise ValueError("at least one portfolio display field is required")
+        return self

@@ -9,7 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 from aiogram.utils.deep_linking import create_start_link
 
-from app.domain.errors import DomainError, EntityNotFoundError
+from app.domain.enums import PortfolioDisplayMode
+from app.domain.errors import DomainError
 from app.handlers.client.booking_browse import start_booking
 from app.handlers.client.booking_common import available_dates
 from app.handlers.client.common import actor_from_telegram
@@ -17,6 +18,7 @@ from app.keyboards.client.booking import dates_keyboard, services_keyboard
 from app.keyboards.client.main import CLIENT_PORTFOLIO_TEXT, client_main_keyboard
 from app.keyboards.client.portfolio import (
     PortfolioClientCallback,
+    external_portfolio_keyboard,
     portfolio_card_keyboard,
     portfolio_tags_keyboard,
 )
@@ -37,6 +39,22 @@ async def show_portfolio(
     bot: Bot,
 ) -> None:
     if message.from_user is None:
+        return
+    config = await portfolio_service.get_display_config()
+    if config.mode is PortfolioDisplayMode.DISABLED:
+        await message.answer("Портфолио сейчас отключено.")
+        return
+    if config.mode is PortfolioDisplayMode.EXTERNAL_LINK:
+        if config.external_url is None:
+            await message.answer("Внешнее портфолио временно недоступно.")
+            return
+        await message.answer(
+            "Портфолио мастера:",
+            reply_markup=external_portfolio_keyboard(
+                config.external_url,
+                config.button_text,
+            ),
+        )
         return
     await _show_page_message(
         message,
@@ -165,8 +183,8 @@ async def show_deep_linked_portfolio_item(
         item = await portfolio_service.get_published(
             actor_from_telegram(message.from_user), item_id
         )
-    except EntityNotFoundError:
-        await message.answer("Эта работа больше не опубликована.")
+    except DomainError as exc:
+        await message.answer(str(exc))
         return
     await _send_item(message, item, bot, page=1, pages=1, tag_id=0)
 

@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto, Message
 from pydantic import ValidationError
 
-from app.domain.enums import PortfolioStatus
+from app.domain.enums import PortfolioDisplayMode, PortfolioStatus
 from app.domain.errors import DomainError, EntityNotFoundError
 from app.handlers.admin.service_common import actor_from_telegram
 from app.keyboards.admin.main import ADMIN_PORTFOLIO_TEXT
@@ -20,14 +20,23 @@ from app.keyboards.admin.portfolio import (
     media_collection_keyboard,
     portfolio_admin_menu,
     portfolio_details_keyboard,
+    portfolio_display_keyboard,
     portfolio_list_keyboard,
     portfolio_preview_keyboard,
 )
+from app.keyboards.admin.services import cancel_keyboard
+from app.keyboards.client.portfolio import external_portfolio_keyboard
 from app.schemas.pagination import PageRequest
-from app.schemas.portfolio import PortfolioCreate, PortfolioItemView, PortfolioMediaInput
+from app.schemas.portfolio import (
+    PortfolioCreate,
+    PortfolioDisplayConfig,
+    PortfolioDisplayUpdate,
+    PortfolioItemView,
+    PortfolioMediaInput,
+)
 from app.services.portfolio_service import PortfolioService
 from app.services.service_catalog import ServiceCatalog
-from app.states.admin_portfolio import AdminPortfolioCreate
+from app.states.admin_portfolio import AdminPortfolioCreate, AdminPortfolioSettings
 
 router = Router(name="admin.portfolio")
 
@@ -43,6 +52,137 @@ async def show_portfolio_menu_callback(callback: CallbackQuery) -> None:
         await callback.message.edit_text(
             "Управление портфолио:", reply_markup=portfolio_admin_menu()
         )
+    await callback.answer()
+
+
+@router.callback_query(PortfolioAdminCallback.filter(F.action == "display"))
+async def show_portfolio_display_settings(
+    callback: CallbackQuery,
+    portfolio_service: PortfolioService,
+) -> None:
+    config = await portfolio_service.get_display_config()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render_display_config(config),
+            reply_markup=portfolio_display_keyboard(config),
+        )
+    await callback.answer()
+
+
+@router.callback_query(
+    PortfolioAdminCallback.filter(F.action.in_({"mode_internal", "mode_external", "mode_disabled"}))
+)
+async def change_portfolio_display_mode(
+    callback: CallbackQuery,
+    callback_data: PortfolioAdminCallback,
+    portfolio_service: PortfolioService,
+    correlation_id: str,
+) -> None:
+    modes = {
+        "mode_internal": PortfolioDisplayMode.INTERNAL,
+        "mode_external": PortfolioDisplayMode.EXTERNAL_LINK,
+        "mode_disabled": PortfolioDisplayMode.DISABLED,
+    }
+    try:
+        config = await portfolio_service.update_display_config(
+            actor_from_telegram(callback.from_user),
+            PortfolioDisplayUpdate(mode=modes[callback_data.action]),
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render_display_config(config),
+            reply_markup=portfolio_display_keyboard(config),
+        )
+    await callback.answer("Режим портфолио обновлён.")
+
+
+@router.callback_query(
+    PortfolioAdminCallback.filter(F.action.in_({"edit_external_url", "edit_external_text"}))
+)
+async def begin_portfolio_display_edit(
+    callback: CallbackQuery,
+    callback_data: PortfolioAdminCallback,
+    state: FSMContext,
+) -> None:
+    if callback_data.action == "edit_external_url":
+        await state.set_state(AdminPortfolioSettings.external_url)
+        prompt = "Введите абсолютный HTTPS URL внешнего портфолио:"
+    else:
+        await state.set_state(AdminPortfolioSettings.button_text)
+        prompt = "Введите текст кнопки внешнего портфолио до 100 символов:"
+    if isinstance(callback.message, Message):
+        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+    await callback.answer()
+
+
+@router.message(AdminPortfolioSettings.external_url)
+async def save_external_portfolio_url(
+    message: Message,
+    state: FSMContext,
+    portfolio_service: PortfolioService,
+    correlation_id: str,
+) -> None:
+    if message.from_user is None:
+        return
+    try:
+        config = await portfolio_service.update_display_config(
+            actor_from_telegram(message.from_user),
+            PortfolioDisplayUpdate(external_url=(message.text or "").strip()),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        _render_display_config(config), reply_markup=portfolio_display_keyboard(config)
+    )
+
+
+@router.message(AdminPortfolioSettings.button_text)
+async def save_external_portfolio_button_text(
+    message: Message,
+    state: FSMContext,
+    portfolio_service: PortfolioService,
+    correlation_id: str,
+) -> None:
+    if message.from_user is None:
+        return
+    try:
+        config = await portfolio_service.update_display_config(
+            actor_from_telegram(message.from_user),
+            PortfolioDisplayUpdate(button_text=(message.text or "").strip()),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        _render_display_config(config), reply_markup=portfolio_display_keyboard(config)
+    )
+
+
+@router.callback_query(PortfolioAdminCallback.filter(F.action == "display_preview"))
+async def preview_portfolio_display(
+    callback: CallbackQuery,
+    portfolio_service: PortfolioService,
+) -> None:
+    config = await portfolio_service.get_display_config()
+    if isinstance(callback.message, Message):
+        if config.mode is PortfolioDisplayMode.EXTERNAL_LINK and config.external_url:
+            await callback.message.answer(
+                "Так клиентка увидит внешнее портфолио:",
+                reply_markup=external_portfolio_keyboard(config.external_url, config.button_text),
+            )
+        elif config.mode is PortfolioDisplayMode.INTERNAL:
+            await callback.message.answer("Кнопка откроет встроенное портфолио Telegram.")
+        else:
+            await callback.message.answer("Кнопка портфолио будет скрыта.")
     await callback.answer()
 
 
@@ -422,4 +562,19 @@ def _render_creation_preview(data: dict[str, object]) -> str:
         f"Описание: {escape(str(data.get('description') or '—'))}\n"
         f"Доплата: {escape(str(data.get('design_price') or '—'))}\n"
         f"Теги: {escape(', '.join(str(value) for value in tags) or '—')}"
+    )
+
+
+def _render_display_config(config: PortfolioDisplayConfig) -> str:
+    labels = {
+        PortfolioDisplayMode.INTERNAL: "встроенное портфолио",
+        PortfolioDisplayMode.EXTERNAL_LINK: "внешняя ссылка",
+        PortfolioDisplayMode.DISABLED: "отключено",
+    }
+    return (
+        "<b>Режим портфолио</b>\n\n"
+        f"Текущий режим: {labels[config.mode]}\n"
+        f"Внешний URL: {escape(config.external_url) if config.external_url else '—'}\n"
+        f"Текст кнопки: {escape(config.button_text)}\n\n"
+        "Переключение режима не удаляет внутренние работы."
     )

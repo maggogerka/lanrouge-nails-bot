@@ -47,6 +47,10 @@ def portfolio_tags_keyboard(tags: list[PortfolioTagView]) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def external_portfolio_keyboard(url: str, button_text: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=button_text, url=url)]])
+
+
 def _callback_button(
     text: str,
     action: str,
