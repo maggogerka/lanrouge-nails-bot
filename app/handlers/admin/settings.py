@@ -39,6 +39,7 @@ def render_settings(settings: BusinessSettingsView) -> str:
         f"Минимальный интервал: {settings.minimum_gap_minutes} мин.\n"
         f"Суббота: {'разрешена' if settings.allow_saturday else 'закрыта'}\n"
         f"Воскресенье: {'разрешено' if settings.allow_sunday else 'закрыто'}\n"
+        f"Отзывы: {'включены' if settings.reviews_enabled else 'выключены'}\n"
         "Напоминания: "
         + ", ".join(str(value) for value in settings.reminder_offsets_minutes)
         + f" мин.\nВерсия настроек: {settings.version}"
@@ -171,6 +172,28 @@ async def toggle_broadcasts(
             render_settings(settings), reply_markup=settings_keyboard(settings)
         )
     await callback.answer("Настройка рассылок обновлена.")
+
+
+@router.callback_query(SettingsCallback.filter(F.action == "toggle_reviews"))
+async def toggle_reviews(
+    callback: CallbackQuery,
+    settings_service: SettingsService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    current = await settings_service.get(actor)
+    settings = await settings_service.update(
+        actor,
+        BusinessSettingsPatch(reviews_enabled=not current.reviews_enabled),
+        correlation_id=correlation_id,
+    )
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_settings(settings), reply_markup=settings_keyboard(settings)
+        )
+    await callback.answer(
+        "Отзывы включены." if settings.reviews_enabled else "Отзывы полностью отключены."
+    )
 
 
 @router.message(F.text == ADMIN_CLIENTS_TEXT)

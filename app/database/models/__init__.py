@@ -18,7 +18,7 @@ from app.database.models.portfolio import (
     PortfolioMedia,
     PortfolioTag,
 )
-from app.database.models.review import Review
+from app.database.models.review import Review, ReviewRevision
 from app.database.models.service import Service
 from app.database.models.settings import BusinessSettings
 from app.database.models.user import User
@@ -44,6 +44,7 @@ __all__ = [
     "PortfolioMedia",
     "PortfolioTag",
     "Review",
+    "ReviewRevision",
     "Service",
     "User",
     "UserClientTag",

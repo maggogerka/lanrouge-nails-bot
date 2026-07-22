@@ -10,7 +10,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import NotificationJob
-from app.domain.enums import NotificationJobStatus
+from app.domain.enums import NotificationJobStatus, NotificationType
 
 
 class NotificationRepository:
@@ -93,5 +93,18 @@ class NotificationRepository:
                 locked_at=None,
                 locked_by=None,
             )
+        )
+        return int(cast(CursorResult[Any], result).rowcount or 0)
+
+    async def cancel_unsent_by_type(self, notification_type: NotificationType) -> int:
+        result = await self._session.execute(
+            update(NotificationJob)
+            .where(
+                NotificationJob.notification_type == notification_type,
+                NotificationJob.status.in_(
+                    (NotificationJobStatus.PENDING, NotificationJobStatus.PROCESSING)
+                ),
+            )
+            .values(status=NotificationJobStatus.CANCELLED, locked_at=None, locked_by=None)
         )
         return int(cast(CursorResult[Any], result).rowcount or 0)

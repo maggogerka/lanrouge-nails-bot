@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 
-from app.database.models import Review
+from app.database.models import Review, ReviewRevision
 from app.domain.enums import AppointmentStatus, ReviewModerationStatus
 from app.domain.errors import (
     AuthorizationError,
@@ -18,7 +18,7 @@ from app.domain.errors import (
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import ClientActor
 from app.schemas.pagination import Page, PageRequest
-from app.schemas.review import ReviewCreate, ReviewView
+from app.schemas.review import ReviewAdminUpdate, ReviewCreate, ReviewView
 from app.schemas.service import AdminActor
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -33,6 +33,10 @@ class ReviewService:
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
 
+    async def ensure_enabled(self) -> None:
+        async with self._unit_of_work_factory() as uow:
+            await self._ensure_enabled(uow)
+
     async def submit(
         self,
         actor: ClientActor,
@@ -43,6 +47,7 @@ class ReviewService:
     ) -> ReviewView:
         try:
             async with self._unit_of_work_factory() as uow:
+                await self._ensure_enabled(uow)
                 client = await uow.users.get_by_telegram_id(actor.telegram_id)
                 if client is None or client.privacy_consent_at is None:
                     raise PrivacyConsentRequiredError(
@@ -90,13 +95,17 @@ class ReviewService:
         actor: AdminActor,
         *,
         status: ReviewModerationStatus | None = None,
+        deleted_only: bool = False,
         page: PageRequest | None = None,
     ) -> Page[ReviewView]:
         self._ensure_admin(actor)
         page = page or PageRequest()
         async with self._unit_of_work_factory() as uow:
             reviews, total = await uow.reviews.list_page(
-                moderation_status=status, limit=page.page_size, offset=page.offset
+                moderation_status=status,
+                deleted_only=deleted_only,
+                limit=page.page_size,
+                offset=page.offset,
             )
             return Page(
                 items=[await self._with_client(uow, review) for review in reviews],
@@ -108,6 +117,11 @@ class ReviewService:
     async def list_public(self, page: PageRequest | None = None) -> Page[ReviewView]:
         page = page or PageRequest()
         async with self._unit_of_work_factory() as uow:
+            settings = await uow.settings.get()
+            if settings is None:
+                raise RuntimeError("Business settings row is missing")
+            if not settings.reviews_enabled:
+                return Page(items=[], total=0, page=page.page, page_size=page.page_size)
             reviews, total = await uow.reviews.list_published(
                 limit=page.page_size, offset=page.offset
             )
@@ -127,30 +141,82 @@ class ReviewService:
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> ReviewView:
-        self._ensure_admin(actor)
         if status is ReviewModerationStatus.PENDING:
             raise ReviewStateError("Нельзя вернуть отзыв в статус ожидания.")
-        current = now or datetime.now(UTC)
-        if current.tzinfo is None:
-            raise ValueError("now must be timezone-aware")
+        return await self.edit_admin(
+            actor,
+            review_id,
+            ReviewAdminUpdate(moderation_status=status),
+            now=now,
+            correlation_id=correlation_id,
+        )
+
+    async def get_admin(self, actor: AdminActor, review_id: int) -> ReviewView:
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as uow:
+            review = await uow.reviews.get(review_id)
+            if review is None:
+                raise EntityNotFoundError("Отзыв не найден.")
+            return await self._with_client(uow, review)
+
+    async def edit_admin(
+        self,
+        actor: AdminActor,
+        review_id: int,
+        values: ReviewAdminUpdate,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> ReviewView:
+        self._ensure_admin(actor)
+        current = self._aware_now(now)
         async with self._unit_of_work_factory() as uow:
             admin = await uow.users.get_or_create_admin(actor)
             review = await uow.reviews.get(review_id, for_update=True)
             if review is None:
                 raise EntityNotFoundError("Отзыв не найден.")
-            if status is ReviewModerationStatus.APPROVED and not review.publication_consent:
+            if review.deleted_at is not None:
+                raise ReviewStateError("Удалённый отзыв сначала нужно восстановить.")
+            changes = values.model_dump(exclude_unset=True)
+            new_status = changes.get("moderation_status", review.moderation_status)
+            if new_status is ReviewModerationStatus.APPROVED and not review.publication_consent:
                 raise ReviewStateError("Клиентка не разрешила публикацию этого отзыва.")
-            previous = review.moderation_status
-            review.moderation_status = status
-            review.published_at = (
-                current.astimezone(UTC) if status is ReviewModerationStatus.APPROVED else None
+            await uow.reviews.add_revision(
+                ReviewRevision(
+                    review_id=review.id,
+                    rating=review.rating,
+                    text=review.text,
+                    moderation_status=review.moderation_status,
+                    published_at=review.published_at,
+                    changed_by_admin_id=admin.id,
+                )
             )
+            before = {
+                "rating": review.rating,
+                "has_text": review.text is not None,
+                "status": review.moderation_status.value,
+            }
+            for field, value in changes.items():
+                setattr(review, field, value)
+            review.published_at = (
+                current if review.moderation_status is ReviewModerationStatus.APPROVED else None
+            )
+            review.edited_at = current
+            review.edited_by_admin_id = admin.id
+            review.is_admin_edited = True
             await uow.audit.add(
                 actor_user_id=admin.id,
-                action="review.moderated",
+                action="review.edited_by_admin",
                 entity_type="review",
                 entity_id=str(review.id),
-                changes={"status": {"before": previous.value, "after": status.value}},
+                changes={
+                    "before": before,
+                    "after": {
+                        "rating": review.rating,
+                        "has_text": review.text is not None,
+                        "status": review.moderation_status.value,
+                    },
+                },
                 correlation_id=correlation_id,
             )
             client = await uow.users.get_by_id(review.client_id)
@@ -158,6 +224,103 @@ class ReviewService:
             return self._view(
                 review, client.first_name if client and client.first_name else "Клиентка"
             )
+
+    async def soft_delete(
+        self,
+        actor: AdminActor,
+        review_id: int,
+        reason: str,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> ReviewView:
+        self._ensure_admin(actor)
+        normalized_reason = reason.strip()
+        if not 1 <= len(normalized_reason) <= 500:
+            raise ReviewStateError("Укажите причину удаления длиной до 500 символов.")
+        current = self._aware_now(now)
+        async with self._unit_of_work_factory() as uow:
+            admin = await uow.users.get_or_create_admin(actor)
+            review = await uow.reviews.get(review_id, for_update=True)
+            if review is None:
+                raise EntityNotFoundError("Отзыв не найден.")
+            if review.deleted_at is not None:
+                raise ReviewStateError("Отзыв уже удалён.")
+            review.deleted_at = current
+            review.deleted_by_user_id = admin.id
+            review.deletion_reason = normalized_reason
+            review.published_at = None
+            await self._audit_lifecycle(
+                uow,
+                admin.id,
+                review.id,
+                "review.deleted",
+                correlation_id,
+            )
+            client = await uow.users.get_by_id(review.client_id)
+            await uow.commit()
+            return self._view(
+                review, client.first_name if client and client.first_name else "Клиентка"
+            )
+
+    async def restore(
+        self,
+        actor: AdminActor,
+        review_id: int,
+        *,
+        correlation_id: str | None = None,
+    ) -> ReviewView:
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as uow:
+            admin = await uow.users.get_or_create_admin(actor)
+            review = await uow.reviews.get(review_id, for_update=True)
+            if review is None:
+                raise EntityNotFoundError("Отзыв не найден.")
+            if review.deleted_at is None:
+                raise ReviewStateError("Отзыв не удалён.")
+            review.deleted_at = None
+            review.deleted_by_user_id = None
+            review.deletion_reason = None
+            review.moderation_status = ReviewModerationStatus.PENDING
+            review.published_at = None
+            await self._audit_lifecycle(
+                uow,
+                admin.id,
+                review.id,
+                "review.restored",
+                correlation_id,
+            )
+            client = await uow.users.get_by_id(review.client_id)
+            await uow.commit()
+            return self._view(
+                review, client.first_name if client and client.first_name else "Клиентка"
+            )
+
+    async def hard_delete(
+        self,
+        actor: AdminActor,
+        review_id: int,
+        *,
+        correlation_id: str | None = None,
+    ) -> None:
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as uow:
+            admin = await uow.users.get_or_create_admin(actor)
+            review = await uow.reviews.get(review_id, for_update=True)
+            if review is None:
+                raise EntityNotFoundError("Отзыв не найден.")
+            if review.deleted_at is None:
+                raise ReviewStateError("Сначала выполните обычное удаление отзыва.")
+            await uow.reviews.hard_delete(review)
+            await uow.audit.add(
+                actor_user_id=admin.id,
+                action="review.permanently_deleted",
+                entity_type="review",
+                entity_id=str(review_id),
+                changes={"hard_deleted": True},
+                correlation_id=correlation_id,
+            )
+            await uow.commit()
 
     async def _with_client(self, uow: SqlAlchemyUnitOfWork, review: Review) -> ReviewView:
         client = await uow.users.get_by_id(review.client_id)
@@ -176,8 +339,44 @@ class ReviewService:
             moderation_status=review.moderation_status,
             published_at=review.published_at,
             created_at=review.created_at,
+            edited_at=review.edited_at,
+            is_admin_edited=bool(review.is_admin_edited),
+            deleted_at=review.deleted_at,
+            deletion_reason=review.deletion_reason,
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
         if actor.telegram_id not in self._admin_telegram_ids:
             raise AuthorizationError("Недостаточно прав администратора.")
+
+    @staticmethod
+    async def _ensure_enabled(uow: SqlAlchemyUnitOfWork) -> None:
+        settings = await uow.settings.get()
+        if settings is None:
+            raise RuntimeError("Business settings row is missing")
+        if not settings.reviews_enabled:
+            raise ReviewStateError("Отзывы временно отключены.")
+
+    @staticmethod
+    async def _audit_lifecycle(
+        uow: SqlAlchemyUnitOfWork,
+        actor_user_id: int,
+        review_id: int,
+        action: str,
+        correlation_id: str | None,
+    ) -> None:
+        await uow.audit.add(
+            actor_user_id=actor_user_id,
+            action=action,
+            entity_type="review",
+            entity_id=str(review_id),
+            changes={"lifecycle_changed": True},
+            correlation_id=correlation_id,
+        )
+
+    @staticmethod
+    def _aware_now(value: datetime | None) -> datetime:
+        current = value or datetime.now(UTC)
+        if current.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        return current.astimezone(UTC)

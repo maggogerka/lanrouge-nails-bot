@@ -26,6 +26,7 @@ from app.database.models import (
     PortfolioMedia,
     PortfolioTag,
     Review,
+    ReviewRevision,
     Service,
     User,
     UserClientTag,
@@ -55,6 +56,7 @@ EXPECTED_TABLES = {
     "waitlist_entries",
     "waitlist_notifications",
     "reviews",
+    "review_revisions",
     "broadcasts",
     "broadcast_media",
     "broadcast_recipients",
@@ -84,6 +86,7 @@ def test_required_tables_are_registered() -> None:
     assert WaitlistEntry.__table__.name == "waitlist_entries"
     assert WaitlistNotification.__table__.name == "waitlist_notifications"
     assert Review.__table__.name == "reviews"
+    assert ReviewRevision.__table__.name == "review_revisions"
     assert Broadcast.__table__.name == "broadcasts"
     assert BroadcastMedia.__table__.name == "broadcast_media"
     assert BroadcastRecipient.__table__.name == "broadcast_recipients"
@@ -182,6 +185,12 @@ def test_reference_media_has_stable_order_and_deduplication() -> None:
     assert "uq_appointment_reference_position" in constraints
     assert "uq_appointment_reference_file" in constraints
     assert "telegram_file_id" in AppointmentReferenceMedia.__table__.c
+
+
+def test_review_revision_is_registered_and_restricts_review_deletion() -> None:
+    assert ReviewRevision.__table__.c.review_id.foreign_keys
+    foreign_key = next(iter(ReviewRevision.__table__.c.review_id.foreign_keys))
+    assert foreign_key.ondelete == "RESTRICT"
 
 
 def test_foreign_keys_restrict_history_deletion() -> None:

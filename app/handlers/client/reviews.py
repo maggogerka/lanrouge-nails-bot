@@ -43,8 +43,16 @@ async def show_public_reviews(message: Message, review_service: ReviewService) -
 
 @router.callback_query(ReviewCallback.filter(F.action == "start"))
 async def begin_review(
-    callback: CallbackQuery, callback_data: ReviewCallback, state: FSMContext
+    callback: CallbackQuery,
+    callback_data: ReviewCallback,
+    state: FSMContext,
+    review_service: ReviewService,
 ) -> None:
+    try:
+        await review_service.ensure_enabled()
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await state.clear()
     await state.update_data(appointment_id=callback_data.appointment_id)
     await state.set_state(ReviewFlow.rating)

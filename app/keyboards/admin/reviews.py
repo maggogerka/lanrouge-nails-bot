@@ -25,16 +25,75 @@ def admin_reviews_keyboard(reviews: list[ReviewView]) -> InlineKeyboardMarkup:
         + [
             [
                 InlineKeyboardButton(
+                    text="🗑 Удалённые отзывы",
+                    callback_data=AdminReviewCallback(action="deleted").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="Обновить",
                     callback_data=AdminReviewCallback(action="list").pack(),
                 )
-            ]
+            ],
         ]
     )
 
 
 def admin_review_actions(review: ReviewView) -> InlineKeyboardMarkup:
     rows = []
+    if review.deleted_at is not None:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="♻️ Восстановить",
+                        callback_data=AdminReviewCallback(
+                            action="restore", review_id=review.id
+                        ).pack(),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="⚠️ Удалить навсегда",
+                        callback_data=AdminReviewCallback(
+                            action="hard_prompt", review_id=review.id
+                        ).pack(),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="← К удалённым",
+                        callback_data=AdminReviewCallback(action="deleted").pack(),
+                    )
+                ],
+            ]
+        )
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="✏️ Оценка",
+                    callback_data=AdminReviewCallback(
+                        action="edit_rating", review_id=review.id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="✏️ Текст",
+                    callback_data=AdminReviewCallback(
+                        action="edit_text", review_id=review.id
+                    ).pack(),
+                ),
+            ]
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить",
+                callback_data=AdminReviewCallback(action="delete", review_id=review.id).pack(),
+            )
+        ]
+    )
     if review.publication_consent:
         rows.append(
             [
@@ -42,7 +101,7 @@ def admin_review_actions(review: ReviewView) -> InlineKeyboardMarkup:
                     text="Опубликовать",
                     callback_data=AdminReviewCallback(action="approve", review_id=review.id).pack(),
                 )
-            ]
+            ],
         )
     rows.extend(
         [
@@ -65,3 +124,24 @@ def admin_review_actions(review: ReviewView) -> InlineKeyboardMarkup:
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def hard_delete_review_keyboard(review_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить безвозвратно",
+                    callback_data=AdminReviewCallback(
+                        action="hard_confirm", review_id=review_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет",
+                    callback_data=AdminReviewCallback(action="view", review_id=review_id).pack(),
+                )
+            ],
+        ]
+    )

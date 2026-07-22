@@ -33,6 +33,14 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=(
+                        "✅ Отзывы включены" if settings.reviews_enabled else "⛔ Отзывы выключены"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_reviews").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
                         "✅ Рассылки включены"
                         if settings.broadcasts_enabled
                         else "⛔ Рассылки выключены"

@@ -31,6 +31,7 @@ def build_uow() -> MagicMock:
     unit_of_work.settings.get = AsyncMock(return_value=settings())
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
+    unit_of_work.notifications.cancel_unsent_by_type = AsyncMock(return_value=3)
     unit_of_work.commit = AsyncMock()
     return unit_of_work
 
@@ -89,6 +90,23 @@ async def test_setting_update_locks_row_increments_version_and_audits() -> None:
         "after": 3,
     }
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disabling_reviews_cancels_pending_review_jobs() -> None:
+    unit_of_work = build_uow()
+    service = SettingsService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    updated = await service.update(
+        AdminActor(telegram_id=900),
+        BusinessSettingsPatch(reviews_enabled=False),
+        now=NOW,
+    )
+
+    assert not updated.reviews_enabled
+    unit_of_work.notifications.cancel_unsent_by_type.assert_awaited_once_with(
+        NotificationType.REVIEW_REQUEST
+    )
 
 
 @pytest.mark.asyncio

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.database.models import Review
+from app.database.models import Review, ReviewRevision
 from app.domain.enums import ReviewModerationStatus
 
 
@@ -31,14 +32,22 @@ class ReviewRepository:
         await self._session.flush()
         return review
 
+    async def add_revision(self, revision: ReviewRevision) -> ReviewRevision:
+        self._session.add(revision)
+        await self._session.flush()
+        return revision
+
     async def list_page(
         self,
         *,
         moderation_status: ReviewModerationStatus | None,
+        deleted_only: bool = False,
         limit: int,
         offset: int,
     ) -> tuple[list[Review], int]:
-        filters = []
+        filters: list[ColumnElement[bool]] = [
+            Review.deleted_at.is_not(None) if deleted_only else Review.deleted_at.is_(None)
+        ]
         if moderation_status is not None:
             filters.append(Review.moderation_status == moderation_status)
         rows = (
@@ -58,6 +67,7 @@ class ReviewRepository:
             Review.moderation_status == ReviewModerationStatus.APPROVED,
             Review.publication_consent.is_(True),
             Review.published_at.is_not(None),
+            Review.deleted_at.is_(None),
         ]
         rows = (
             select(Review)
@@ -70,3 +80,10 @@ class ReviewRepository:
         return list((await self._session.scalars(rows)).all()), int(
             (await self._session.scalar(count)) or 0
         )
+
+    async def hard_delete(self, review: Review) -> None:
+        await self._session.execute(
+            delete(ReviewRevision).where(ReviewRevision.review_id == review.id)
+        )
+        await self._session.delete(review)
+        await self._session.flush()

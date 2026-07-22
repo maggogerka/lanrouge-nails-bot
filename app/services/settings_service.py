@@ -59,6 +59,10 @@ class SettingsService:
                     offsets_minutes=new_value,
                     now=current_time,
                 )
+            if field == "reviews_enabled" and new_value is False:
+                await unit_of_work.notifications.cancel_unsent_by_type(
+                    NotificationType.REVIEW_REQUEST
+                )
             await unit_of_work.session.flush()
             await unit_of_work.audit.add(
                 actor_user_id=actor_user.id,

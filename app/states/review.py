@@ -8,3 +8,9 @@ class ReviewFlow(StatesGroup):
     text = State()
     publication = State()
     confirmation = State()
+
+
+class AdminReviewEdit(StatesGroup):
+    rating = State()
+    text = State()
+    deletion_reason = State()
