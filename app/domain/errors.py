@@ -21,6 +21,10 @@ class WindowValidationError(DomainError):
     """A requested window violates a calendar or spacing rule."""
 
 
+class DatePickerValidationError(DomainError):
+    """A date-picker callback is stale or violates current calendar settings."""
+
+
 class WindowStateError(DomainError):
     """An operation is not valid for the current window status."""
 
