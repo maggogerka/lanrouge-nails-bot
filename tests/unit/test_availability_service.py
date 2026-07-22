@@ -38,6 +38,7 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        waitlist_notification_cooldown_minutes=180,
         version=1,
     )
 
@@ -55,6 +56,7 @@ def build_uow() -> MagicMock:
     unit_of_work.windows.has_appointments = AsyncMock(return_value=False)
     unit_of_work.windows.delete = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
+    unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work

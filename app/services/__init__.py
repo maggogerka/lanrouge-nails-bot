@@ -10,6 +10,8 @@ from app.services.portfolio_service import PortfolioService
 from app.services.reschedule_service import RescheduleService
 from app.services.service_catalog import ServiceCatalog
 from app.services.settings_service import SettingsService
+from app.services.waitlist_delivery_service import WaitlistDeliveryService
+from app.services.waitlist_service import WaitlistService
 
 __all__ = [
     "AppointmentService",
@@ -22,4 +24,6 @@ __all__ = [
     "RescheduleService",
     "ServiceCatalog",
     "SettingsService",
+    "WaitlistDeliveryService",
+    "WaitlistService",
 ]

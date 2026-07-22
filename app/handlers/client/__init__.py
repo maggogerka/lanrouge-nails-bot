@@ -8,6 +8,7 @@ from app.handlers.client.menu import router as menu_router
 from app.handlers.client.onboarding import router as onboarding_router
 from app.handlers.client.portfolio import router as portfolio_router
 from app.handlers.client.reminders import router as reminders_router
+from app.handlers.client.waitlist import router as waitlist_router
 
 router = Router(name="client")
 router.include_routers(
@@ -15,6 +16,7 @@ router.include_routers(
     reminders_router,
     appointments_router,
     portfolio_router,
+    waitlist_router,
     booking_router,
     menu_router,
 )

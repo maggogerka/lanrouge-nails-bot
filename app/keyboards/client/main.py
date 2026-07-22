@@ -9,6 +9,7 @@ CLIENT_CONTACTS_TEXT = "📍 Адрес и контакты"
 CLIENT_PORTFOLIO_TEXT = "🖼 Работы мастера"
 CLIENT_PREPARATION_TEXT = "❓ Подготовка к процедуре"
 CLIENT_NOTIFICATIONS_TEXT = "🔔 Настройки уведомлений"
+CLIENT_WAITLIST_TEXT = "⏳ Лист ожидания"
 
 
 def client_main_keyboard() -> ReplyKeyboardMarkup:
@@ -26,7 +27,10 @@ def client_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=CLIENT_PORTFOLIO_TEXT),
                 KeyboardButton(text=CLIENT_PREPARATION_TEXT),
             ],
-            [KeyboardButton(text=CLIENT_NOTIFICATIONS_TEXT)],
+            [
+                KeyboardButton(text=CLIENT_WAITLIST_TEXT),
+                KeyboardButton(text=CLIENT_NOTIFICATIONS_TEXT),
+            ],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите раздел",

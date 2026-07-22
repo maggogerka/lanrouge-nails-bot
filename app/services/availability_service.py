@@ -29,6 +29,7 @@ from app.schemas.availability import (
     AvailabilityWindowView,
 )
 from app.schemas.service import AdminActor
+from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -126,6 +127,14 @@ class AvailabilityService:
                 changes={"after": self._audit_values(window)},
                 correlation_id=correlation_id,
             )
+            if window.status is AvailabilityWindowStatus.OPEN:
+                await enqueue_waitlist_matches(
+                    unit_of_work,
+                    window,
+                    settings,
+                    now=current_time,
+                    correlation_id=correlation_id,
+                )
             await unit_of_work.commit()
             return self._view(window, settings.timezone)
 
@@ -194,6 +203,13 @@ class AvailabilityService:
                 actor_user.id,
                 window,
                 before=AvailabilityWindowStatus.CLOSED,
+                correlation_id=correlation_id,
+            )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
                 correlation_id=correlation_id,
             )
             await unit_of_work.commit()

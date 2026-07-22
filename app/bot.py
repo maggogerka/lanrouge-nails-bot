@@ -27,6 +27,7 @@ from app.services import (
     RescheduleService,
     ServiceCatalog,
     SettingsService,
+    WaitlistService,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,10 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
     )
+    waitlist_service = WaitlistService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+    )
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
@@ -86,6 +91,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         settings_service=settings_service,
         portfolio_service=portfolio_service,
         crm_service=crm_service,
+        waitlist_service=waitlist_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

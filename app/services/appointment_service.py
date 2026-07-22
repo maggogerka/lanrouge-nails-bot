@@ -30,6 +30,7 @@ from app.services.appointment_common import (
     ensure_admin,
     ensure_owner,
 )
+from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -165,6 +166,13 @@ class AppointmentService:
                 reopen=True,
                 correlation_id=correlation_id,
             )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
+                correlation_id=correlation_id,
+            )
             await unit_of_work.commit()
             return appointment_view(appointment, window, settings, current_time)
 
@@ -198,6 +206,13 @@ class AppointmentService:
                 reason=reason,
                 now=current_time,
                 reopen=reopen_window,
+                correlation_id=correlation_id,
+            )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
                 correlation_id=correlation_id,
             )
             client = await unit_of_work.users.get_by_id(appointment.client_id)

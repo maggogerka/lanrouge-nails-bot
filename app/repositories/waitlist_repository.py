@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Service, WaitlistEntry, WaitlistNotification
+from app.database.models import Service, User, WaitlistEntry, WaitlistNotification
 from app.domain.enums import WaitlistNotificationStatus, WaitlistStatus
 
 
@@ -84,10 +84,12 @@ class WaitlistRepository:
         local_time: time,
         window_duration_minutes: int,
         now: datetime,
+        notified_before: datetime,
     ) -> list[WaitlistEntry]:
         result = await self._session.scalars(
             select(WaitlistEntry)
             .join(Service, Service.id == WaitlistEntry.service_id)
+            .join(User, User.id == WaitlistEntry.client_id)
             .where(
                 WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED)),
                 WaitlistEntry.date_from <= local_date,
@@ -95,6 +97,11 @@ class WaitlistRepository:
                 WaitlistEntry.expires_at > now,
                 Service.is_active.is_(True),
                 Service.duration_max_minutes <= window_duration_minutes,
+                User.is_blocked.is_(False),
+                or_(
+                    WaitlistEntry.notified_at.is_(None),
+                    WaitlistEntry.notified_at <= notified_before,
+                ),
                 or_(
                     func.cardinality(WaitlistEntry.preferred_dates) == 0,
                     WaitlistEntry.preferred_dates.contains([local_date]),
@@ -110,6 +117,71 @@ class WaitlistRepository:
             .order_by(WaitlistEntry.created_at, WaitlistEntry.id)
         )
         return list(result.all())
+
+    async def get_notification(
+        self,
+        notification_id: int,
+        *,
+        for_update: bool = False,
+    ) -> WaitlistNotification | None:
+        statement = select(WaitlistNotification).where(WaitlistNotification.id == notification_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return (await self._session.scalars(statement)).one_or_none()
+
+    async def cancel_unsent(self, entry_id: int) -> None:
+        jobs = await self._session.scalars(
+            select(WaitlistNotification).where(
+                WaitlistNotification.waitlist_entry_id == entry_id,
+                WaitlistNotification.status.in_(
+                    (
+                        WaitlistNotificationStatus.PENDING,
+                        WaitlistNotificationStatus.RETRY,
+                        WaitlistNotificationStatus.PROCESSING,
+                    )
+                ),
+            )
+        )
+        for job in jobs:
+            job.status = WaitlistNotificationStatus.CANCELLED
+            job.locked_at = None
+            job.locked_by = None
+        await self._session.flush()
+
+    async def mark_booked_for_window(
+        self,
+        *,
+        client_id: int,
+        service_id: int,
+        window_id: int,
+        appointment_id: int,
+    ) -> list[int]:
+        entries = list(
+            (
+                await self._session.scalars(
+                    select(WaitlistEntry)
+                    .join(
+                        WaitlistNotification,
+                        WaitlistNotification.waitlist_entry_id == WaitlistEntry.id,
+                    )
+                    .where(
+                        WaitlistEntry.client_id == client_id,
+                        WaitlistEntry.service_id == service_id,
+                        WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED)),
+                        WaitlistNotification.window_id == window_id,
+                    )
+                    .with_for_update()
+                )
+            )
+            .unique()
+            .all()
+        )
+        for entry in entries:
+            entry.status = WaitlistStatus.BOOKED
+            entry.booked_appointment_id = appointment_id
+            await self.cancel_unsent(entry.id)
+        await self._session.flush()
+        return [entry.id for entry in entries]
 
     async def enqueue_match(
         self,
@@ -137,12 +209,17 @@ class WaitlistRepository:
         now: datetime,
         worker_id: str,
         limit: int,
+        lease_expired_before: datetime,
     ) -> list[WaitlistNotification]:
         result = await self._session.scalars(
             select(WaitlistNotification)
             .where(
                 WaitlistNotification.status.in_(
                     (WaitlistNotificationStatus.PENDING, WaitlistNotificationStatus.RETRY)
+                )
+                | (
+                    (WaitlistNotification.status == WaitlistNotificationStatus.PROCESSING)
+                    & (WaitlistNotification.locked_at < lease_expired_before)
                 ),
                 WaitlistNotification.available_at <= now,
             )

@@ -26,6 +26,10 @@ async def integration_database() -> AsyncIterator[Database]:
         await connection.execute(
             text(
                 "TRUNCATE TABLE audit_logs, notification_jobs, "
+                "waitlist_notifications, waitlist_entries, reviews, "
+                "broadcast_recipients, broadcast_media, broadcasts, marketing_events, "
+                "portfolio_item_tags, portfolio_media, portfolio_items, portfolio_tags, "
+                "user_client_tags, client_notes, client_tags, consent_history, "
                 "appointment_status_history, appointments, availability_windows, "
                 "services, users RESTART IDENTITY CASCADE"
             )

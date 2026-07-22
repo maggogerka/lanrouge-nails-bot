@@ -106,6 +106,7 @@ def build_uow(
     unit_of_work.users.get_by_id = AsyncMock(return_value=target_client)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
+    unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work

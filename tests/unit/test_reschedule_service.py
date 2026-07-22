@@ -34,6 +34,7 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        waitlist_notification_cooldown_minutes=180,
         version=1,
     )
 
@@ -112,6 +113,7 @@ def build_uow(
     )
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work, appointment, old_window, new_window

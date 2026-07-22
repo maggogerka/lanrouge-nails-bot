@@ -35,6 +35,7 @@ from app.schemas.appointment import RescheduleAvailability
 from app.schemas.booking import BookingReceipt, BookingWindowView, ClientActor
 from app.schemas.service import AdminActor
 from app.services.appointment_common import appointment_view, ensure_admin, ensure_owner
+from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -313,6 +314,13 @@ class RescheduleService:
                         "old_window_id": old_window.id,
                         "new_window_id": new_window.id,
                     },
+                    correlation_id=correlation_id,
+                )
+                await enqueue_waitlist_matches(
+                    unit_of_work,
+                    old_window,
+                    settings,
+                    now=current_time,
                     correlation_id=correlation_id,
                 )
                 await unit_of_work.commit()

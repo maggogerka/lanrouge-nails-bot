@@ -10,6 +10,7 @@ ADMIN_UPCOMING_TEXT = "🗓 Ближайшие записи"
 ADMIN_CLIENTS_TEXT = "👥 Клиентки"
 ADMIN_PORTFOLIO_TEXT = "🖼 Портфолио"
 ADMIN_SETTINGS_TEXT = "⚙️ Настройки"
+ADMIN_WAITLIST_TEXT = "⏳ Лист ожидания"
 
 
 def admin_main_keyboard() -> ReplyKeyboardMarkup:
@@ -29,7 +30,10 @@ def admin_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=ADMIN_SERVICES_TEXT),
                 KeyboardButton(text=ADMIN_CLIENTS_TEXT),
             ],
-            [KeyboardButton(text=ADMIN_PORTFOLIO_TEXT)],
+            [
+                KeyboardButton(text=ADMIN_PORTFOLIO_TEXT),
+                KeyboardButton(text=ADMIN_WAITLIST_TEXT),
+            ],
             [KeyboardButton(text=ADMIN_SETTINGS_TEXT)],
         ],
         resize_keyboard=True,

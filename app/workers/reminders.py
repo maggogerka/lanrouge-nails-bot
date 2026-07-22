@@ -8,6 +8,7 @@ import math
 import os
 import socket
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -22,10 +23,13 @@ from aiogram.exceptions import (
 
 from app.config import RuntimeConfigurationError, Settings, get_settings
 from app.database import Database
+from app.keyboards.client.waitlist import waitlist_offer_keyboard
 from app.logging import configure_logging, log_event
 from app.repositories import SqlAlchemyUnitOfWork
 from app.schemas.notification import NotificationDelivery
+from app.schemas.waitlist import WaitlistDelivery
 from app.services.notification_service import NotificationService
+from app.services.waitlist_delivery_service import WaitlistDeliveryService
 from app.workers.reminder_messages import reminder_keyboard, render_reminder
 
 logger = logging.getLogger(__name__)
@@ -95,10 +99,63 @@ async def process_delivery(
         await service.mark_sent(delivery.job_id, worker_id)
 
 
+async def process_waitlist_delivery(
+    bot: Bot,
+    service: WaitlistDeliveryService,
+    delivery: WaitlistDelivery,
+    worker_id: str,
+) -> None:
+    local = delivery.start_at.astimezone(ZoneInfo(delivery.timezone))
+    try:
+        await bot.send_message(
+            delivery.recipient_telegram_id,
+            f"Освободилось подходящее время для услуги «{delivery.service_name}»: "
+            f"{local:%d.%m.%Y в %H:%M}. Окно получит первая клиентка, завершившая запись.",
+            reply_markup=waitlist_offer_keyboard(delivery.entry_id, delivery.window_id),
+        )
+    except TelegramRetryAfter as exc:
+        await service.retry(
+            delivery.notification_id,
+            worker_id,
+            delay_seconds=math.ceil(exc.retry_after) + 1,
+            error_code="telegram_retry_after",
+        )
+    except TelegramForbiddenError:
+        await service.mark_recipient_blocked(delivery.notification_id, worker_id)
+    except (TelegramNetworkError, TelegramServerError):
+        await service.retry(
+            delivery.notification_id,
+            worker_id,
+            delay_seconds=retry_delay_seconds(delivery.attempts),
+            error_code="telegram_temporary_error",
+        )
+    except TelegramAPIError:
+        await service.mark_permanent_failure(
+            delivery.notification_id,
+            worker_id,
+            error_code="telegram_permanent_error",
+        )
+    except Exception:
+        await service.retry(
+            delivery.notification_id,
+            worker_id,
+            delay_seconds=retry_delay_seconds(delivery.attempts),
+            error_code="unexpected_delivery_error",
+        )
+        log_event(logger, logging.ERROR, "waitlist.delivery_unexpected_error")
+    else:
+        await service.mark_sent(delivery.notification_id, worker_id)
+
+
 async def run_worker(settings: Settings) -> None:
     settings.validate_worker_runtime()
     database = Database.create(settings.database_url.get_secret_value())
     service = NotificationService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        lease_seconds=settings.reminder_lease_seconds,
+        max_attempts=settings.reminder_max_attempts,
+    )
+    waitlist_service = WaitlistDeliveryService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         lease_seconds=settings.reminder_lease_seconds,
         max_attempts=settings.reminder_max_attempts,
@@ -115,13 +172,25 @@ async def run_worker(settings: Settings) -> None:
                     worker_id,
                     limit=settings.reminder_batch_size,
                 )
-                if not job_ids:
+                waitlist_job_ids = await waitlist_service.claim_due(
+                    worker_id,
+                    limit=settings.reminder_batch_size,
+                )
+                if not job_ids and not waitlist_job_ids:
                     await asyncio.sleep(settings.reminder_poll_interval_seconds)
                     continue
                 for job_id in job_ids:
                     delivery = await service.prepare_delivery(job_id, worker_id)
                     if delivery is not None:
                         await process_delivery(bot, service, delivery, worker_id)
+                for notification_id in waitlist_job_ids:
+                    waitlist_delivery = await waitlist_service.prepare_delivery(
+                        notification_id, worker_id
+                    )
+                    if waitlist_delivery is not None:
+                        await process_waitlist_delivery(
+                            bot, waitlist_service, waitlist_delivery, worker_id
+                        )
     finally:
         await database.close()
         log_event(logger, logging.INFO, "reminder.worker_stopped")

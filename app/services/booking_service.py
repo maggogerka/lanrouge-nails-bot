@@ -281,6 +281,21 @@ class BookingService:
                     },
                     correlation_id=correlation_id,
                 )
+                booked_waitlist_entries = await unit_of_work.waitlist.mark_booked_for_window(
+                    client_id=client.id,
+                    service_id=service.id,
+                    window_id=window.id,
+                    appointment_id=appointment.id,
+                )
+                if booked_waitlist_entries:
+                    await unit_of_work.audit.add(
+                        actor_user_id=client.id,
+                        action="waitlist.booked",
+                        entity_type="appointment",
+                        entity_id=str(appointment.id),
+                        changes={"entry_ids": booked_waitlist_entries},
+                        correlation_id=correlation_id,
+                    )
                 await unit_of_work.commit()
                 return BookingReceipt(
                     appointment_id=appointment.id,

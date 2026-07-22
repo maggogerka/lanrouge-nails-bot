@@ -19,6 +19,7 @@ from app.keyboards.client.booking import (
     windows_keyboard,
 )
 from app.keyboards.client.main import CLIENT_BOOK_TEXT
+from app.keyboards.client.waitlist import WaitlistCallback
 from app.services.booking_service import BookingService
 from app.states.booking import BookingFlow
 
@@ -93,7 +94,26 @@ async def select_service(
         return
     dates = available_dates(availability.windows)
     if not dates:
-        await callback.answer("Для этой услуги пока нет свободных дат.", show_alert=True)
+        if isinstance(callback.message, Message):
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+            await callback.message.answer(
+                "Сейчас подходящих свободных окон нет. Добавьте запрос в лист "
+                "ожидания — бот сообщит, когда появится время.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="Добавить в лист ожидания",
+                                callback_data=WaitlistCallback(
+                                    action="service", object_id=callback_data.object_id
+                                ).pack(),
+                            )
+                        ]
+                    ]
+                ),
+            )
+        await callback.answer()
         return
     await state.update_data(service_id=callback_data.object_id)
     await state.set_state(BookingFlow.date)

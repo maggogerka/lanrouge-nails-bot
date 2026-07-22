@@ -126,6 +126,7 @@ def build_uow(
     unit_of_work.appointments.add = AsyncMock(side_effect=add_appointment)
     unit_of_work.appointments.add_history = AsyncMock()
     unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.waitlist.mark_booked_for_window = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
