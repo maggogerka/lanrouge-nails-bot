@@ -17,7 +17,7 @@ from app.healthcheck import check_dependencies
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
 from app.repositories import SqlAlchemyUnitOfWork
-from app.services import AvailabilityService, ServiceCatalog
+from app.services import AvailabilityService, BookingService, ConsentService, ServiceCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,19 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
     )
+    consent_service = ConsentService(lambda: SqlAlchemyUnitOfWork(database.sessions))
+    booking_service = BookingService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        settings.admin_telegram_ids,
+        privacy_policy_configured=settings.privacy_policy_url is not None,
+    )
     dispatcher = Dispatcher(
         storage=storage,
         settings=settings,
         service_catalog=service_catalog,
         availability_service=availability_service,
+        consent_service=consent_service,
+        booking_service=booking_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

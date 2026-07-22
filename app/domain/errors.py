@@ -27,3 +27,19 @@ class WindowStateError(DomainError):
 
 class WindowInUseError(DomainError):
     """A window with booking history cannot be physically removed."""
+
+
+class PrivacyConsentRequiredError(DomainError):
+    """A client action requires explicit privacy consent."""
+
+
+class BookingUnavailableError(DomainError):
+    """The selected service or window cannot currently be booked."""
+
+
+class BookingConflictError(BookingUnavailableError):
+    """A concurrent client has already occupied the selected window."""
+
+
+class BookingLimitError(BookingUnavailableError):
+    """The business-day appointment capacity has been exhausted."""

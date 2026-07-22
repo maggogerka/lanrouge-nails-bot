@@ -14,6 +14,12 @@ class ServiceRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def list_active(self) -> list[Service]:
+        result = await self._session.scalars(
+            select(Service).where(Service.is_active.is_(True)).order_by(Service.name, Service.id)
+        )
+        return list(result.all())
+
     async def list_all(self) -> list[Service]:
         result = await self._session.scalars(
             select(Service).order_by(Service.is_active.desc(), Service.name, Service.id)

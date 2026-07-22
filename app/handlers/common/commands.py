@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from aiogram import Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command
 from aiogram.types import Message
 
 router = Router(name="common.commands")
@@ -24,13 +24,6 @@ def whoami_text(telegram_id: int) -> str:
     """Render the sender's own numeric Telegram ID."""
 
     return f"Ваш Telegram ID: <code>{telegram_id}</code>"
-
-
-@router.message(CommandStart())
-async def handle_start(message: Message) -> None:
-    """Show the branded greeting."""
-
-    await message.answer(start_text())
 
 
 @router.message(Command("whoami"))

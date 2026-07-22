@@ -24,6 +24,7 @@ class Database:
         engine = create_async_engine(
             database_url,
             echo=echo,
+            hide_parameters=True,
             pool_pre_ping=True,
             pool_recycle=1800,
             connect_args={"server_settings": {"timezone": "UTC"}},

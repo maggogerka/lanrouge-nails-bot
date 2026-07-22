@@ -69,6 +69,25 @@ class WindowRepository:
         )
         return list(result.all())
 
+    async def list_open_between(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        *,
+        limit: int = 200,
+    ) -> list[AvailabilityWindow]:
+        result = await self._session.scalars(
+            select(AvailabilityWindow)
+            .where(
+                AvailabilityWindow.status == AvailabilityWindowStatus.OPEN,
+                AvailabilityWindow.start_at >= start_at,
+                AvailabilityWindow.start_at < end_at,
+            )
+            .order_by(AvailabilityWindow.start_at, AvailabilityWindow.id)
+            .limit(limit)
+        )
+        return list(result.all())
+
     async def get(
         self,
         window_id: int,

@@ -6,7 +6,9 @@ from types import TracebackType
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.notification_repository import NotificationRepository
 from app.repositories.service_repository import ServiceRepository
 from app.repositories.settings_repository import SettingsRepository
 from app.repositories.user_repository import UserRepository
@@ -18,6 +20,8 @@ class SqlAlchemyUnitOfWork:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session = session_factory()
+        self.appointments = AppointmentRepository(self.session)
+        self.notifications = NotificationRepository(self.session)
         self.services = ServiceRepository(self.session)
         self.windows = WindowRepository(self.session)
         self.settings = SettingsRepository(self.session)
