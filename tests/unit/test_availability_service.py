@@ -126,6 +126,21 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_validates_interval_without_writing_or_committing() -> None:
+    unit_of_work = build_uow()
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
+
+    preview = await service.preview_window(actor(), create_values(), now=NOW)
+
+    assert preview.start_at == datetime(2026, 7, 23, 7, tzinfo=UTC)
+    assert preview.end_at == datetime(2026, 7, 23, 10, 30, tzinfo=UTC)
+    assert preview.duration_minutes == 210
+    unit_of_work.windows.lock_local_date.assert_awaited_once()
+    unit_of_work.audit.add.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_closed_window_does_not_consume_active_capacity() -> None:
     unit_of_work = build_uow()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time
 from html import escape
 from zoneinfo import ZoneInfo
@@ -30,14 +31,18 @@ def parse_local_date(raw: str | None) -> date | None:
 
 
 def parse_local_time(raw: str | None) -> time | None:
-    """Parse a strict 24-hour HH:MM wall-clock time."""
+    """Parse H:MM/HH:MM and reject 24:00 or malformed wall-clock values."""
 
     if raw is None:
         return None
-    try:
-        return datetime.strptime(raw.strip(), "%H:%M").time()
-    except ValueError:
+    match = re.fullmatch(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})", raw.strip())
+    if match is None:
         return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    if hour > 23 or minute > 59:
+        return None
+    return time(hour=hour, minute=minute)
 
 
 def render_window(window: AvailabilityWindowView) -> str:

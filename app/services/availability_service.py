@@ -26,6 +26,7 @@ from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.availability import (
     AvailabilityWindowCreate,
     AvailabilityWindowList,
+    AvailabilityWindowPreview,
     AvailabilityWindowView,
 )
 from app.schemas.service import AdminActor
@@ -137,6 +138,49 @@ class AvailabilityService:
                 )
             await unit_of_work.commit()
             return self._view(window, settings.timezone)
+
+    async def preview_window(
+        self,
+        actor: AdminActor,
+        values: AvailabilityWindowCreate,
+        *,
+        now: datetime | None = None,
+    ) -> AvailabilityWindowPreview:
+        """Validate a draft without persisting it; final creation validates again."""
+
+        self._ensure_admin(actor)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            settings = await self._settings(unit_of_work)
+            duration = values.duration_minutes or settings.default_window_duration_minutes
+            start_at, end_at = local_window_to_utc(
+                values.local_date,
+                values.local_start_time,
+                duration,
+                settings.timezone,
+            )
+            validate_calendar_rules(
+                local_date=values.local_date,
+                start_at=start_at,
+                end_at=end_at,
+                now=current_time,
+                rules=self._rules(settings),
+            )
+            if values.status is AvailabilityWindowStatus.OPEN:
+                await self._lock_and_validate_active_interval(
+                    unit_of_work,
+                    settings,
+                    local_date=values.local_date,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+            return AvailabilityWindowPreview(
+                start_at=start_at,
+                end_at=end_at,
+                duration_minutes=duration,
+                admin_comment=values.admin_comment,
+                timezone=settings.timezone,
+            )
 
     async def close_window(
         self,

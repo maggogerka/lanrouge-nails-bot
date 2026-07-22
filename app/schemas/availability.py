@@ -63,6 +63,22 @@ class AvailabilityWindowView(BaseModel):
         return self
 
 
+class AvailabilityWindowPreview(BaseModel):
+    """Validated interval used by the explicit creation confirmation screen."""
+
+    start_at: datetime
+    end_at: datetime
+    duration_minutes: int
+    admin_comment: str | None
+    timezone: str
+
+    @model_validator(mode="after")
+    def timestamps_must_be_aware(self) -> Self:
+        if self.start_at.tzinfo is None or self.end_at.tzinfo is None:
+            raise ValueError("preview timestamps must be timezone-aware")
+        return self
+
+
 class AvailabilityWindowList(BaseModel):
     """Upcoming admin schedule page."""
 
