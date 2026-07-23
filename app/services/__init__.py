@@ -12,6 +12,7 @@ from app.services.master_profile_service import MasterProfileService
 from app.services.menu_service import MenuService
 from app.services.notification_service import NotificationService
 from app.services.portfolio_service import PortfolioService
+from app.services.reference_cleanup_service import ReferenceCleanupService
 from app.services.repeat_booking_service import RepeatBookingService
 from app.services.reschedule_service import RescheduleService
 from app.services.review_service import ReviewService
@@ -33,6 +34,7 @@ __all__ = [
     "MenuService",
     "NotificationService",
     "PortfolioService",
+    "ReferenceCleanupService",
     "RepeatBookingService",
     "RescheduleService",
     "ReviewService",

@@ -27,6 +27,8 @@ async def test_dispatcher_uses_redis_and_includes_root_router() -> None:
     dispatcher = create_dispatcher(make_settings(), database)
 
     assert isinstance(dispatcher.storage, RedisStorage)
+    assert dispatcher.storage.state_ttl == 24 * 60 * 60
+    assert dispatcher.storage.data_ttl == 24 * 60 * 60
     assert root_router in dispatcher.sub_routers
 
     await dispatcher.storage.close()

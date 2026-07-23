@@ -1,4 +1,4 @@
-# Развёртывание v0.3.0
+# Развёртывание v0.3.1
 
 ## Подготовка
 
@@ -12,7 +12,7 @@ docker compose config
 docker compose build
 docker compose up -d
 docker compose ps
-docker compose logs bot notification-worker broadcast-worker migrate
+docker compose logs bot notification-worker broadcast-worker reference-cleanup-worker migrate
 docker compose run --rm bot python -m app.healthcheck
 ```
 
@@ -23,6 +23,7 @@ docker compose run --rm bot python -m app.healthcheck
 - `bot` — aiogram long polling и Redis FSM;
 - `notification-worker` — сервисные/review/repeat/waitlist задания;
 - `broadcast-worker` — отдельная rate-limited очередь рекламных кампаний.
+- `reference-cleanup-worker` — автоматическая очистка просроченных Telegram file ID.
 
 Все application-процессы используют один непривилегированный runtime image и стартуют
 только после успешной миграции. `docker compose down` сохраняет volumes. Команда с
@@ -30,7 +31,7 @@ docker compose run --rm bot python -m app.healthcheck
 
 ## Обновление
 
-1. Остановите `bot`, `notification-worker`, `broadcast-worker`.
+1. Остановите `bot`, `notification-worker`, `broadcast-worker`, `reference-cleanup-worker`.
 2. Сделайте backup и тест восстановления:
 
    ```powershell
@@ -49,6 +50,8 @@ docker compose run --rm bot python -m app.healthcheck
 [migration-v0.2-to-v0.3.md](migration-v0.2-to-v0.3.md). Для более старой
 установки сначала выполните переход из
 [migration-v0.1-to-v0.2.md](migration-v0.1-to-v0.2.md).
+Обновление v0.3.0 до v0.3.1 описано в
+[migration-v0.3-to-v0.3.1.md](migration-v0.3-to-v0.3.1.md).
 
 ## Smoke test
 
@@ -57,6 +60,8 @@ docker compose run --rm bot python -m app.healthcheck
 - каталог и окна читаются, тестовая запись создаётся и отменяется;
 - кнопочный выбор даты/времени не принимает выходные и даты вне горизонта;
 - фото-референсы сохраняются вместе с записью и видны только владельцу и админу;
+- dry-run очистки показывает кандидатов без изменения данных, а execute обезличивает
+  только просроченные строки;
 - portfolio/CRM/waitlist/reviews открываются без ошибок, отключённые разделы скрыты;
 - опубликованный профиль мастера виден клиенту, черновик — нет;
 - test-send рассылки получает только текущий администратор;
@@ -76,10 +81,23 @@ docker compose run --rm bot python -m app.healthcheck
 - PostgreSQL/Redis не опубликованы в интернет, backups шифруются и регулярно
   восстанавливаются на проверке;
 - настроены сбор структурированных логов, мониторинг, alerting и ротация;
-- контролируются возраст `pending/processing` заданий и перезапуски обоих workers;
+- контролируются возраст `pending/processing` заданий, успешность очистки референсов
+  и перезапуски workers;
 - публичная политика проверена владельцем и профильным специалистом;
 - доступ к серверу ограничен, ОС/образы/зависимости обновляются;
 - включение рассылок выполняется только после миграции, smoke test и test-send.
+
+Проверка диска и потребления контейнеров на Linux VPS:
+
+```bash
+df -h
+docker system df
+docker stats
+```
+
+Не запускайте автоматический `docker system prune` из приложения: он может удалить
+нужные образы и volumes. Для application-контейнеров Compose ограничивает json-логи
+тремя файлами по 10 МБ.
 
 GitHub Actions не является hosting. Нужен VPS/PaaS с постоянно работающими процессами и
 устойчивыми PostgreSQL/Redis. Автоматический SSH deploy намеренно не включён без конкретной

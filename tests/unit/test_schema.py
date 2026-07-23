@@ -27,6 +27,7 @@ from app.database.models import (
     PortfolioItemTag,
     PortfolioMedia,
     PortfolioTag,
+    ReferenceCleanupState,
     Review,
     ReviewRevision,
     Service,
@@ -65,6 +66,7 @@ EXPECTED_TABLES = {
     "marketing_events",
     "master_profiles",
     "master_public_links",
+    "reference_cleanup_state",
 }
 
 
@@ -97,6 +99,7 @@ def test_required_tables_are_registered() -> None:
     assert MarketingEvent.__table__.name == "marketing_events"
     assert MasterProfile.__table__.name == "master_profiles"
     assert MasterPublicLink.__table__.name == "master_public_links"
+    assert ReferenceCleanupState.__table__.name == "reference_cleanup_state"
 
 
 def test_every_datetime_column_is_timezone_aware() -> None:

@@ -1,5 +1,11 @@
 name: lanrouge-nails-bot
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:18.4-alpine
@@ -17,6 +23,7 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   redis:
     image: redis:8.2.7-alpine
@@ -31,6 +38,7 @@ services:
       retries: 10
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   migrate:
     build:
@@ -44,6 +52,7 @@ services:
     restart: "no"
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   bot:
     build:
@@ -62,6 +71,7 @@ services:
     stop_grace_period: 20s
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   notification-worker:
     build:
@@ -81,6 +91,7 @@ services:
     stop_grace_period: 20s
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   broadcast-worker:
     build:
@@ -100,6 +111,25 @@ services:
     stop_grace_period: 20s
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
+
+  reference-cleanup-worker:
+    build:
+      context: .
+      target: runtime
+    command: ["python", "-m", "app.workers.reference_cleanup"]
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    init: true
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
 volumes:
   postgres-data:

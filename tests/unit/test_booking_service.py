@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -274,6 +274,10 @@ async def test_reference_media_is_created_atomically_after_appointment() -> None
     assert [row.appointment_id for row in rows] == [11, 11]
     assert [row.position for row in rows] == [0, 1]
     assert [row.uploaded_by_user_id for row in rows] == [5, 5]
+    assert [row.expires_at for row in rows] == [
+        window().end_at + timedelta(days=30),
+        window().end_at + timedelta(days=30),
+    ]
     assert [item.telegram_file_unique_id for item in receipt.reference_media] == [
         "unique-1",
         "unique-2",

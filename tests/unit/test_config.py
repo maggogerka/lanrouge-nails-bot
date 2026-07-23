@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import RuntimeConfigurationError, Settings
+from app.domain.reference_retention import ReferenceRetentionPolicy
 
 
 def make_settings(**overrides: str) -> Settings:
@@ -87,3 +88,39 @@ def test_worker_runtime_requires_bot_and_database_but_not_redis() -> None:
     )
 
     settings.validate_worker_runtime()
+
+
+def test_reference_retention_defaults_and_policy_are_typed() -> None:
+    settings = make_settings()
+
+    assert settings.reference_draft_retention_hours == 24
+    assert settings.reference_cleanup_interval_hours == 6
+    assert settings.reference_retention_policy == ReferenceRetentionPolicy(
+        completed_days=30,
+        cancelled_days=7,
+        no_show_days=14,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "REFERENCE_COMPLETED_RETENTION_DAYS",
+        "REFERENCE_CANCELLED_RETENTION_DAYS",
+        "REFERENCE_NO_SHOW_RETENTION_DAYS",
+        "REFERENCE_DRAFT_RETENTION_HOURS",
+        "REFERENCE_CLEANUP_INTERVAL_HOURS",
+    ],
+)
+def test_reference_retention_rejects_zero(field: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: "0"})
+
+
+def test_cleanup_worker_needs_database_but_not_bot_or_redis() -> None:
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        DATABASE_URL="postgresql+asyncpg://user:password@localhost/db",
+    )
+
+    settings.validate_database_runtime()

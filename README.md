@@ -1,10 +1,10 @@
 # lanrouge nails bot
 
-Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.3.0**.
+Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.3.1**.
 
-В v0.3.0 добавлены кнопочный выбор даты и времени, фото-референсы к записи,
-редактирование и безопасное удаление отзывов, внутренний/внешний режимы
-портфолио, публичный профиль мастера и динамические меню по feature flags.
+В v0.3.1 добавлена управляемая политика хранения фото-референсов: сроки зависят
+от статуса записи, отдельный worker автоматически обезличивает просроченные
+Telegram file ID, а администратор и клиент могут удалить доступ бота вручную.
 
 ## Возможности
 
@@ -18,6 +18,7 @@ Production-ready Telegram CRM и бот онлайн-записи для час�
 - сегментированные рекламные рассылки с preview, test-send, явным подтверждением,
   замороженной аудиторией, лимитом скорости и повторами;
 - независимые настройки рекламных и repeat-уведомлений с append-only историей согласий.
+- автоматическое и ручное удаление доступа бота к устаревшим фото-референсам.
 
 ## Быстрый запуск в Docker
 
@@ -44,11 +45,11 @@ DATABASE_URL=postgresql+asyncpg://lanrouge:тот_же_пароль@postgres:543
 docker compose config
 docker compose up --build -d
 docker compose ps
-docker compose logs -f bot notification-worker broadcast-worker
+docker compose logs -f bot notification-worker broadcast-worker reference-cleanup-worker
 ```
 
-Compose поднимает PostgreSQL, Redis, одноразовый `migrate`, бот, worker сервисных
-уведомлений и отдельный worker рассылок. Проверка подключений без Telegram polling:
+Compose поднимает PostgreSQL, Redis, одноразовый `migrate`, бот и отдельные workers
+уведомлений, рассылок и очистки референсов. Проверка подключений без Telegram polling:
 
 ```powershell
 docker compose run --rm bot python -m app.healthcheck
@@ -110,6 +111,7 @@ python -m app.bot
 ```powershell
 python -m app.workers.reminders
 python -m app.workers.broadcasts
+python -m app.workers.reference_cleanup
 ```
 
 Для запуска вне Compose замените хосты `postgres` и `redis` на `localhost`.
@@ -137,10 +139,12 @@ pytest
 - [правила бронирования](docs/booking-rules.md)
 - [выбор даты и времени](docs/date-time-picker.md)
 - [фото-референсы записи](docs/booking-reference-media.md)
+- [retention и очистка референсов](docs/reference-retention.md)
 - [управление отзывами](docs/review-administration.md)
 - [режимы портфолио](docs/portfolio-modes.md)
 - [профиль мастера](docs/master-profile.md)
 - [миграция v0.2 → v0.3](docs/migration-v0.2-to-v0.3.md)
+- [миграция v0.3.0 → v0.3.1](docs/migration-v0.3-to-v0.3.1.md)
 - [миграция v0.1 → v0.2](docs/migration-v0.1-to-v0.2.md)
 - [развёртывание и rollback](docs/deployment.md)
 - [privacy и consent](docs/privacy.md)

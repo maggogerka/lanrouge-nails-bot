@@ -113,6 +113,7 @@ def build_uow(
     )
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.reference_media.move_active = AsyncMock(return_value=2)
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -151,6 +152,9 @@ async def test_reschedule_atomically_switches_windows_and_preserves_snapshot() -
     assert unit_of_work.appointments.add_history.await_count == 2
     unit_of_work.notifications.cancel_unsent.assert_awaited_once_with(11)
     assert unit_of_work.notifications.add_all.await_args.args[0]
+    moved = unit_of_work.reference_media.move_active.await_args.args
+    assert moved[0:2] == (11, 12)
+    assert moved[2] > new_window.end_at
     locked_dates = [call.args[0] for call in unit_of_work.windows.lock_local_date.await_args_list]
     assert locked_dates == sorted(locked_dates)
     assert all(isinstance(item, date) for item in locked_dates)

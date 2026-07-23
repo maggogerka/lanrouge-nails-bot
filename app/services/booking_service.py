@@ -27,6 +27,7 @@ from app.domain.errors import (
     PrivacyConsentRequiredError,
 )
 from app.domain.notifications import future_reminder_schedules
+from app.domain.reference_retention import ReferenceRetentionPolicy
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import (
     BookingAvailability,
@@ -55,10 +56,12 @@ class BookingService:
         admin_telegram_ids: frozenset[int],
         *,
         privacy_policy_configured: bool = True,
+        reference_retention_policy: ReferenceRetentionPolicy | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
         self._privacy_policy_configured = privacy_policy_configured
+        self._reference_retention_policy = reference_retention_policy or ReferenceRetentionPolicy()
 
     async def list_active_services(self, actor: ClientActor) -> list[ServiceView]:
         self._ensure_privacy_policy()
@@ -265,6 +268,10 @@ class BookingService:
                         media_type=item.media_type,
                         position=position,
                         uploaded_by_user_id=client.id,
+                        expires_at=self._reference_retention_policy.expires_at(
+                            status=AppointmentStatus.CONFIRMED,
+                            planned_end_at=window.end_at,
+                        ),
                     )
                     for position, item in enumerate(values.reference_media)
                 ]
