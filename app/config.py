@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.reference_retention import ReferenceRetentionPolicy
+
 _ADMIN_ID_SEPARATOR = re.compile(r"[\s,;]+")
 _POSTGRESQL_ASYNC_PREFIX = "postgresql+asyncpg://"
 _REDIS_PREFIXES = ("redis://", "rediss://", "unix://")
@@ -92,6 +94,36 @@ class Settings(BaseSettings):
         le=3600,
         validation_alias="REMINDER_LEASE_SECONDS",
     )
+    reference_completed_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        validation_alias="REFERENCE_COMPLETED_RETENTION_DAYS",
+    )
+    reference_cancelled_retention_days: int = Field(
+        default=7,
+        ge=1,
+        le=3650,
+        validation_alias="REFERENCE_CANCELLED_RETENTION_DAYS",
+    )
+    reference_no_show_retention_days: int = Field(
+        default=14,
+        ge=1,
+        le=3650,
+        validation_alias="REFERENCE_NO_SHOW_RETENTION_DAYS",
+    )
+    reference_draft_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        validation_alias="REFERENCE_DRAFT_RETENTION_HOURS",
+    )
+    reference_cleanup_interval_hours: int = Field(
+        default=6,
+        ge=1,
+        le=168,
+        validation_alias="REFERENCE_CLEANUP_INTERVAL_HOURS",
+    )
 
     @field_validator("privacy_policy_url", "sentry_dsn", mode="before")
     @classmethod
@@ -162,6 +194,16 @@ class Settings(BaseSettings):
         """Return the validated business timezone."""
 
         return ZoneInfo(self.timezone)
+
+    @property
+    def reference_retention_policy(self) -> ReferenceRetentionPolicy:
+        """Build the immutable policy lazily to keep settings import boundaries simple."""
+
+        return ReferenceRetentionPolicy(
+            completed_days=self.reference_completed_retention_days,
+            cancelled_days=self.reference_cancelled_retention_days,
+            no_show_days=self.reference_no_show_retention_days,
+        )
 
     def validate_bot_runtime(self) -> None:
         """Check values required before the Telegram polling process starts."""

@@ -131,6 +131,7 @@ def build_uow(
     unit_of_work.reference_media.add = AsyncMock(
         side_effect=lambda row: setattr(row, "id", 8) or row
     )
+    unit_of_work.reference_media.set_expiry_for_appointment = AsyncMock(return_value=0)
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
@@ -196,7 +197,7 @@ async def test_client_can_add_reference_only_before_configured_deadline() -> Non
 
 
 @pytest.mark.asyncio
-async def test_reference_removal_inside_deadline_is_rejected_without_mutation() -> None:
+async def test_reference_removal_is_always_available_as_explicit_privacy_action() -> None:
     row = AppointmentReferenceMedia(
         id=4,
         appointment_id=11,
@@ -210,11 +211,13 @@ async def test_reference_removal_inside_deadline_is_rejected_without_mutation() 
     unit_of_work.reference_media.list_active.return_value = [row]
     service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
 
-    with pytest.raises(CancellationDeadlineError, match="истёк"):
-        await service.clear_my_reference_media(ClientActor(telegram_id=101), 11, now=NOW)
+    removed = await service.clear_my_reference_media(ClientActor(telegram_id=101), 11, now=NOW)
 
-    assert row.deleted_at is None
-    unit_of_work.commit.assert_not_awaited()
+    assert removed == 1
+    assert row.deleted_at == NOW
+    assert row.telegram_file_id is None
+    assert row.telegram_file_unique_id is None
+    unit_of_work.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -239,6 +242,9 @@ async def test_client_cancellation_at_exact_deadline_reopens_window() -> None:
     unit_of_work.notifications.cancel_unsent.assert_awaited_once_with(11)
     history = unit_of_work.appointments.add_history.await_args.args[0]
     assert history.new_status is AppointmentStatus.CANCELLED_BY_CLIENT
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, NOW + timedelta(days=7)
+    )
     assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-1"
     unit_of_work.commit.assert_awaited_once()
 
@@ -333,6 +339,9 @@ async def test_completed_visit_schedules_exactly_one_review_request() -> None:
     assert completed.status is AppointmentStatus.COMPLETED
     assert target_appointment.completed_at == NOW
     assert target_window.status is AvailabilityWindowStatus.CLOSED
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, NOW + timedelta(days=30)
+    )
     jobs = unit_of_work.notifications.add_all.await_args.args[0]
     assert len(jobs) == 1
     assert jobs[0].notification_type is NotificationType.REVIEW_REQUEST
@@ -340,6 +349,25 @@ async def test_completed_visit_schedules_exactly_one_review_request() -> None:
 
     await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
     assert unit_of_work.notifications.add_all.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_show_retention_starts_at_planned_end() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=-24)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    result = await service.mark_no_show(AdminActor(telegram_id=900), 11, now=NOW)
+
+    assert result.status is AppointmentStatus.NO_SHOW
+    assert target_appointment.no_show_at == NOW
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, target_window.end_at + timedelta(days=14)
+    )
 
 
 @pytest.mark.asyncio

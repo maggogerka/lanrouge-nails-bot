@@ -30,6 +30,7 @@ from app.domain.errors import (
     BookingLimitError,
 )
 from app.domain.notifications import future_reminder_schedules
+from app.domain.reference_retention import ReferenceRetentionPolicy
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import RescheduleAvailability
 from app.schemas.booking import BookingReceipt, BookingWindowView, ClientActor
@@ -49,9 +50,12 @@ class RescheduleService:
         self,
         unit_of_work_factory: UnitOfWorkFactory,
         admin_telegram_ids: frozenset[int],
+        *,
+        reference_retention_policy: ReferenceRetentionPolicy | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
+        self._reference_retention_policy = reference_retention_policy or ReferenceRetentionPolicy()
 
     async def list_my_options(
         self,
@@ -262,6 +266,14 @@ class RescheduleService:
                     else AvailabilityWindowStatus.CLOSED
                 )
                 new_window.status = AvailabilityWindowStatus.BOOKED
+                moved_reference_count = await unit_of_work.reference_media.move_active(
+                    appointment.id,
+                    new_appointment.id,
+                    self._reference_retention_policy.expires_at(
+                        status=AppointmentStatus.CONFIRMED,
+                        planned_end_at=new_window.end_at,
+                    ),
+                )
                 await unit_of_work.appointments.add_history(
                     AppointmentStatusHistory(
                         appointment_id=appointment.id,
@@ -313,6 +325,7 @@ class RescheduleService:
                         "new_appointment_id": new_appointment.id,
                         "old_window_id": old_window.id,
                         "new_window_id": new_window.id,
+                        "moved_reference_count": moved_reference_count,
                     },
                     correlation_id=correlation_id,
                 )

@@ -1,7 +1,10 @@
 """ORM model registry imported by Alembic and application repositories."""
 
 from app.database.models.appointment import Appointment, AppointmentStatusHistory
-from app.database.models.appointment_reference import AppointmentReferenceMedia
+from app.database.models.appointment_reference import (
+    AppointmentReferenceMedia,
+    ReferenceCleanupState,
+)
 from app.database.models.audit import AuditLog
 from app.database.models.availability_window import AvailabilityWindow
 from app.database.models.broadcast import (
@@ -46,6 +49,7 @@ __all__ = [
     "PortfolioItemTag",
     "PortfolioMedia",
     "PortfolioTag",
+    "ReferenceCleanupState",
     "Review",
     "ReviewRevision",
     "Service",

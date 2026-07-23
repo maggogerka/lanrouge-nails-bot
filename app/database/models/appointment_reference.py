@@ -11,9 +11,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +37,17 @@ class AppointmentReferenceMedia(Base):
             name="uq_appointment_reference_file",
         ),
         Index("ix_appointment_reference_active", "appointment_id", "deleted_at"),
+        Index(
+            "ix_appointment_reference_expiry",
+            "expires_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint(
+            "(deleted_at IS NULL AND telegram_file_id IS NOT NULL "
+            "AND telegram_file_unique_id IS NOT NULL) OR deleted_at IS NOT NULL",
+            name="active_identifiers_present",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -43,8 +56,8 @@ class AppointmentReferenceMedia(Base):
         ForeignKey("appointments.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    telegram_file_id: Mapped[str] = mapped_column(String(512), nullable=False)
-    telegram_file_unique_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    telegram_file_id: Mapped[str | None] = mapped_column(String(512))
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255))
     media_type: Mapped[MediaType] = mapped_column(
         database_enum(MediaType, name="media_type"),
         nullable=False,
@@ -60,4 +73,27 @@ class AppointmentReferenceMedia(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_deletion_error: Mapped[str | None] = mapped_column(String(100))
+
+
+class ReferenceCleanupState(Base):
+    """Singleton health state without an append-only maintenance log."""
+
+    __tablename__ = "reference_cleanup_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="singleton"),
+        CheckConstraint("consecutive_failures >= 0", name="failures_non_negative"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
