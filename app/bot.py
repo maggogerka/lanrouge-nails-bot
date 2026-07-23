@@ -28,6 +28,7 @@ from app.services import (
     MasterProfileService,
     MenuService,
     PortfolioService,
+    ReferenceCleanupService,
     RepeatBookingService,
     RescheduleService,
     ReviewService,
@@ -44,8 +45,8 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
 
     storage = RedisStorage.from_url(
         settings.redis_url.get_secret_value(),
-        state_ttl=60 * 60,
-        data_ttl=60 * 60,
+        state_ttl=settings.reference_draft_retention_hours * 60 * 60,
+        data_ttl=settings.reference_draft_retention_hours * 60 * 60,
     )
     service_catalog = ServiceCatalog(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
@@ -60,14 +61,17 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
         privacy_policy_configured=settings.privacy_policy_url is not None,
+        reference_retention_policy=settings.reference_retention_policy,
     )
     appointment_service = AppointmentService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
+        reference_retention_policy=settings.reference_retention_policy,
     )
     reschedule_service = RescheduleService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         settings.admin_telegram_ids,
+        reference_retention_policy=settings.reference_retention_policy,
     )
     settings_service = SettingsService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
@@ -98,6 +102,9 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         lambda: SqlAlchemyUnitOfWork(database.sessions), settings.admin_telegram_ids
     )
     menu_service = MenuService(lambda: SqlAlchemyUnitOfWork(database.sessions))
+    reference_cleanup_service = ReferenceCleanupService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions)
+    )
     dispatcher = Dispatcher(
         storage=storage,
         events_isolation=storage.create_isolation(),
@@ -118,6 +125,7 @@ def create_dispatcher(settings: Settings, database: Database) -> Dispatcher:
         marketing_event_service=marketing_event_service,
         master_profile_service=master_profile_service,
         menu_service=menu_service,
+        reference_cleanup_service=reference_cleanup_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.include_router(root_router)

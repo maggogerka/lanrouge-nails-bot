@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanrouge-nails-bot"
-version = "0.3.0"
+version = "0.3.1"
 description = "Telegram CRM and appointment booking bot for lanrouge nails"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -34,6 +34,8 @@ lanrouge-bot = "app.bot:run"
 lanrouge-healthcheck = "app.healthcheck:run"
 lanrouge-reminders = "app.workers.reminders:run"
 lanrouge-broadcasts = "app.workers.broadcasts:run"
+lanrouge-reference-cleanup = "app.workers.reference_cleanup:run"
+lanrouge-cleanup-references = "app.maintenance.cleanup_references:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
@@ -61,7 +63,7 @@ module = ["redis.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-config --strict-markers"
+addopts = "-ra --strict-config --strict-markers --basetemp=.pytest_cache/tmp"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 

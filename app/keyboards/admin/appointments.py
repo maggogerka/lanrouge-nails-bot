@@ -50,6 +50,18 @@ def admin_appointment_list_keyboard(
             )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить референсы",
+                callback_data=AdminAppointmentCallback(
+                    action="references_delete_prompt",
+                    appointment_id=appointment.id,
+                    object_id=0,
+                ).pack(),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -78,6 +90,16 @@ def admin_appointment_details_keyboard(
                         text="Завершить визит",
                         callback_data=AdminAppointmentCallback(
                             action="complete",
+                            appointment_id=appointment.id,
+                            object_id=0,
+                        ).pack(),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🚫 Отметить неявку",
+                        callback_data=AdminAppointmentCallback(
+                            action="no_show",
                             appointment_id=appointment.id,
                             object_id=0,
                         ).pack(),
@@ -158,6 +180,33 @@ def admin_cancel_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="Назад",
+                    callback_data=AdminAppointmentCallback(
+                        action="view",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+
+
+def admin_reference_delete_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить референсы",
+                    callback_data=AdminAppointmentCallback(
+                        action="references_delete_confirm",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет, оставить",
                     callback_data=AdminAppointmentCallback(
                         action="view",
                         appointment_id=appointment_id,

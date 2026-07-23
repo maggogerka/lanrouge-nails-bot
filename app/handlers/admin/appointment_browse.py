@@ -13,10 +13,12 @@ from app.keyboards.admin.appointments import (
     admin_appointment_details_keyboard,
     admin_appointment_list_keyboard,
     admin_cancel_keyboard,
+    admin_reference_delete_keyboard,
 )
 from app.keyboards.admin.main import ADMIN_TODAY_TEXT, ADMIN_UPCOMING_TEXT
 from app.schemas.appointment import AdminAppointmentView
 from app.services.appointment_service import AppointmentService
+from app.services.reference_cleanup_service import ReferenceCleanupService
 
 router = Router(name="admin.appointment_browse")
 
@@ -138,6 +140,50 @@ async def show_appointment_reference_media(
     await callback.answer()
 
 
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "references_delete_prompt"))
+async def prompt_reference_deletion(
+    callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Удалить все фотографии-референсы этой записи? "
+            "Бот необратимо удалит Telegram file ID из своей базы и потеряет доступ к файлам. "
+            "Это действие не удаляет копии с серверов Telegram.",
+            reply_markup=admin_reference_delete_keyboard(callback_data.appointment_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "references_delete_confirm"))
+async def confirm_reference_deletion(
+    callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
+    appointment_service: AppointmentService,
+    reference_cleanup_service: ReferenceCleanupService,
+    correlation_id: str,
+) -> None:
+    try:
+        requested = await appointment_service.request_admin_reference_cleanup(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+            correlation_id=correlation_id,
+        )
+        result = await reference_cleanup_service.cleanup_appointment_now(
+            callback_data.appointment_id
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Доступ приложения к референсам удалён. "
+            f"Обработано: {result.deleted} из {requested}. "
+            "Это не означает удаление файла с серверов Telegram."
+        )
+    await callback.answer("Референсы очищены.")
+
+
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "confirm"))
 async def confirm_client_visit(
     callback: CallbackQuery,
@@ -184,6 +230,30 @@ async def complete_client_visit(
             reply_markup=admin_appointment_details_keyboard(appointment),
         )
     await callback.answer("Визит завершён. Запрос отзыва поставлен в очередь.")
+
+
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "no_show"))
+async def mark_client_no_show(
+    callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
+    appointment_service: AppointmentService,
+    correlation_id: str,
+) -> None:
+    try:
+        appointment = await appointment_service.mark_no_show(
+            actor_from_telegram(callback.from_user),
+            callback_data.appointment_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_admin_appointment(appointment),
+            reply_markup=admin_appointment_details_keyboard(appointment),
+        )
+    await callback.answer("Неявка отмечена.")
 
 
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "cancel_prompt"))
