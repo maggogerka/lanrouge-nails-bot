@@ -20,10 +20,14 @@ The Redis password must be at least 32 base64url-safe characters (`A-Z`, `a-z`,
 - `REDIS_PASSWORD_SECRET_FILE`
 - `RESTIC_PASSWORD_SECRET_FILE`
 
-Keep the files readable only by the deployment account. Docker mounts them at
+For Compose file-backed secrets used by non-root containers, keep the containing
+directory mode `0700` and the individual files mode `0644`; the protected parent
+prevents other host users from traversing to the files, while the read-only bind
+mount remains readable inside the container. Docker mounts them at
 `/run/secrets/...`; PostgreSQL consumes `POSTGRES_PASSWORD_FILE`, Redis creates a
 mode-0600 configuration file in its tmpfs, and restic consumes
-`RESTIC_PASSWORD_FILE`.
+`RESTIC_PASSWORD_FILE`. A production secret-manager integration may enforce an
+equivalent UID/GID-specific policy instead.
 
 The deployment environment file selected through `ENV_FILE` must provide either
 `DATABASE_URL` and an authenticated `REDIS_URL`, or the matching application

@@ -161,7 +161,10 @@ jobs:
           printf '%s' 'ci-postgres-password-only' > .ci-secrets/postgres_password
           printf '%s' 'ci_redis_password_0123456789abcdef' > .ci-secrets/redis_password
           printf '%s' 'ci-restic-password-only' > .ci-secrets/restic_password
-          chmod 600 .ci-secrets/*
+          # Compose file secrets are bind mounts: non-root containers need the
+          # files readable, while the 0700 parent keeps other host users out.
+          chmod 700 .ci-secrets
+          chmod 644 .ci-secrets/*
       - name: Validate all Compose files and profiles
         run: |
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation --profile backup config --quiet
