@@ -1,10 +1,44 @@
-name: lanrouge-nails-bot
-
 x-default-logging: &default-logging
   driver: json-file
   options:
     max-size: "10m"
     max-file: "3"
+
+x-app-environment: &app-environment
+  # Isolates locks, rate limits, sessions, and component heartbeats when one
+  # Redis deployment is shared by multiple application instances.
+  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-lanrouge}
+
+x-app-runtime: &app-runtime
+  build:
+    context: .
+    target: runtime
+  env_file: ${ENV_FILE:-.env}
+  environment: *app-environment
+  init: true
+  stop_grace_period: 20s
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 128
+  mem_limit: 512m
+  cpus: 1.0
+  networks:
+    - backend
+    - egress
+  logging: *default-logging
+
+x-app-dependencies: &app-dependencies
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
 
 services:
   postgres:
@@ -12,125 +46,121 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lanrouge}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-lanrouge}
+    secrets:
+      - postgres_password
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 10s
     security_opt:
       - no-new-privileges:true
+    networks:
+      - backend
     logging: *default-logging
 
   redis:
     image: redis:8.2.7-alpine
+    user: redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    secrets:
+      - redis_password
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        password="$$(cat "$${REDIS_PASSWORD_FILE}")"
+        case "$$password" in
+          ""|*[!A-Za-z0-9_-]*) echo "Redis password must be base64url-safe" >&2; exit 64 ;;
+        esac
+        [ "$${#password}" -ge 32 ] || { echo "Redis password must be at least 32 characters" >&2; exit 64; }
+        umask 077
+        printf 'appendonly yes\nrequirepass %s\n' "$$password" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
     volumes:
       - redis-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m,mode=1777
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$(cat "$${REDIS_PASSWORD_FILE}")" redis-cli ping | grep -qx PONG
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 5s
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
     logging: *default-logging
 
   migrate:
-    build:
-      context: .
-      target: runtime
-    env_file: ${ENV_FILE:-.env}
+    <<: *app-runtime
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
-    security_opt:
-      - no-new-privileges:true
-    logging: *default-logging
+    healthcheck:
+      disable: true
 
   bot:
-    build:
-      context: .
-      target: runtime
+    <<: *app-runtime
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: bot
     restart: unless-stopped
-    env_file: ${ENV_FILE:-.env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    init: true
-    stop_grace_period: 20s
-    security_opt:
-      - no-new-privileges:true
-    logging: *default-logging
+    depends_on: *app-dependencies
 
   notification-worker:
-    build:
-      context: .
-      target: runtime
+    <<: *app-runtime
     command: ["python", "-m", "app.workers.reminders"]
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: reminders
     restart: unless-stopped
-    env_file: ${ENV_FILE:-.env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    init: true
-    stop_grace_period: 20s
-    security_opt:
-      - no-new-privileges:true
-    logging: *default-logging
+    depends_on: *app-dependencies
 
   broadcast-worker:
-    build:
-      context: .
-      target: runtime
+    <<: *app-runtime
     command: ["python", "-m", "app.workers.broadcasts"]
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: broadcasts
     restart: unless-stopped
-    env_file: ${ENV_FILE:-.env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    init: true
-    stop_grace_period: 20s
-    security_opt:
-      - no-new-privileges:true
-    logging: *default-logging
+    depends_on: *app-dependencies
 
   reference-cleanup-worker:
-    build:
-      context: .
-      target: runtime
+    <<: *app-runtime
     command: ["python", "-m", "app.workers.reference_cleanup"]
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: reference_cleanup
     restart: unless-stopped
-    env_file: ${ENV_FILE:-.env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    init: true
-    stop_grace_period: 20s
-    security_opt:
-      - no-new-privileges:true
-    logging: *default-logging
+    depends_on: *app-dependencies
 
 volumes:
   postgres-data:
   redis-data:
+
+networks:
+  backend:
+    internal: true
+  egress:
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_SECRET_FILE:-./.secrets/postgres_password}
+  redis_password:
+    file: ${REDIS_PASSWORD_SECRET_FILE:-./.secrets/redis_password}

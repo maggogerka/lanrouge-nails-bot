@@ -124,6 +124,8 @@ class PortfolioService:
                     raise EntityNotFoundError("Выбранная услуга больше не существует.")
             item = await unit_of_work.portfolio.add(
                 PortfolioItem(
+                    business_id=unit_of_work.business_id,
+                    staff_member_id=1,
                     title=values.title,
                     description=values.description,
                     linked_service_id=values.linked_service_id,
@@ -300,7 +302,12 @@ class PortfolioService:
                     slug = f"{base_slug}-{suffix}"
                     suffix += 1
                 tag = await unit_of_work.portfolio.add_tag(
-                    PortfolioTag(name=name, slug=slug, is_active=True)
+                    PortfolioTag(
+                        business_id=unit_of_work.business_id,
+                        name=name,
+                        slug=slug,
+                        is_active=True,
+                    )
                 )
             elif not tag.is_active:
                 raise PortfolioStateError(f"Тег «{name}» находится в архиве.")

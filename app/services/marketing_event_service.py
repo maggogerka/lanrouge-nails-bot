@@ -32,6 +32,7 @@ class MarketingEventService:
                 raise AuthorizationError("Это действие недоступно.")
             await uow.broadcasts.add_event(
                 MarketingEvent(
+                    business_id=uow.business_id,
                     user_id=user.id,
                     broadcast_id=broadcast_id,
                     event_type=event_type,

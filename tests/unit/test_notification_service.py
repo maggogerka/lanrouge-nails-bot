@@ -115,6 +115,9 @@ def build_uow(
     unit_of_work.users.mark_blocked = AsyncMock()
     unit_of_work.windows.get = AsyncMock(return_value=window())
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.features.get = AsyncMock(
+        return_value=SimpleNamespace(reminders=True, reviews=True, repeat_booking=True)
+    )
     unit_of_work.reviews.get_for_appointment = AsyncMock(return_value=None)
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -203,6 +206,23 @@ async def test_cancelled_appointment_is_not_prepared_for_delivery() -> None:
     assert target_job.status is NotificationJobStatus.CANCELLED
     assert target_job.last_error == "appointment_inactive"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disabled_reminders_are_cancelled_before_loading_client_data() -> None:
+    unit_of_work, target_job, _ = build_uow()
+    unit_of_work.features.get.return_value.reminders = False
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is None
+
+    assert target_job.status is NotificationJobStatus.CANCELLED
+    assert target_job.last_error == "feature_disabled"
+    unit_of_work.appointments.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio

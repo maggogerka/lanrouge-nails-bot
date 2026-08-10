@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from app.database.models import Broadcast, BroadcastMedia
 from app.domain.enums import BroadcastStatus
-from app.domain.errors import AuthorizationError, BroadcastStateError, EntityNotFoundError
+from app.domain.errors import BroadcastStateError, EntityNotFoundError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.broadcast import (
     BroadcastCreate,
@@ -17,6 +17,7 @@ from app.schemas.broadcast import (
 )
 from app.schemas.pagination import Page, PageRequest
 from app.schemas.service import AdminActor
+from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -53,6 +54,7 @@ class BroadcastService:
                     raise EntityNotFoundError("Связанная работа портфолио не найдена.")
             broadcast = await uow.broadcasts.add(
                 Broadcast(
+                    business_id=uow.business_id,
                     title=values.title,
                     text=values.text,
                     parse_mode=None,
@@ -268,8 +270,7 @@ class BroadcastService:
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Недостаточно прав администратора.")
+        ensure_admin(actor, self._admin_telegram_ids)
 
     @staticmethod
     def _aware_now(value: datetime | None) -> datetime:

@@ -1,6 +1,7 @@
 """Broadcast delivery leases, live consent checks and sent idempotency."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -65,6 +66,7 @@ def build_uow(*, marketing: bool = True) -> tuple[MagicMock, BroadcastRecipient,
     )
     unit_of_work.users.get_by_id = AsyncMock(return_value=user)
     unit_of_work.users.mark_blocked = AsyncMock()
+    unit_of_work.features.get = AsyncMock(return_value=SimpleNamespace(broadcasts=True))
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work, target_recipient, user
@@ -115,3 +117,23 @@ async def test_forbidden_marks_user_and_snapshot_recipient_blocked() -> None:
     assert await service.mark_blocked(41, "worker")
     assert target.status is BroadcastRecipientStatus.BLOCKED
     unit_of_work.users.mark_blocked.assert_awaited_once_with(user)
+
+
+@pytest.mark.asyncio
+async def test_disabled_broadcast_feature_is_fail_closed_in_worker() -> None:
+    unit_of_work, target, _ = build_uow()
+    unit_of_work.features.get.return_value.broadcasts = False
+    unit_of_work.broadcasts.claim_due_recipients = AsyncMock(return_value=[target])
+    service = BroadcastDeliveryService(
+        lambda: unit_of_work,
+        lease_seconds=120,
+        max_attempts=5,  # type: ignore[arg-type]
+    )
+
+    assert await service.claim_due("worker", limit=20, now=NOW) == []
+    unit_of_work.broadcasts.claim_due_recipients.assert_not_awaited()
+
+    assert await service.prepare_delivery(target.id, "worker") is None
+    assert target.status is BroadcastRecipientStatus.SKIPPED
+    assert target.last_error == "feature_disabled"
+    unit_of_work.users.get_by_id.assert_not_awaited()

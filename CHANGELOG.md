@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0] - 2026-08-11
+
+### Added
+
+- white-label `Business`, multi-master staff, DB-backed RBAC and one-time invitations;
+- per-master schedules, service assignments, effective price/duration/prepayment snapshots;
+- centralized feature flags, subscription grace guard and acquisition funnel;
+- manual/YooKassa payment abstraction, reservations, refunds and replay-safe webhook inbox;
+- privacy deletion workflow, versioned consent and PII anonymization;
+- authenticated Mini App `/api/v1`, opaque Redis sessions, rate limits and security headers;
+- component heartbeats, optional Sentry, encrypted restic backup/restore tooling and hardened Compose.
+
+### Changed
+
+- `ADMIN_TELEGRAM_IDS` is bootstrap-only; runtime authorization always uses active DB staff;
+- pending payment/manual confirmation occupies a slot until confirmation, cancellation or expiry;
+- runtime branding, menus and support contacts are business-driven;
+- API and manual payments can run when YooKassa is not configured.
+
+### Security
+
+- tenant/master/client scoping is enforced in repositories and application services;
+- PostgreSQL prevents overlapping active appointments for one master;
+- provider webhook payload is never trusted as payment proof and is not stored or logged raw;
+- secrets, contact data and payment-shaped fields are scrubbed from logs and Sentry events.
+
 ## [0.3.1] - 2026-07-24
 
 ### Added

@@ -19,6 +19,7 @@ from app.schemas.booking import ClientActor
 from app.schemas.pagination import Page, PageRequest
 from app.schemas.service import AdminActor
 from app.schemas.waitlist import AdminWaitlistView, WaitlistCreate, WaitlistView
+from app.services.appointment_common import ensure_admin
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -59,6 +60,7 @@ class WaitlistService:
             configured_expiry = current + timedelta(days=settings.waitlist_default_expiration_days)
             entry = await uow.waitlist.add(
                 WaitlistEntry(
+                    business_id=uow.business_id,
                     client_id=client.id,
                     service_id=service.id,
                     date_from=values.date_from,
@@ -269,8 +271,7 @@ class WaitlistService:
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Недостаточно прав администратора.")
+        ensure_admin(actor, self._admin_telegram_ids)
 
     @staticmethod
     def _aware_now(value: datetime | None) -> datetime:

@@ -23,7 +23,9 @@ from app.database import Database
 from app.domain.enums import BroadcastButtonType
 from app.keyboards.client.marketing import MarketingCallback
 from app.logging import configure_logging, log_event
+from app.observability import ObservabilityConfigurationError, initialize_observability
 from app.repositories import SqlAlchemyUnitOfWork
+from app.runtime_health import RuntimeHeartbeat, open_component_heartbeat
 from app.schemas.broadcast import BroadcastDelivery
 from app.services.broadcast_delivery_service import BroadcastDeliveryService
 from app.workers.reminders import retry_delay_seconds, worker_identity
@@ -131,39 +133,65 @@ async def process_delivery(
 
 
 async def run_worker(settings: Settings) -> None:
+    """Validate configuration and supervise the broadcast loop heartbeat."""
+
     settings.validate_worker_runtime()
+    settings.validate_dependency_runtime()
+    async with open_component_heartbeat(settings, "broadcasts") as heartbeat:
+        await _run_worker(settings, heartbeat)
+
+
+async def run_delivery_cycle(
+    bot: Bot,
+    service: BroadcastDeliveryService,
+    worker_id: str,
+    *,
+    batch_size: int,
+    delay_seconds: float,
+) -> int:
+    """Process one claimed batch completely before allowing a heartbeat."""
+
+    recipient_ids = await service.claim_due(worker_id, limit=batch_size)
+    for recipient_id in recipient_ids:
+        delivery = await service.prepare_delivery(recipient_id, worker_id)
+        if delivery is not None:
+            await process_delivery(bot, service, delivery, worker_id)
+            await asyncio.sleep(delay_seconds)
+    return len(recipient_ids)
+
+
+async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
     database = Database.create(settings.database_url.get_secret_value())
-    async with SqlAlchemyUnitOfWork(database.sessions) as uow:
-        business_settings = await uow.settings.get()
-        if business_settings is None:
-            raise RuntimeError("Business settings are missing")
-        max_attempts = business_settings.broadcast_max_retries
-        messages_per_second = business_settings.broadcast_messages_per_second
-    service = BroadcastDeliveryService(
-        lambda: SqlAlchemyUnitOfWork(database.sessions),
-        lease_seconds=settings.reminder_lease_seconds,
-        max_attempts=max_attempts,
-    )
-    worker_id = worker_identity()
-    delay = 1 / max(1, messages_per_second)
-    log_event(logger, logging.INFO, "broadcast.worker_started")
     try:
+        async with SqlAlchemyUnitOfWork(database.sessions) as uow:
+            business_settings = await uow.settings.get()
+            if business_settings is None:
+                raise RuntimeError("Business settings are missing")
+            max_attempts = business_settings.broadcast_max_retries
+            messages_per_second = business_settings.broadcast_messages_per_second
+        service = BroadcastDeliveryService(
+            lambda: SqlAlchemyUnitOfWork(database.sessions),
+            lease_seconds=settings.reminder_lease_seconds,
+            max_attempts=max_attempts,
+        )
+        worker_id = worker_identity()
+        delay = 1 / max(1, messages_per_second)
+        log_event(logger, logging.INFO, "broadcast.worker_started")
         async with Bot(
             token=settings.bot_token.get_secret_value(),
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         ) as bot:
             while True:
-                recipient_ids = await service.claim_due(
-                    worker_id, limit=settings.reminder_batch_size
+                processed = await run_delivery_cycle(
+                    bot,
+                    service,
+                    worker_id,
+                    batch_size=settings.reminder_batch_size,
+                    delay_seconds=delay,
                 )
-                if not recipient_ids:
+                await heartbeat.beat()
+                if processed == 0:
                     await asyncio.sleep(settings.reminder_poll_interval_seconds)
-                    continue
-                for recipient_id in recipient_ids:
-                    delivery = await service.prepare_delivery(recipient_id, worker_id)
-                    if delivery is not None:
-                        await process_delivery(bot, service, delivery, worker_id)
-                        await asyncio.sleep(delay)
     finally:
         await database.close()
         log_event(logger, logging.INFO, "broadcast.worker_stopped")
@@ -173,9 +201,18 @@ def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     try:
+        initialize_observability(settings)
         asyncio.run(run_worker(settings))
     except RuntimeConfigurationError as exc:
         log_event(logger, logging.CRITICAL, "configuration.invalid", missing=exc.missing)
+        raise SystemExit(2) from exc
+    except ObservabilityConfigurationError as exc:
+        log_event(
+            logger,
+            logging.CRITICAL,
+            "observability.configuration_invalid",
+            error_code="sentry_initialization_failed",
+        )
         raise SystemExit(2) from exc
     except KeyboardInterrupt:
         pass

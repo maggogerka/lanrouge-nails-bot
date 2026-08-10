@@ -45,6 +45,7 @@ def settings() -> BusinessSettings:
 
 def build_uow() -> MagicMock:
     unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=5))
@@ -76,6 +77,8 @@ def create_values(
 def persisted_window(status: AvailabilityWindowStatus) -> AvailabilityWindow:
     return AvailabilityWindow(
         id=7,
+        business_id=1,
+        staff_member_id=1,
         start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
         end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
         status=status,
@@ -115,7 +118,9 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
 
     assert created.start_at == datetime(2026, 7, 23, 7, tzinfo=UTC)
     assert created.end_at == datetime(2026, 7, 23, 10, 30, tzinfo=UTC)
-    unit_of_work.windows.lock_local_date.assert_awaited_once_with(date(2026, 7, 23))
+    unit_of_work.windows.lock_local_date.assert_awaited_once_with(
+        date(2026, 7, 23), staff_member_id=1
+    )
     unit_of_work.windows.list_active_between.assert_awaited_once()
     audit = unit_of_work.audit.add.await_args.kwargs
     assert audit["action"] == "availability_window.created"

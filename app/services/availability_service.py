@@ -16,12 +16,8 @@ from app.domain.availability import (
     validate_capacity_and_spacing,
 )
 from app.domain.enums import AvailabilityWindowStatus
-from app.domain.errors import (
-    AuthorizationError,
-    EntityNotFoundError,
-    WindowInUseError,
-    WindowStateError,
-)
+from app.domain.errors import EntityNotFoundError, WindowInUseError, WindowStateError
+from app.domain.tenancy import DEFAULT_STAFF_MEMBER_ID
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.availability import (
     AvailabilityWindowCreate,
@@ -30,6 +26,7 @@ from app.schemas.availability import (
     AvailabilityWindowView,
 )
 from app.schemas.service import AdminActor
+from app.services.appointment_common import ensure_admin
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -113,6 +110,8 @@ class AvailabilityService:
 
             window = await unit_of_work.windows.add(
                 AvailabilityWindow(
+                    business_id=unit_of_work.business_id,
+                    staff_member_id=DEFAULT_STAFF_MEMBER_ID,
                     start_at=start_at,
                     end_at=end_at,
                     status=values.status,
@@ -238,6 +237,7 @@ class AvailabilityService:
                 local_date=local_date,
                 start_at=window.start_at,
                 end_at=window.end_at,
+                staff_member_id=window.staff_member_id,
                 exclude_id=window.id,
             )
             window.status = AvailabilityWindowStatus.OPEN
@@ -296,13 +296,15 @@ class AvailabilityService:
         local_date: date,
         start_at: datetime,
         end_at: datetime,
+        staff_member_id: int = DEFAULT_STAFF_MEMBER_ID,
         exclude_id: int | None = None,
     ) -> None:
-        await unit_of_work.windows.lock_local_date(local_date)
+        await unit_of_work.windows.lock_local_date(local_date, staff_member_id=staff_member_id)
         day_start, day_end = utc_day_bounds(local_date, settings.timezone)
         existing = await unit_of_work.windows.list_active_between(
             day_start,
             day_end,
+            staff_member_id=staff_member_id,
             exclude_id=exclude_id,
             for_update=True,
         )
@@ -333,8 +335,7 @@ class AvailabilityService:
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Administrative access denied")
+        ensure_admin(actor, self._admin_telegram_ids)
 
     @staticmethod
     async def _settings(unit_of_work: SqlAlchemyUnitOfWork) -> BusinessSettings:

@@ -29,6 +29,9 @@ def build_uow() -> MagicMock:
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.staff.list_active_by_roles = AsyncMock(
+        return_value=[(SimpleNamespace(), SimpleNamespace(id=9, is_blocked=False))]
+    )
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.notifications.cancel_unsent_by_type = AsyncMock(return_value=3)

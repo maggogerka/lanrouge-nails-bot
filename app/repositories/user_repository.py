@@ -8,17 +8,19 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import User
+from app.database.models import BusinessClient, User
 from app.domain.enums import UserRole
+from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.repositories.scoped import TenantScopedRepository
 from app.schemas.booking import ClientActor
 from app.schemas.service import AdminActor
 
 
-class UserRepository:
+class UserRepository(TenantScopedRepository):
     """Create or refresh the internal record for an authorized administrator."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session: AsyncSession, business_id: int = DEFAULT_BUSINESS_ID) -> None:
+        super().__init__(session, business_id)
 
     async def get_by_telegram_id(
         self,
@@ -26,14 +28,30 @@ class UserRepository:
         *,
         for_update: bool = False,
     ) -> User | None:
-        statement = select(User).where(User.telegram_id == telegram_id)
+        statement = (
+            select(User)
+            .join(BusinessClient, BusinessClient.user_id == User.id)
+            .where(
+                User.telegram_id == telegram_id,
+                BusinessClient.business_id == self.business_id,
+                BusinessClient.is_active.is_(True),
+                BusinessClient.anonymized_at.is_(None),
+            )
+        )
         if for_update:
             statement = statement.with_for_update()
         result = await self._session.scalars(statement)
         return result.one_or_none()
 
     async def get_by_id(self, user_id: int, *, for_update: bool = False) -> User | None:
-        statement = select(User).where(User.id == user_id)
+        statement = (
+            select(User)
+            .join(BusinessClient, BusinessClient.user_id == User.id)
+            .where(
+                User.id == user_id,
+                BusinessClient.business_id == self.business_id,
+            )
+        )
         if for_update:
             statement = statement.with_for_update()
         result = await self._session.scalars(statement)
@@ -61,12 +79,23 @@ class UserRepository:
             .returning(User)
         )
         result = await self._session.scalars(statement)
-        return result.one()
+        user = result.one()
+        await self._ensure_business_client(user.id)
+        return user
 
     async def list_by_telegram_ids(self, telegram_ids: frozenset[int]) -> list[User]:
         if not telegram_ids:
             return []
-        result = await self._session.scalars(select(User).where(User.telegram_id.in_(telegram_ids)))
+        result = await self._session.scalars(
+            select(User)
+            .join(BusinessClient, BusinessClient.user_id == User.id)
+            .where(
+                User.telegram_id.in_(telegram_ids),
+                BusinessClient.business_id == self.business_id,
+                BusinessClient.is_active.is_(True),
+                BusinessClient.anonymized_at.is_(None),
+            )
+        )
         return list(result.all())
 
     async def update_booking_profile(self, user: User, *, name: str, phone: str) -> None:
@@ -113,4 +142,12 @@ class UserRepository:
             user.last_name = actor.last_name
             user.role = UserRole.ADMIN
         await self._session.flush()
+        await self._ensure_business_client(user.id)
         return user
+
+    async def _ensure_business_client(self, user_id: int) -> None:
+        await self._session.execute(
+            insert(BusinessClient)
+            .values(business_id=self.business_id, user_id=user_id)
+            .on_conflict_do_nothing(index_elements=["business_id", "user_id"])
+        )

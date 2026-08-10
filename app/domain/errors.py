@@ -9,6 +9,10 @@ class AuthorizationError(DomainError):
     """The actor is not allowed to execute an administrative use case."""
 
 
+class FeatureDisabledError(DomainError):
+    """A disabled module was called directly despite being hidden in the UI."""
+
+
 class EntityNotFoundError(DomainError):
     """A requested domain entity does not exist."""
 

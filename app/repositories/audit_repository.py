@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import AuditLog
+from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.repositories.scoped import TenantScopedRepository
 
 _SENSITIVE_KEY_PARTS = (
     "database_url",
@@ -36,11 +38,11 @@ def _safe_changes(value: object, *, key: str = "") -> object:
     return value
 
 
-class AuditRepository:
+class AuditRepository(TenantScopedRepository):
     """Append safe changes to the audit log."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session: AsyncSession, business_id: int = DEFAULT_BUSINESS_ID) -> None:
+        super().__init__(session, business_id)
 
     async def add(
         self,
@@ -51,8 +53,10 @@ class AuditRepository:
         entity_id: str,
         changes: dict[str, object],
         correlation_id: str | None,
+        business_id: int | None = None,
     ) -> AuditLog:
         entry = AuditLog(
+            business_id=business_id or self.business_id,
             actor_user_id=actor_user_id,
             action=action,
             entity_type=entity_type,

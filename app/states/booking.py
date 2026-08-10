@@ -5,6 +5,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class BookingFlow(StatesGroup):
     service = State()
+    master = State()
     date = State()
     window = State()
     name = State()

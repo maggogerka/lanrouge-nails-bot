@@ -9,8 +9,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.database.models import (
+    Appointment,
+    AvailabilityWindow,
+    BusinessSettings,
+    StaffMember,
+    StaffServiceAssignment,
+    User,
+)
+from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, StaffRole
 from app.domain.errors import BookingConflictError, CancellationDeadlineError
 from app.schemas.booking import ClientActor
 from app.services.reschedule_service import RescheduleService
@@ -42,6 +49,8 @@ def settings() -> BusinessSettings:
 def old_appointment() -> Appointment:
     return Appointment(
         id=11,
+        business_id=1,
+        staff_member_id=1,
         client_id=5,
         window_id=7,
         service_id=3,
@@ -60,6 +69,8 @@ def windows(*, old_hours: int = 72) -> tuple[AvailabilityWindow, AvailabilityWin
     return (
         AvailabilityWindow(
             id=7,
+            business_id=1,
+            staff_member_id=1,
             start_at=old_start,
             end_at=old_start + timedelta(minutes=210),
             status=AvailabilityWindowStatus.BOOKED,
@@ -67,6 +78,8 @@ def windows(*, old_hours: int = 72) -> tuple[AvailabilityWindow, AvailabilityWin
         ),
         AvailabilityWindow(
             id=8,
+            business_id=1,
+            staff_member_id=1,
             start_at=new_start,
             end_at=new_start + timedelta(minutes=210),
             status=AvailabilityWindowStatus.OPEN,
@@ -90,6 +103,7 @@ def build_uow(
         phone="+79991234567",
     )
     unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.settings.get = AsyncMock(return_value=settings())
@@ -110,6 +124,29 @@ def build_uow(
     unit_of_work.users.get_by_telegram_id = AsyncMock(return_value=client)
     unit_of_work.users.list_by_telegram_ids = AsyncMock(
         return_value=[SimpleNamespace(id=9, is_blocked=False)]
+    )
+    unit_of_work.staff.list_active_by_roles = AsyncMock(
+        return_value=[(SimpleNamespace(), SimpleNamespace(id=9, is_blocked=False))]
+    )
+    unit_of_work.staff.get_by_id = AsyncMock(
+        return_value=StaffMember(
+            id=1,
+            business_id=1,
+            display_name="Основной мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+    )
+    unit_of_work.service_assignments.get_assignment = AsyncMock(
+        return_value=StaffServiceAssignment(
+            id=1,
+            business_id=1,
+            staff_member_id=1,
+            service_id=3,
+            online_booking_enabled=True,
+            is_active=True,
+        )
     )
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()

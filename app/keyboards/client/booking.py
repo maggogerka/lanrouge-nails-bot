@@ -13,7 +13,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.schemas.booking import BookingWindowView
+from app.schemas.booking import BookableMasterView, BookingWindowView
 from app.schemas.service import ServiceView
 
 BOOKING_BACK_TEXT = "⬅️ Назад"
@@ -54,7 +54,36 @@ def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def dates_keyboard(dates: list[date]) -> InlineKeyboardMarkup:
+def masters_keyboard(masters: list[BookableMasterView]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="✨ Любой мастер",
+                callback_data=BookingCallback(action="master", object_id=0).pack(),
+            )
+        ],
+        *[
+            [
+                InlineKeyboardButton(
+                    text=master.display_name,
+                    callback_data=BookingCallback(
+                        action="master",
+                        object_id=master.id,
+                    ).pack(),
+                )
+            ]
+            for master in masters
+        ],
+    ]
+    rows.extend(_inline_navigation("back_services"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def dates_keyboard(
+    dates: list[date],
+    *,
+    back_action: str = "back_services",
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -67,7 +96,7 @@ def dates_keyboard(dates: list[date]) -> InlineKeyboardMarkup:
         ]
         for local_date in dates
     ]
-    rows.extend(_inline_navigation("back_services"))
+    rows.extend(_inline_navigation(back_action))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -78,10 +107,11 @@ def windows_keyboard(
     rows = []
     for window in windows:
         local = window.start_at.astimezone(ZoneInfo(window.timezone))
+        master_suffix = f" · {window.master_name}" if window.master_name else ""
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=local.strftime("%H:%M"),
+                    text=f"{local:%H:%M}{master_suffix}",
                     callback_data=BookingCallback(
                         action="window",
                         object_id=window.id,
@@ -166,13 +196,22 @@ def booking_navigation_keyboard(*, request_contact: bool = False) -> ReplyKeyboa
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=True)
 
 
-def appointment_links_keyboard(map_url: str, master_url: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def appointment_links_keyboard(
+    map_url: str,
+    master_url: str,
+    *,
+    payment_url: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if payment_url is not None:
+        rows.append([InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)])
+    rows.extend(
+        [
             [InlineKeyboardButton(text="📍 Открыть на карте", url=map_url)],
             [InlineKeyboardButton(text="Написать мастеру", url=master_url)],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _inline_navigation(action: str, object_id: int = 0) -> list[list[InlineKeyboardButton]]:

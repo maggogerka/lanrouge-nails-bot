@@ -9,6 +9,8 @@ from app.database.models import Broadcast, BroadcastRecipient
 from app.domain.enums import BroadcastRecipientStatus, BroadcastStatus
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.broadcast import BroadcastDelivery, BroadcastMediaView
+from app.schemas.features import FeatureName
+from app.services.feature_guard import is_feature_enabled
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -40,6 +42,8 @@ class BroadcastDeliveryService:
     ) -> list[int]:
         current = self._aware_now(now)
         async with self._unit_of_work_factory() as uow:
+            if not await is_feature_enabled(uow, FeatureName.BROADCASTS):
+                return []
             recipients = await uow.broadcasts.claim_due_recipients(
                 now=current,
                 lease_expired_before=current - timedelta(seconds=self._lease_seconds),
@@ -64,6 +68,16 @@ class BroadcastDeliveryService:
             if recipient is None:
                 return None
             broadcast = await uow.broadcasts.get(recipient.broadcast_id)
+            if not await is_feature_enabled(uow, FeatureName.BROADCASTS):
+                await self._finish(
+                    uow,
+                    recipient,
+                    BroadcastRecipientStatus.SKIPPED,
+                    "feature_disabled",
+                )
+                await self._finalize(uow, broadcast)
+                await uow.commit()
+                return None
             user = await uow.users.get_by_id(recipient.user_id)
             if broadcast is None or user is None:
                 await self._finish(

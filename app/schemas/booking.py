@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from secrets import token_urlsafe
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from app.domain.booking import normalize_phone
-from app.domain.enums import MediaType
+from app.domain.enums import AppointmentStatus, MediaType, PaymentMode, PaymentStatus
 from app.schemas.service import ServiceView
 
 
@@ -56,6 +57,30 @@ class BookingWindowView(BaseModel):
     start_at: datetime
     end_at: datetime
     timezone: str
+    staff_member_id: int = 1
+    master_name: str | None = None
+    price: Decimal | None = None
+    duration_min_minutes: int | None = None
+    duration_max_minutes: int | None = None
+    prepayment_amount: Decimal | None = None
+
+
+class BookableMasterView(BaseModel):
+    """Client-safe master option assigned to one selected service."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: Annotated[int, Field(gt=0)]
+    display_name: Annotated[str, Field(min_length=1, max_length=255)]
+    specialization: str | None = None
+    telegram_photo_file_id: str | None = None
+
+
+class BookingMasterOptions(BaseModel):
+    """Available masters plus the central selection switch."""
+
+    selection_enabled: bool
+    masters: list[BookableMasterView]
 
 
 class BookingAvailability(BaseModel):
@@ -89,12 +114,21 @@ class BookingRequest(BaseModel):
 
     service_id: Annotated[int, Field(gt=0)]
     window_id: Annotated[int, Field(gt=0)]
+    staff_member_id: Annotated[int, Field(gt=0)] | None = None
     client_name: Annotated[str, Field(min_length=1, max_length=255)]
     phone: Annotated[str, Field(max_length=32)]
     client_comment: Annotated[str, Field(max_length=2000)] | None = None
     design_reference_id: Annotated[int, Field(gt=0)] | None = None
     reference_media: Annotated[list[ReferenceMediaDraft], Field(max_length=10)] = Field(
         default_factory=list
+    )
+    checkout_idempotency_key: Annotated[str, Field(min_length=16, max_length=128)] = Field(
+        default_factory=lambda: f"tg-booking:{token_urlsafe(24)}",
+        repr=False,
+    )
+    reservation_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(token_urlsafe(32)),
+        repr=False,
     )
 
     @field_validator("client_name", mode="before")
@@ -115,12 +149,24 @@ class BookingRequest(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+    @field_validator("checkout_idempotency_key")
+    @classmethod
+    def validate_checkout_idempotency_key(cls, value: str) -> str:
+        if (
+            not value.isascii()
+            or not value[0].isalnum()
+            or any(not (character.isalnum() or character in "._:-") for character in value)
+        ):
+            raise ValueError("checkout idempotency key contains unsupported characters")
+        return value
+
 
 class BookingReceipt(BaseModel):
     """Committed booking details safe to render to the client or administrator."""
 
     appointment_id: int
     service_name: str
+    master_name: str | None = None
     price: Decimal
     duration_min_minutes: int
     duration_max_minutes: int
@@ -134,3 +180,12 @@ class BookingReceipt(BaseModel):
     phone: str
     design_title: str | None = None
     reference_media: list[ReferenceMediaView] = Field(default_factory=list)
+    appointment_status: AppointmentStatus = AppointmentStatus.CONFIRMED
+    payment_mode: PaymentMode = PaymentMode.DISABLED
+    payment_id: int | None = None
+    payment_status: PaymentStatus | None = None
+    payment_amount: Decimal | None = None
+    payment_currency: str | None = None
+    payment_confirmation_url: str | None = None
+    reservation_expires_at: datetime | None = None
+    manual_payment_instructions: str | None = None

@@ -20,6 +20,7 @@ def actor(telegram_id: int = 101) -> AdminActor:
 
 def build_uow() -> MagicMock:
     unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=5))
@@ -27,6 +28,7 @@ def build_uow() -> MagicMock:
     unit_of_work.services.get = AsyncMock(return_value=None)
     unit_of_work.services.has_appointments = AsyncMock(return_value=False)
     unit_of_work.services.delete = AsyncMock()
+    unit_of_work.service_assignments.add_assignment = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()

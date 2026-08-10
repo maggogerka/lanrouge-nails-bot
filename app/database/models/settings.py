@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Integer, SmallInteger, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,12 +22,12 @@ from app.domain.enums import PortfolioDisplayMode
 
 
 class BusinessSettings(TimestampMixin, Base):
-    """Current mutable rules for the single-studio MVP."""
+    """Current mutable booking rules for one explicitly scoped business."""
 
     __tablename__ = "business_settings"
     __table_args__ = (
-        CheckConstraint("id = 1", name="singleton"),
-        CheckConstraint("booking_horizon_days > 0", name="booking_horizon_positive"),
+        UniqueConstraint("business_id", name="business_settings_business"),
+        CheckConstraint("booking_horizon_days BETWEEN 1 AND 365", name="booking_horizon_valid"),
         CheckConstraint(
             "cancellation_deadline_hours > 0",
             name="cancellation_deadline_positive",
@@ -93,6 +102,9 @@ class BusinessSettings(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     business_name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     address: Mapped[str] = mapped_column(String(500), nullable=False)

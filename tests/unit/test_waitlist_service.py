@@ -94,6 +94,7 @@ def uow() -> MagicMock:
     result.commit = AsyncMock()
     result.session.flush = AsyncMock()
     result.audit.add = AsyncMock()
+    result.features.get = AsyncMock(return_value=SimpleNamespace(waitlist=True))
     return result
 
 
@@ -246,3 +247,33 @@ async def test_delivery_claim_uses_restart_safe_lease() -> None:
     assert unit_of_work.waitlist.claim_due_notifications.await_args.kwargs[
         "lease_expired_before"
     ] == NOW - timedelta(seconds=120)
+
+
+@pytest.mark.asyncio
+async def test_disabled_waitlist_cancels_claim_before_loading_client_data() -> None:
+    unit_of_work = uow()
+    job = WaitlistNotification(
+        id=21,
+        waitlist_entry_id=12,
+        window_id=7,
+        status=WaitlistNotificationStatus.PROCESSING,
+        scheduled_at=NOW,
+        available_at=NOW,
+        attempts=1,
+        locked_at=NOW,
+        locked_by="worker",
+    )
+    unit_of_work.waitlist.get_notification = AsyncMock(return_value=job)
+    unit_of_work.waitlist.get = AsyncMock()
+    unit_of_work.features.get.return_value.waitlist = False
+    delivery = WaitlistDeliveryService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    assert await delivery.prepare_delivery(21, "worker", now=NOW) is None
+
+    assert job.status is WaitlistNotificationStatus.CANCELLED
+    assert job.last_error == "feature_disabled"
+    unit_of_work.waitlist.get.assert_not_awaited()

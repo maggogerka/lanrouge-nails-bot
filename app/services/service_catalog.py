@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from decimal import Decimal
 
-from app.database.models import Service
-from app.domain.errors import AuthorizationError, EntityNotFoundError, ServiceInUseError
+from app.database.models import Service, StaffServiceAssignment
+from app.domain.errors import EntityNotFoundError, ServiceInUseError
+from app.domain.tenancy import DEFAULT_STAFF_MEMBER_ID
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.service import AdminActor, ServiceCreate, ServicePatch, ServiceView
+from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -48,11 +50,21 @@ class ServiceCatalog:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             service = await unit_of_work.services.add(
                 Service(
+                    business_id=unit_of_work.business_id,
                     name=values.name,
                     description=values.description,
                     price=values.price,
                     duration_min_minutes=values.duration_min_minutes,
                     duration_max_minutes=values.duration_max_minutes,
+                    is_active=True,
+                )
+            )
+            await unit_of_work.service_assignments.add_assignment(
+                StaffServiceAssignment(
+                    business_id=unit_of_work.business_id,
+                    staff_member_id=DEFAULT_STAFF_MEMBER_ID,
+                    service_id=service.id,
+                    online_booking_enabled=True,
                     is_active=True,
                 )
             )
@@ -181,8 +193,7 @@ class ServiceCatalog:
             await unit_of_work.commit()
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Administrative access denied")
+        ensure_admin(actor, self._admin_telegram_ids)
 
     @staticmethod
     async def _get_required(

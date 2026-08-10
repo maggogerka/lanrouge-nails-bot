@@ -39,6 +39,7 @@ from app.schemas.broadcast import (
 )
 from app.schemas.pagination import PageRequest
 from app.services.broadcast_service import BroadcastService
+from app.services.presentation_service import PresentationService
 from app.states.broadcast import BroadcastFlow
 from app.workers.broadcasts import send_delivery
 
@@ -46,15 +47,27 @@ router = Router(name="admin.broadcasts")
 
 
 @router.message(F.text == ADMIN_BROADCASTS_TEXT)
-async def show_broadcasts_menu(message: Message) -> None:
-    await message.answer("Рассылки lanrouge nails", reply_markup=broadcasts_menu_keyboard())
+async def show_broadcasts_menu(
+    message: Message,
+    presentation_service: PresentationService,
+) -> None:
+    business = await presentation_service.get_business()
+    await message.answer(
+        f"Рассылки · {escape(business.display_name)}",
+        reply_markup=broadcasts_menu_keyboard(),
+    )
 
 
 @router.callback_query(BroadcastCallback.filter(F.action == "menu"))
-async def show_broadcasts_menu_callback(callback: CallbackQuery) -> None:
+async def show_broadcasts_menu_callback(
+    callback: CallbackQuery,
+    presentation_service: PresentationService,
+) -> None:
     if isinstance(callback.message, Message):
+        business = await presentation_service.get_business()
         await callback.message.answer(
-            "Рассылки lanrouge nails", reply_markup=broadcasts_menu_keyboard()
+            f"Рассылки · {escape(business.display_name)}",
+            reply_markup=broadcasts_menu_keyboard(),
         )
     await callback.answer()
 

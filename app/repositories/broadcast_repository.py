@@ -14,6 +14,7 @@ from app.database.models import (
     Broadcast,
     BroadcastMedia,
     BroadcastRecipient,
+    BusinessClient,
     MarketingEvent,
     User,
     UserClientTag,
@@ -23,21 +24,25 @@ from app.domain.enums import (
     BroadcastAudienceType,
     BroadcastRecipientStatus,
     BroadcastStatus,
-    UserRole,
 )
+from app.repositories.scoped import TenantScopedRepository
 
 
-class BroadcastRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+class BroadcastRepository(TenantScopedRepository):
+    def __init__(self, session: AsyncSession, business_id: int) -> None:
+        super().__init__(session, business_id)
 
     async def get(self, broadcast_id: int, *, for_update: bool = False) -> Broadcast | None:
-        statement = select(Broadcast).where(Broadcast.id == broadcast_id)
+        statement = select(Broadcast).where(
+            Broadcast.id == broadcast_id,
+            Broadcast.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         return (await self._session.scalars(statement)).one_or_none()
 
     async def add(self, broadcast: Broadcast) -> Broadcast:
+        self._require_business(broadcast.business_id)
         self._session.add(broadcast)
         await self._session.flush()
         return broadcast
@@ -49,7 +54,7 @@ class BroadcastRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[Broadcast], int]:
-        filters = []
+        filters = [Broadcast.business_id == self.business_id]
         if status is not None:
             filters.append(Broadcast.status == status)
         rows = (
@@ -65,13 +70,31 @@ class BroadcastRepository:
         )
 
     async def add_media(self, media: list[BroadcastMedia]) -> None:
+        broadcast_ids = {item.broadcast_id for item in media}
+        if broadcast_ids:
+            allowed = set(
+                (
+                    await self._session.scalars(
+                        select(Broadcast.id).where(
+                            Broadcast.id.in_(broadcast_ids),
+                            Broadcast.business_id == self.business_id,
+                        )
+                    )
+                ).all()
+            )
+            if allowed != broadcast_ids:
+                raise ValueError("broadcast media parent belongs to another business")
         self._session.add_all(media)
         await self._session.flush()
 
     async def list_media(self, broadcast_id: int) -> list[BroadcastMedia]:
         result = await self._session.scalars(
             select(BroadcastMedia)
-            .where(BroadcastMedia.broadcast_id == broadcast_id)
+            .join(Broadcast, Broadcast.id == BroadcastMedia.broadcast_id)
+            .where(
+                BroadcastMedia.broadcast_id == broadcast_id,
+                Broadcast.business_id == self.business_id,
+            )
             .order_by(BroadcastMedia.position, BroadcastMedia.id)
         )
         return list(result.all())
@@ -85,8 +108,29 @@ class BroadcastRepository:
     ) -> int:
         if not user_ids:
             return 0
+        broadcast_exists = await self._session.scalar(
+            select(Broadcast.id).where(
+                Broadcast.id == broadcast_id,
+                Broadcast.business_id == self.business_id,
+            )
+        )
+        eligible_ids = set(
+            (
+                await self._session.scalars(
+                    select(BusinessClient.user_id).where(
+                        BusinessClient.business_id == self.business_id,
+                        BusinessClient.user_id.in_(user_ids),
+                        BusinessClient.is_active.is_(True),
+                        BusinessClient.anonymized_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        if broadcast_exists is None or eligible_ids != set(user_ids):
+            raise ValueError("broadcast or recipient belongs to another business")
         values = [
             {
+                "business_id": self.business_id,
                 "broadcast_id": broadcast_id,
                 "user_id": user_id,
                 "scheduled_at": scheduled_at,
@@ -110,7 +154,9 @@ class BroadcastRepository:
         now: datetime,
     ) -> list[int]:
         filters = [
-            User.role == UserRole.CLIENT,
+            BusinessClient.business_id == self.business_id,
+            BusinessClient.is_active.is_(True),
+            BusinessClient.anonymized_at.is_(None),
             User.marketing_consent_at.is_not(None),
             User.marketing_unsubscribed_at.is_(None),
             User.is_blocked.is_(False),
@@ -119,6 +165,7 @@ class BroadcastRepository:
         completed_visit = exists(
             select(Appointment.id).where(
                 Appointment.client_id == User.id,
+                Appointment.business_id == self.business_id,
                 Appointment.status == AppointmentStatus.COMPLETED,
             )
         )
@@ -127,10 +174,12 @@ class BroadcastRepository:
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
             .where(
                 Appointment.client_id == User.id,
+                Appointment.business_id == self.business_id,
                 Appointment.status.in_(
                     (AppointmentStatus.CONFIRMED, AppointmentStatus.CLIENT_CONFIRMED)
                 ),
                 AvailabilityWindow.start_at > now,
+                AvailabilityWindow.business_id == self.business_id,
             )
         )
         if bool(parameters.get("completed_only")):
@@ -143,6 +192,7 @@ class BroadcastRepository:
                 exists(
                     select(UserClientTag.user_id).where(
                         UserClientTag.user_id == User.id,
+                        UserClientTag.business_id == self.business_id,
                         UserClientTag.tag_id == tag_id,
                     )
                 )
@@ -153,6 +203,7 @@ class BroadcastRepository:
                 exists(
                     select(Appointment.id).where(
                         Appointment.client_id == User.id,
+                        Appointment.business_id == self.business_id,
                         Appointment.service_id == service_id,
                         Appointment.status == AppointmentStatus.COMPLETED,
                     )
@@ -167,6 +218,7 @@ class BroadcastRepository:
                     ~exists(
                         select(Appointment.id).where(
                             Appointment.client_id == User.id,
+                            Appointment.business_id == self.business_id,
                             Appointment.status == AppointmentStatus.COMPLETED,
                             Appointment.completed_at > cutoff,
                         )
@@ -177,13 +229,21 @@ class BroadcastRepository:
             raw_ids = parameters.get("user_ids", [])
             user_ids = [int(value) for value in raw_ids] if isinstance(raw_ids, list) else []
             filters.append(User.id.in_(user_ids))
-        result = await self._session.scalars(select(User.id).where(*filters).order_by(User.id))
+        result = await self._session.scalars(
+            select(User.id)
+            .join(BusinessClient, BusinessClient.user_id == User.id)
+            .where(*filters)
+            .order_by(User.id)
+        )
         return list(result.all())
 
     async def get_recipient(
         self, recipient_id: int, *, for_update: bool = False
     ) -> BroadcastRecipient | None:
-        statement = select(BroadcastRecipient).where(BroadcastRecipient.id == recipient_id)
+        statement = select(BroadcastRecipient).where(
+            BroadcastRecipient.id == recipient_id,
+            BroadcastRecipient.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         return (await self._session.scalars(statement)).one_or_none()
@@ -194,6 +254,7 @@ class BroadcastRepository:
         return (
             await self._session.scalars(
                 select(BroadcastRecipient).where(
+                    BroadcastRecipient.business_id == self.business_id,
                     BroadcastRecipient.broadcast_id == broadcast_id,
                     BroadcastRecipient.user_id == user_id,
                 )
@@ -212,6 +273,8 @@ class BroadcastRepository:
             select(BroadcastRecipient)
             .join(Broadcast, Broadcast.id == BroadcastRecipient.broadcast_id)
             .where(
+                Broadcast.business_id == self.business_id,
+                BroadcastRecipient.business_id == self.business_id,
                 Broadcast.status.in_(
                     (
                         BroadcastStatus.SCHEDULED,
@@ -255,6 +318,7 @@ class BroadcastRepository:
                 await self._session.scalars(
                     select(BroadcastRecipient)
                     .where(
+                        BroadcastRecipient.business_id == self.business_id,
                         BroadcastRecipient.broadcast_id == broadcast_id,
                         BroadcastRecipient.status.in_(
                             (
@@ -279,12 +343,16 @@ class BroadcastRepository:
     async def status_counts(self, broadcast_id: int) -> dict[BroadcastRecipientStatus, int]:
         rows = await self._session.execute(
             select(BroadcastRecipient.status, func.count(BroadcastRecipient.id))
-            .where(BroadcastRecipient.broadcast_id == broadcast_id)
+            .where(
+                BroadcastRecipient.business_id == self.business_id,
+                BroadcastRecipient.broadcast_id == broadcast_id,
+            )
             .group_by(BroadcastRecipient.status)
         )
         return {status: int(count) for status, count in rows.all()}
 
     async def add_event(self, event: MarketingEvent) -> MarketingEvent:
+        self._require_business(event.business_id)
         self._session.add(event)
         await self._session.flush()
         return event

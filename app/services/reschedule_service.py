@@ -18,6 +18,7 @@ from app.database.models import (
 )
 from app.domain.appointments import (
     ensure_active_appointment,
+    ensure_appointment_transition,
     ensure_client_change_deadline,
 )
 from app.domain.availability import utc_day_bounds
@@ -35,6 +36,7 @@ from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import RescheduleAvailability
 from app.schemas.booking import BookingReceipt, BookingWindowView, ClientActor
 from app.schemas.service import AdminActor
+from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import appointment_view, ensure_admin, ensure_owner
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
@@ -175,14 +177,22 @@ class RescheduleService:
                     raise AppointmentStateError("Выберите другое окно для переноса.")
 
                 zone = ZoneInfo(settings.timezone)
-                local_dates = sorted(
+                lock_keys = sorted(
                     {
-                        old_initial.start_at.astimezone(zone).date(),
-                        new_initial.start_at.astimezone(zone).date(),
+                        (
+                            old_initial.staff_member_id,
+                            old_initial.start_at.astimezone(zone).date(),
+                        ),
+                        (
+                            new_initial.staff_member_id,
+                            new_initial.start_at.astimezone(zone).date(),
+                        ),
                     }
                 )
-                for local_date in local_dates:
-                    await unit_of_work.windows.lock_local_date(local_date)
+                for staff_member_id, local_date in lock_keys:
+                    await unit_of_work.windows.lock_local_date(
+                        local_date, staff_member_id=staff_member_id
+                    )
                 locked_windows = await unit_of_work.windows.get_many_for_update(
                     {old_initial.id, new_initial.id}
                 )
@@ -218,6 +228,29 @@ class RescheduleService:
                 if (
                     new_window.status is not AvailabilityWindowStatus.OPEN
                     or new_window.start_at <= current_time
+                    or new_window.business_id != unit_of_work.business_id
+                ):
+                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+                master = await unit_of_work.staff.get_by_id(
+                    unit_of_work.business_id,
+                    new_window.staff_member_id,
+                    for_update=True,
+                )
+                assignment = await unit_of_work.service_assignments.get_assignment(
+                    unit_of_work.business_id,
+                    new_window.staff_member_id,
+                    appointment.service_id,
+                    for_update=True,
+                )
+                if (
+                    appointment.business_id != unit_of_work.business_id
+                    or old_window.business_id != unit_of_work.business_id
+                    or master is None
+                    or not master.is_active
+                    or not master.is_bookable
+                    or assignment is None
+                    or not assignment.is_active
+                    or not assignment.online_booking_enabled
                 ):
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 new_local_date = validate_bookable_date(
@@ -238,12 +271,15 @@ class RescheduleService:
                     day_start,
                     day_end,
                     exclude_appointment_id=appointment.id,
+                    staff_member_id=new_window.staff_member_id,
                 )
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
 
                 new_appointment = await unit_of_work.appointments.add(
                     Appointment(
+                        business_id=unit_of_work.business_id,
+                        staff_member_id=new_window.staff_member_id,
                         client_id=appointment.client_id,
                         window_id=new_window.id,
                         service_id=appointment.service_id,
@@ -251,14 +287,21 @@ class RescheduleService:
                         design_title_snapshot=appointment.design_title_snapshot,
                         rescheduled_from_id=appointment.id,
                         service_name_snapshot=appointment.service_name_snapshot,
+                        master_name_snapshot=master.display_name,
                         price_snapshot=appointment.price_snapshot,
+                        prepayment_snapshot=appointment.prepayment_snapshot,
+                        currency_snapshot=appointment.currency_snapshot,
+                        payment_mode_snapshot=appointment.payment_mode_snapshot,
                         duration_min_snapshot=appointment.duration_min_snapshot,
                         duration_max_snapshot=appointment.duration_max_snapshot,
+                        scheduled_start_at=new_window.start_at,
+                        scheduled_end_at=new_window.end_at,
                         status=AppointmentStatus.CONFIRMED,
                         client_comment=appointment.client_comment,
                     )
                 )
                 previous_status = appointment.status
+                ensure_appointment_transition(previous_status, AppointmentStatus.RESCHEDULED)
                 appointment.status = AppointmentStatus.RESCHEDULED
                 old_window.status = (
                     AvailabilityWindowStatus.OPEN
@@ -293,19 +336,21 @@ class RescheduleService:
                     )
                 )
                 await unit_of_work.notifications.cancel_unsent(appointment.id)
-                admin_users = await unit_of_work.users.list_by_telegram_ids(
-                    self._admin_telegram_ids
+                staff_rows = await unit_of_work.staff.list_active_by_roles(
+                    unit_of_work.business_id,
+                    LEGACY_ADMIN_ROLES,
                 )
                 schedules = future_reminder_schedules(
                     start_at=new_window.start_at,
                     now=current_time,
                     offsets_minutes=settings.reminder_offsets_minutes,
                     client_user_id=client.id,
-                    admin_user_ids=[user.id for user in admin_users if not user.is_blocked],
+                    admin_user_ids=[user.id for _, user in staff_rows if not user.is_blocked],
                 )
                 await unit_of_work.notifications.add_all(
                     [
                         NotificationJob(
+                            business_id=unit_of_work.business_id,
                             appointment_id=new_appointment.id,
                             recipient_user_id=schedule.recipient_user_id,
                             notification_type=schedule.notification_type,

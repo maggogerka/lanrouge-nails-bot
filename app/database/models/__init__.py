@@ -13,46 +13,86 @@ from app.database.models.broadcast import (
     BroadcastRecipient,
     MarketingEvent,
 )
+from app.database.models.business import (
+    Business,
+    BusinessClient,
+    BusinessFeatureFlags,
+    StaffInvitation,
+    StaffMember,
+)
+from app.database.models.commerce import (
+    BookingReservation,
+    BusinessPaymentSettings,
+    BusinessSubscription,
+)
 from app.database.models.crm import ClientNote, ClientTag, ConsentHistory, UserClientTag
 from app.database.models.master_profile import MasterProfile, MasterPublicLink
 from app.database.models.notification import NotificationJob
+from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
 from app.database.models.portfolio import (
     PortfolioItem,
     PortfolioItemTag,
     PortfolioMedia,
     PortfolioTag,
 )
+from app.database.models.privacy import (
+    AcquisitionSource,
+    ClientAcquisitionAttribution,
+    DataDeletionRequest,
+    DataDeletionRequestEvent,
+)
 from app.database.models.review import Review, ReviewRevision
+from app.database.models.schedule import StaffScheduleException, StaffWeeklyInterval
 from app.database.models.service import Service
+from app.database.models.service_assignment import ServiceCategory, StaffServiceAssignment
 from app.database.models.settings import BusinessSettings
 from app.database.models.user import User
 from app.database.models.waitlist import WaitlistEntry, WaitlistNotification
 
 __all__ = [
+    "AcquisitionSource",
     "Appointment",
     "AppointmentReferenceMedia",
     "AppointmentStatusHistory",
     "AuditLog",
     "AvailabilityWindow",
+    "BookingReservation",
     "Broadcast",
     "BroadcastMedia",
     "BroadcastRecipient",
+    "Business",
+    "BusinessClient",
+    "BusinessFeatureFlags",
+    "BusinessPaymentSettings",
     "BusinessSettings",
+    "BusinessSubscription",
+    "ClientAcquisitionAttribution",
     "ClientNote",
     "ClientTag",
     "ConsentHistory",
+    "DataDeletionRequest",
+    "DataDeletionRequestEvent",
     "MarketingEvent",
     "MasterProfile",
     "MasterPublicLink",
     "NotificationJob",
+    "Payment",
+    "PaymentWebhookEvent",
     "PortfolioItem",
     "PortfolioItemTag",
     "PortfolioMedia",
     "PortfolioTag",
     "ReferenceCleanupState",
+    "Refund",
     "Review",
     "ReviewRevision",
     "Service",
+    "ServiceCategory",
+    "StaffInvitation",
+    "StaffMember",
+    "StaffScheduleException",
+    "StaffServiceAssignment",
+    "StaffWeeklyInterval",
     "User",
     "UserClientTag",
     "WaitlistEntry",

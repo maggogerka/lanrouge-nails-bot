@@ -16,11 +16,14 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
     __table_args__ = (
-        Index("ix_audit_logs_entity", "entity_type", "entity_id"),
-        Index("ix_audit_logs_created_at", "created_at"),
+        Index("ix_audit_logs_business_entity", "business_id", "entity_type", "entity_id"),
+        Index("ix_audit_logs_business_created_at", "business_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     actor_user_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("users.id", ondelete="RESTRICT"),

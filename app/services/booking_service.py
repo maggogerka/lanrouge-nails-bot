@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -14,12 +16,21 @@ from app.database.models import (
     AppointmentStatusHistory,
     BusinessSettings,
     NotificationJob,
+    Payment,
     Service,
     User,
 )
+from app.database.models.commerce import BusinessPaymentSettings
 from app.domain.availability import utc_day_bounds
 from app.domain.booking import validate_bookable_date, validate_service_fits_window
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, PortfolioStatus
+from app.domain.enums import (
+    AppointmentStatus,
+    AvailabilityWindowStatus,
+    PaymentMode,
+    PaymentStatus,
+    PortfolioStatus,
+    ReservationStatus,
+)
 from app.domain.errors import (
     BookingConflictError,
     BookingLimitError,
@@ -27,10 +38,23 @@ from app.domain.errors import (
     PrivacyConsentRequiredError,
 )
 from app.domain.notifications import future_reminder_schedules
+from app.domain.payments import PaymentStateError, PaymentType
 from app.domain.reference_retention import ReferenceRetentionPolicy
+from app.domain.reservations import ReservationStateError, ReservationToken
+from app.domain.service_offering import (
+    BaseServiceTerms,
+    EffectiveServiceTerms,
+    StaffServiceOverrides,
+    resolve_service_terms,
+)
+from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.payments.providers.base import PaymentProviderError
+from app.payments.providers.manual import ManualPaymentProvider
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import (
+    BookableMasterView,
     BookingAvailability,
+    BookingMasterOptions,
     BookingReceipt,
     BookingRequest,
     BookingWindowView,
@@ -39,12 +63,26 @@ from app.schemas.booking import (
     ReferenceMediaPolicy,
     ReferenceMediaView,
 )
+from app.schemas.features import FeatureName
+from app.schemas.payment import PaymentCreate, PaymentView
+from app.schemas.reservation import ReservationCreate
 from app.schemas.service import AdminActor, ServiceView
+from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import ensure_admin
+from app.services.feature_guard import require_feature
+from app.services.payment_service import PaymentService
+from app.services.reservation_service import ReservationService
+from app.services.subscription_service import SubscriptionService
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
 _WINDOW_TAKEN_MESSAGE = "К сожалению, это время только что заняли. Выберите другое свободное окно."
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckoutResult:
+    receipt: BookingReceipt
+    payment_values: PaymentCreate | None = None
 
 
 class BookingService:
@@ -55,23 +93,68 @@ class BookingService:
         unit_of_work_factory: UnitOfWorkFactory,
         admin_telegram_ids: frozenset[int],
         *,
-        privacy_policy_configured: bool = True,
         reference_retention_policy: ReferenceRetentionPolicy | None = None,
+        payment_services: Mapping[PaymentMode, PaymentService] | None = None,
+        payment_return_url: str | None = None,
+        subscription_service: SubscriptionService | None = None,
+        business_id: int = DEFAULT_BUSINESS_ID,
     ) -> None:
+        if business_id <= 0:
+            raise ValueError("business_id must be positive")
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
-        self._privacy_policy_configured = privacy_policy_configured
         self._reference_retention_policy = reference_retention_policy or ReferenceRetentionPolicy()
+        self._payment_services = dict(
+            payment_services or {PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())}
+        )
+        self._payment_return_url = payment_return_url
+        self._subscription_service = subscription_service
+        self._business_id = business_id
 
     async def list_active_services(self, actor: ClientActor) -> list[ServiceView]:
-        self._ensure_privacy_policy()
         async with self._unit_of_work_factory() as unit_of_work:
             await self._consented_client(unit_of_work, actor.telegram_id)
             services = await unit_of_work.services.list_active()
             return [ServiceView.model_validate(service) for service in services]
 
+    async def list_bookable_masters(
+        self,
+        actor: ClientActor,
+        service_id: int,
+    ) -> BookingMasterOptions:
+        """Return current service assignments and the central selection switch."""
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            await require_feature(unit_of_work, FeatureName.ONLINE_BOOKING)
+            await self._consented_client(unit_of_work, actor.telegram_id)
+            self._active_service(await unit_of_work.services.get(service_id))
+            flags = await unit_of_work.features.get()
+            if flags is None:
+                raise RuntimeError("Business feature settings are missing")
+            rows = await unit_of_work.service_assignments.list_bookable_assignments(
+                unit_of_work.business_id,
+                service_id,
+            )
+            seen: set[int] = set()
+            masters: list[BookableMasterView] = []
+            for _, _, master in rows:
+                if master.id in seen:
+                    continue
+                seen.add(master.id)
+                masters.append(
+                    BookableMasterView(
+                        id=master.id,
+                        display_name=master.display_name,
+                        specialization=master.specialization,
+                        telegram_photo_file_id=master.telegram_photo_file_id,
+                    )
+                )
+            return BookingMasterOptions(
+                selection_enabled=bool(flags.master_selection),
+                masters=masters,
+            )
+
     async def get_business_info(self, actor: ClientActor) -> BusinessInfo:
-        self._ensure_privacy_policy()
         async with self._unit_of_work_factory() as unit_of_work:
             await self._consented_client(unit_of_work, actor.telegram_id)
             settings = await self._settings(unit_of_work)
@@ -83,8 +166,8 @@ class BookingService:
             )
 
     async def get_reference_media_policy(self, actor: ClientActor) -> ReferenceMediaPolicy:
-        self._ensure_privacy_policy()
         async with self._unit_of_work_factory() as unit_of_work:
+            await require_feature(unit_of_work, FeatureName.REFERENCE_PHOTOS)
             await self._consented_client(unit_of_work, actor.telegram_id)
             settings = await self._settings(unit_of_work)
             return ReferenceMediaPolicy(
@@ -97,15 +180,26 @@ class BookingService:
         actor: ClientActor,
         service_id: int,
         *,
+        staff_member_id: int | None = None,
         local_date: date | None = None,
         now: datetime | None = None,
     ) -> BookingAvailability:
-        self._ensure_privacy_policy()
         current_time = self._aware_now(now)
         async with self._unit_of_work_factory() as unit_of_work:
+            await require_feature(unit_of_work, FeatureName.ONLINE_BOOKING)
             await self._consented_client(unit_of_work, actor.telegram_id)
             settings = await self._settings(unit_of_work)
             service = self._active_service(await unit_of_work.services.get(service_id))
+            assignment_rows = await unit_of_work.service_assignments.list_bookable_assignments(
+                unit_of_work.business_id,
+                service.id,
+            )
+            eligible_masters = {master.id: master for _, _, master in assignment_rows}
+            eligible_assignments = {
+                master.id: assignment for assignment, _, master in assignment_rows
+            }
+            if staff_member_id is not None and staff_member_id not in eligible_masters:
+                raise BookingUnavailableError("Selected master is not available")
 
             zone = ZoneInfo(settings.timezone)
             today = current_time.astimezone(zone).date()
@@ -119,6 +213,17 @@ class BookingService:
 
             candidates = []
             for window in windows:
+                if window.staff_member_id not in eligible_masters:
+                    continue
+                master_pause = getattr(
+                    eligible_masters[window.staff_member_id],
+                    "schedule_paused_until",
+                    None,
+                )
+                if master_pause is not None and window.start_at < master_pause:
+                    continue
+                if staff_member_id is not None and window.staff_member_id != staff_member_id:
+                    continue
                 candidate_date = window.start_at.astimezone(zone).date()
                 if local_date is not None and candidate_date != local_date:
                     continue
@@ -126,26 +231,45 @@ class BookingService:
                     continue
                 if candidate_date.weekday() == 6 and not settings.allow_sunday:
                     continue
-                if self._service_fits(service, window.start_at, window.end_at):
+                terms = self._effective_terms(
+                    service,
+                    eligible_assignments[window.staff_member_id],
+                )
+                if (
+                    terms.duration_max_minutes * 60
+                    <= (window.end_at - window.start_at).total_seconds()
+                ):
                     candidates.append(window)
 
             available = []
-            counts: dict[date, int] = {}
+            counts: dict[tuple[date, int], int] = {}
             for window in candidates:
                 candidate_date = window.start_at.astimezone(zone).date()
-                if candidate_date not in counts:
+                capacity_key = (candidate_date, window.staff_member_id)
+                if capacity_key not in counts:
                     day_start, day_end = utc_day_bounds(candidate_date, settings.timezone)
-                    counts[candidate_date] = await unit_of_work.appointments.count_capacity_between(
+                    counts[capacity_key] = await unit_of_work.appointments.count_capacity_between(
                         day_start,
                         day_end,
+                        staff_member_id=window.staff_member_id,
                     )
-                if counts[candidate_date] < settings.max_appointments_per_day:
+                if counts[capacity_key] < settings.max_appointments_per_day:
+                    terms = self._effective_terms(
+                        service,
+                        eligible_assignments[window.staff_member_id],
+                    )
                     available.append(
                         BookingWindowView(
                             id=window.id,
                             start_at=window.start_at,
                             end_at=window.end_at,
                             timezone=settings.timezone,
+                            staff_member_id=window.staff_member_id,
+                            master_name=eligible_masters[window.staff_member_id].display_name,
+                            price=terms.price,
+                            duration_min_minutes=terms.duration_min_minutes,
+                            duration_max_minutes=terms.duration_max_minutes,
+                            prepayment_amount=self._prepayment_amount(terms),
                         )
                     )
 
@@ -164,19 +288,39 @@ class BookingService:
         correlation_id: str | None = None,
         allow_self_booking_blocked: bool = False,
     ) -> BookingReceipt:
-        self._ensure_privacy_policy()
         current_time = self._aware_now(now)
+        existing = await self._existing_checkout(actor, values)
+        if existing is not None:
+            return await self._finalize_checkout(existing, now=current_time)
+        if self._subscription_service is not None:
+            await self._subscription_service.ensure_new_bookings_allowed(
+                self._business_id,
+                now=current_time,
+            )
+        checkout: _CheckoutResult | None = None
         try:
             async with self._unit_of_work_factory() as unit_of_work:
+                await require_feature(unit_of_work, FeatureName.ONLINE_BOOKING)
+                if values.reference_media:
+                    await require_feature(unit_of_work, FeatureName.REFERENCE_PHOTOS)
                 settings = await self._settings(unit_of_work)
                 initial_window = await unit_of_work.windows.get(values.window_id)
-                if initial_window is None:
+                if initial_window is None or initial_window.business_id != unit_of_work.business_id:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 local_date = initial_window.start_at.astimezone(ZoneInfo(settings.timezone)).date()
-                await unit_of_work.windows.lock_local_date(local_date)
+                await unit_of_work.windows.lock_local_date(
+                    local_date, staff_member_id=initial_window.staff_member_id
+                )
 
                 window = await unit_of_work.windows.get(values.window_id, for_update=True)
                 if window is None or window.status is not AvailabilityWindowStatus.OPEN:
+                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+                if window.business_id != unit_of_work.business_id:
+                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+                if (
+                    values.staff_member_id is not None
+                    and window.staff_member_id != values.staff_member_id
+                ):
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 client = await self._consented_client(
                     unit_of_work,
@@ -187,6 +331,36 @@ class BookingService:
                 service = self._active_service(
                     await unit_of_work.services.get(values.service_id, for_update=True)
                 )
+                if service.business_id != unit_of_work.business_id:
+                    raise BookingUnavailableError("Service is not available")
+                master = await unit_of_work.staff.get_by_id(
+                    unit_of_work.business_id,
+                    window.staff_member_id,
+                    for_update=True,
+                )
+                assignment = await unit_of_work.service_assignments.get_assignment(
+                    unit_of_work.business_id,
+                    window.staff_member_id,
+                    service.id,
+                    for_update=True,
+                )
+                if (
+                    master is None
+                    or not master.is_active
+                    or not master.is_bookable
+                    or assignment is None
+                    or not assignment.is_active
+                    or not assignment.online_booking_enabled
+                ):
+                    raise BookingUnavailableError("Selected master is not available")
+                if (
+                    master.schedule_paused_until is not None
+                    and window.start_at < master.schedule_paused_until
+                ):
+                    raise BookingUnavailableError("Selected master is temporarily unavailable")
+                terms = self._effective_terms(service, assignment)
+                if not terms.online_booking_enabled:
+                    raise BookingUnavailableError("Selected service is not available")
                 design = None
                 if values.design_reference_id is not None:
                     design = await unit_of_work.portfolio.get(
@@ -214,7 +388,7 @@ class BookingService:
                     allow_sunday=settings.allow_sunday,
                 )
                 validate_service_fits_window(
-                    duration_max_minutes=service.duration_max_minutes,
+                    duration_max_minutes=terms.duration_max_minutes,
                     start_at=window.start_at,
                     end_at=window.end_at,
                 )
@@ -225,6 +399,7 @@ class BookingService:
                 daily_count = await unit_of_work.appointments.count_capacity_between(
                     day_start,
                     day_end,
+                    staff_member_id=window.staff_member_id,
                 )
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
@@ -245,23 +420,39 @@ class BookingService:
                     name=values.client_name,
                     phone=values.phone,
                 )
+                payment_settings = await unit_of_work.reservations.payment_settings()
+                payment_mode, prepayment_amount = await self._payment_policy(
+                    unit_of_work,
+                    payment_settings,
+                    terms,
+                )
+                appointment_status = self._initial_appointment_status(payment_mode)
                 appointment = await unit_of_work.appointments.add(
                     Appointment(
+                        business_id=unit_of_work.business_id,
+                        staff_member_id=window.staff_member_id,
                         client_id=client.id,
                         window_id=window.id,
                         service_id=service.id,
                         design_reference_id=design.id if design is not None else None,
                         design_title_snapshot=design.title if design is not None else None,
                         service_name_snapshot=service.name,
-                        price_snapshot=service.price,
-                        duration_min_snapshot=service.duration_min_minutes,
-                        duration_max_snapshot=service.duration_max_minutes,
-                        status=AppointmentStatus.CONFIRMED,
+                        master_name_snapshot=master.display_name,
+                        price_snapshot=terms.price,
+                        prepayment_snapshot=prepayment_amount,
+                        currency_snapshot="RUB",
+                        payment_mode_snapshot=payment_mode,
+                        duration_min_snapshot=terms.duration_min_minutes,
+                        duration_max_snapshot=terms.duration_max_minutes,
+                        scheduled_start_at=window.start_at,
+                        scheduled_end_at=window.end_at,
+                        status=appointment_status,
                         client_comment=values.client_comment,
                     )
                 )
                 reference_rows = [
                     AppointmentReferenceMedia(
+                        business_id=unit_of_work.business_id,
                         appointment_id=appointment.id,
                         telegram_file_id=item.telegram_file_id,
                         telegram_file_unique_id=item.telegram_file_unique_id,
@@ -269,7 +460,7 @@ class BookingService:
                         position=position,
                         uploaded_by_user_id=client.id,
                         expires_at=self._reference_retention_policy.expires_at(
-                            status=AppointmentStatus.CONFIRMED,
+                            status=appointment_status,
                             planned_end_at=window.end_at,
                         ),
                     )
@@ -277,30 +468,88 @@ class BookingService:
                 ]
                 if reference_rows:
                     await unit_of_work.reference_media.add_all(reference_rows)
-                window.status = AvailabilityWindowStatus.BOOKED
+                payment_values: PaymentCreate | None = None
+                reservation_expires_at: datetime | None = None
+                payment: Payment | None = None
+                if payment_mode is PaymentMode.DISABLED:
+                    window.status = AvailabilityWindowStatus.BOOKED
+                else:
+                    if payment_settings is None:
+                        raise RuntimeError("payment settings are missing for an enabled mode")
+                    token = ReservationToken.from_raw(values.reservation_token.get_secret_value())
+                    reservation, _ = await ReservationService(
+                        unit_of_work.reservations,
+                        unit_of_work.payments,
+                        unit_of_work.audit,
+                    ).create(
+                        ReservationCreate(
+                            business_id=unit_of_work.business_id,
+                            client_id=client.id,
+                            staff_member_id=window.staff_member_id,
+                            window_id=window.id,
+                            service_id=service.id,
+                            appointment_id=appointment.id,
+                            idempotency_key=values.checkout_idempotency_key,
+                            ttl_minutes=payment_settings.reservation_ttl_minutes,
+                            correlation_id=correlation_id,
+                        ),
+                        token,
+                        now=current_time,
+                    )
+                    reservation_expires_at = reservation.expires_at
+                    payment_values = PaymentCreate(
+                        business_id=unit_of_work.business_id,
+                        appointment_id=appointment.id,
+                        provider=payment_mode,
+                        payment_type=(
+                            PaymentType.FULL_PAYMENT
+                            if prepayment_amount >= terms.price
+                            else PaymentType.DEPOSIT
+                        ),
+                        amount=prepayment_amount,
+                        currency="RUB",
+                        idempotency_key=f"pay:{values.checkout_idempotency_key}",
+                        safe_metadata={"reservation_id": str(reservation.id)},
+                        correlation_id=correlation_id,
+                        return_url=(
+                            self._payment_return_url
+                            if payment_mode is PaymentMode.YOOKASSA
+                            else None
+                        ),
+                        description=f"Предоплата: {service.name}"[:128],
+                    )
+                    payment_service = self._required_payment_service(payment_mode)
+                    payment = payment_service.new_payment(
+                        payment_values,
+                        expires_at=reservation.expires_at,
+                    )
+                    payment.provider_account_ref = payment_settings.provider_account_ref
+                    await unit_of_work.payments.add(payment)
                 await unit_of_work.appointments.add_history(
                     AppointmentStatusHistory(
                         appointment_id=appointment.id,
                         previous_status=None,
-                        new_status=AppointmentStatus.CONFIRMED,
+                        new_status=appointment_status,
                         changed_by_user_id=client.id,
                         reason=None,
                     )
                 )
 
-                admin_users = await unit_of_work.users.list_by_telegram_ids(
-                    self._admin_telegram_ids
+                staff_rows = await unit_of_work.staff.list_active_by_roles(
+                    unit_of_work.business_id,
+                    LEGACY_ADMIN_ROLES,
                 )
                 schedules = future_reminder_schedules(
                     start_at=window.start_at,
                     now=current_time,
                     offsets_minutes=settings.reminder_offsets_minutes,
                     client_user_id=client.id,
-                    admin_user_ids=[user.id for user in admin_users if not user.is_blocked],
+                    admin_user_ids=[user.id for _, user in staff_rows if not user.is_blocked],
                 )
                 await unit_of_work.notifications.add_all(
                     [
                         NotificationJob(
+                            business_id=unit_of_work.business_id,
                             appointment_id=appointment.id,
                             recipient_user_id=schedule.recipient_user_id,
                             notification_type=schedule.notification_type,
@@ -319,7 +568,7 @@ class BookingService:
                     changes={
                         "window_id": window.id,
                         "service_id": service.id,
-                        "status": AppointmentStatus.CONFIRMED.value,
+                        "status": appointment_status.value,
                         "has_client_comment": values.client_comment is not None,
                         "design_reference_id": design.id if design is not None else None,
                         "reference_media_count": len(reference_rows),
@@ -342,9 +591,124 @@ class BookingService:
                         correlation_id=correlation_id,
                     )
                 await unit_of_work.commit()
-                return BookingReceipt(
+                checkout = _CheckoutResult(
+                    receipt=BookingReceipt(
+                        appointment_id=appointment.id,
+                        service_name=appointment.service_name_snapshot,
+                        master_name=appointment.master_name_snapshot,
+                        price=appointment.price_snapshot,
+                        duration_min_minutes=appointment.duration_min_snapshot,
+                        duration_max_minutes=appointment.duration_max_snapshot,
+                        start_at=window.start_at,
+                        end_at=window.end_at,
+                        timezone=settings.timezone,
+                        address=settings.address,
+                        map_url=settings.map_url,
+                        master_telegram_url=settings.master_telegram_url,
+                        client_name=values.client_name,
+                        phone=values.phone,
+                        design_title=appointment.design_title_snapshot,
+                        reference_media=[
+                            ReferenceMediaView(
+                                id=row.id,
+                                telegram_file_id=row.telegram_file_id,
+                                telegram_file_unique_id=row.telegram_file_unique_id,
+                                media_type=row.media_type,
+                                position=row.position,
+                            )
+                            for row in reference_rows
+                        ],
+                        appointment_status=appointment_status,
+                        payment_mode=payment_mode,
+                        payment_id=payment.id if payment is not None else None,
+                        payment_status=payment.status if payment is not None else None,
+                        payment_amount=payment.amount if payment is not None else None,
+                        payment_currency=payment.currency if payment is not None else None,
+                        reservation_expires_at=reservation_expires_at,
+                        manual_payment_instructions=(
+                            payment_settings.manual_payment_instructions
+                            if payment_settings is not None and payment_mode is PaymentMode.MANUAL
+                            else None
+                        ),
+                    ),
+                    payment_values=payment_values,
+                )
+        except IntegrityError as exc:
+            raise BookingConflictError(_WINDOW_TAKEN_MESSAGE) from exc
+        except (PaymentStateError, ReservationStateError) as exc:
+            raise BookingUnavailableError(str(exc)) from exc
+        if checkout is None:
+            raise RuntimeError("booking checkout did not produce a result")
+        return await self._finalize_checkout(checkout, now=current_time)
+
+    async def _existing_checkout(
+        self,
+        actor: ClientActor,
+        values: BookingRequest,
+    ) -> _CheckoutResult | None:
+        """Resume a payment retry without creating another appointment or hold."""
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            reservation = await unit_of_work.reservations.get_by_idempotency_key(
+                values.checkout_idempotency_key
+            )
+            if reservation is None:
+                return None
+            client = await self._consented_client(unit_of_work, actor.telegram_id)
+            token = ReservationToken.from_raw(values.reservation_token.get_secret_value())
+            expected_staff_id = values.staff_member_id or reservation.staff_member_id
+            if (
+                reservation.client_id != client.id
+                or reservation.window_id != values.window_id
+                or reservation.service_id != values.service_id
+                or reservation.staff_member_id != expected_staff_id
+                or reservation.token_digest != token.digest
+                or reservation.appointment_id is None
+                or reservation.status in {ReservationStatus.EXPIRED, ReservationStatus.CANCELLED}
+            ):
+                raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+            appointment = await unit_of_work.appointments.get(reservation.appointment_id)
+            window = await unit_of_work.windows.get(reservation.window_id)
+            payment = await unit_of_work.payments.get_latest_for_appointment(
+                reservation.appointment_id
+            )
+            settings = await self._settings(unit_of_work)
+            payment_settings = await unit_of_work.reservations.payment_settings()
+            if (
+                appointment is None
+                or window is None
+                or payment is None
+                or appointment.client_id != client.id
+                or appointment.payment_mode_snapshot is PaymentMode.DISABLED
+                or payment.provider is not appointment.payment_mode_snapshot
+            ):
+                raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+            references = await unit_of_work.reference_media.list_active(appointment.id)
+            safe_metadata = {
+                key: value
+                for key, value in payment.safe_metadata.items()
+                if key not in {"business_id", "appointment_id"}
+            }
+            payment_values = PaymentCreate(
+                business_id=payment.business_id,
+                appointment_id=payment.appointment_id,
+                provider=payment.provider,
+                payment_type=payment.payment_type,
+                amount=payment.amount,
+                currency=payment.currency,
+                idempotency_key=payment.idempotency_key,
+                safe_metadata=safe_metadata,
+                correlation_id=payment.correlation_id,
+                return_url=(
+                    self._payment_return_url if payment.provider is PaymentMode.YOOKASSA else None
+                ),
+                description=f"Предоплата: {appointment.service_name_snapshot}"[:128],
+            )
+            return _CheckoutResult(
+                receipt=BookingReceipt(
                     appointment_id=appointment.id,
                     service_name=appointment.service_name_snapshot,
+                    master_name=appointment.master_name_snapshot,
                     price=appointment.price_snapshot,
                     duration_min_minutes=appointment.duration_min_snapshot,
                     duration_max_minutes=appointment.duration_max_snapshot,
@@ -354,22 +718,228 @@ class BookingService:
                     address=settings.address,
                     map_url=settings.map_url,
                     master_telegram_url=settings.master_telegram_url,
-                    client_name=values.client_name,
-                    phone=values.phone,
+                    client_name=client.first_name or values.client_name,
+                    phone=client.phone or values.phone,
                     design_title=appointment.design_title_snapshot,
-                    reference_media=[
-                        ReferenceMediaView(
-                            id=row.id,
-                            telegram_file_id=row.telegram_file_id,
-                            telegram_file_unique_id=row.telegram_file_unique_id,
-                            media_type=row.media_type,
-                            position=row.position,
-                        )
-                        for row in reference_rows
-                    ],
+                    reference_media=[ReferenceMediaView.model_validate(row) for row in references],
+                    appointment_status=appointment.status,
+                    payment_mode=payment.provider,
+                    payment_id=payment.id,
+                    payment_status=payment.status,
+                    payment_amount=payment.amount,
+                    payment_currency=payment.currency,
+                    payment_confirmation_url=payment.confirmation_url,
+                    reservation_expires_at=appointment.reservation_expires_at,
+                    manual_payment_instructions=(
+                        payment_settings.manual_payment_instructions
+                        if payment_settings is not None and payment.provider is PaymentMode.MANUAL
+                        else None
+                    ),
+                ),
+                payment_values=payment_values,
+            )
+
+    async def _finalize_checkout(
+        self,
+        checkout: _CheckoutResult,
+        *,
+        now: datetime,
+    ) -> BookingReceipt:
+        values = checkout.payment_values
+        if values is None or checkout.receipt.payment_id is None:
+            return checkout.receipt
+        payment = await self._submit_payment(
+            checkout.receipt.payment_id,
+            values,
+            now=now,
+        )
+        appointment_status = checkout.receipt.appointment_status
+        reservation_expires_at = checkout.receipt.reservation_expires_at
+        if payment.status is PaymentStatus.SUCCEEDED:
+            await self._consume_paid_reservation(payment, now=now)
+            appointment_status = AppointmentStatus.CONFIRMED
+            reservation_expires_at = None
+        return checkout.receipt.model_copy(
+            update={
+                "appointment_status": appointment_status,
+                "payment_status": payment.status,
+                "payment_confirmation_url": payment.confirmation_url,
+                "reservation_expires_at": reservation_expires_at,
+            }
+        )
+
+    async def _submit_payment(
+        self,
+        payment_id: int,
+        values: PaymentCreate,
+        *,
+        now: datetime,
+    ) -> PaymentView:
+        """Call a provider outside DB transactions, then lock and persist its safe projection."""
+
+        service = self._required_payment_service(values.provider)
+        async with self._unit_of_work_factory() as unit_of_work:
+            payment = await unit_of_work.payments.get(payment_id)
+            if payment is None:
+                raise BookingUnavailableError("Платёж не найден.")
+            service.require_same_intent(payment, values)
+            if payment.status is not PaymentStatus.CREATED:
+                return PaymentView.model_validate(payment)
+            detached = service.new_payment(values, expires_at=payment.expires_at)
+            detached.id = payment.id
+            detached.provider_account_ref = payment.provider_account_ref
+
+        try:
+            provider_result = await service.create_with_provider(detached, values, now=now)
+        except PaymentProviderError as exc:
+            async with self._unit_of_work_factory() as unit_of_work:
+                payment = await unit_of_work.payments.get(payment_id, for_update=True)
+                if payment is not None and payment.status is PaymentStatus.CREATED:
+                    service.require_same_intent(payment, values)
+                    service.apply_creation_failure(payment, exc)
+                    await unit_of_work.audit.add(
+                        actor_user_id=None,
+                        action="payment.creation_failed",
+                        entity_type="payment",
+                        entity_id=str(payment_id),
+                        changes={"error_code": exc.code, "retryable": exc.retryable},
+                        correlation_id=values.correlation_id,
+                    )
+                    await unit_of_work.commit()
+            raise BookingUnavailableError(
+                "Платёжный сервис временно недоступен. Время сохранено в резерве; "
+                "повторите подтверждение до истечения таймера."
+            ) from None
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            payment = await unit_of_work.payments.get(payment_id, for_update=True)
+            if payment is None:
+                raise BookingUnavailableError("Платёж не найден.")
+            service.require_same_intent(payment, values)
+            if payment.status is PaymentStatus.CREATED:
+                service.apply_creation_result(payment, provider_result, now=now)
+                await unit_of_work.audit.add(
+                    actor_user_id=None,
+                    action="payment.created_at_provider",
+                    entity_type="payment",
+                    entity_id=str(payment.id),
+                    changes={
+                        "provider": payment.provider.value,
+                        "status": payment.status.value,
+                        "appointment_id": payment.appointment_id,
+                    },
+                    correlation_id=values.correlation_id,
                 )
-        except IntegrityError as exc:
-            raise BookingConflictError(_WINDOW_TAKEN_MESSAGE) from exc
+                await unit_of_work.commit()
+            return PaymentView.model_validate(payment)
+
+    async def _consume_paid_reservation(
+        self,
+        payment: PaymentView,
+        *,
+        now: datetime,
+    ) -> None:
+        async with self._unit_of_work_factory() as unit_of_work:
+            reservation = await unit_of_work.reservations.get_active_for_appointment(
+                payment.appointment_id,
+                for_update=True,
+            )
+            if reservation is None:
+                return
+            await ReservationService(
+                unit_of_work.reservations,
+                unit_of_work.payments,
+                unit_of_work.audit,
+            ).consume(
+                reservation.id,
+                appointment_id=payment.appointment_id,
+                actor_user_id=None,
+                now=now,
+                correlation_id=None,
+            )
+            await unit_of_work.commit()
+
+    async def _payment_policy(
+        self,
+        unit_of_work: SqlAlchemyUnitOfWork,
+        settings: BusinessPaymentSettings | None,
+        terms: EffectiveServiceTerms,
+    ) -> tuple[PaymentMode, Decimal]:
+        amount = self._prepayment_amount(terms)
+        if settings is None or settings.mode is PaymentMode.DISABLED or amount <= 0:
+            return PaymentMode.DISABLED, Decimal("0.00")
+        if amount > terms.price:
+            raise BookingUnavailableError("Предоплата не может превышать стоимость услуги.")
+        await require_feature(unit_of_work, FeatureName.PREPAYMENT)
+        required_feature = (
+            FeatureName.MANUAL_PAYMENTS
+            if settings.mode is PaymentMode.MANUAL
+            else FeatureName.YOOKASSA_PAYMENTS
+        )
+        await require_feature(unit_of_work, required_feature)
+        self._required_payment_service(settings.mode)
+        if (
+            settings.mode is PaymentMode.MANUAL
+            and not (settings.manual_payment_instructions or "").strip()
+        ):
+            raise BookingUnavailableError("Инструкции для ручной оплаты ещё не настроены.")
+        if settings.mode is PaymentMode.YOOKASSA and self._payment_return_url is None:
+            raise BookingUnavailableError("YooKassa ещё не настроена владельцем бизнеса.")
+        return settings.mode, amount
+
+    @staticmethod
+    def _initial_appointment_status(mode: PaymentMode) -> AppointmentStatus:
+        if mode is PaymentMode.MANUAL:
+            return AppointmentStatus.PENDING_MANUAL_CONFIRMATION
+        if mode is PaymentMode.YOOKASSA:
+            return AppointmentStatus.PENDING_PAYMENT
+        return AppointmentStatus.CONFIRMED
+
+    @staticmethod
+    def _prepayment_amount(terms: EffectiveServiceTerms) -> Decimal:
+        if terms.prepayment_amount is not None:
+            return terms.prepayment_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if terms.prepayment_percent is not None:
+            return (terms.price * terms.prepayment_percent / Decimal("100")).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+        return Decimal("0.00")
+
+    @staticmethod
+    def _effective_terms(service: Service, assignment: object) -> EffectiveServiceTerms:
+        return resolve_service_terms(
+            BaseServiceTerms(
+                price=service.price,
+                duration_min_minutes=service.duration_min_minutes,
+                duration_max_minutes=service.duration_max_minutes,
+                prepayment_amount=service.prepayment_amount,
+                online_booking_enabled=service.is_active,
+            ),
+            StaffServiceOverrides(
+                price=getattr(assignment, "price_override", None),
+                duration_min_minutes=getattr(
+                    assignment,
+                    "duration_min_minutes_override",
+                    None,
+                ),
+                duration_max_minutes=getattr(
+                    assignment,
+                    "duration_max_minutes_override",
+                    None,
+                ),
+                prepayment_amount=getattr(assignment, "prepayment_amount_override", None),
+                prepayment_percent=getattr(assignment, "prepayment_percent_override", None),
+                online_booking_enabled=bool(getattr(assignment, "online_booking_enabled", False)),
+                is_active=bool(getattr(assignment, "is_active", False)),
+            ),
+        )
+
+    def _required_payment_service(self, mode: PaymentMode) -> PaymentService:
+        service = self._payment_services.get(mode)
+        if service is None:
+            raise BookingUnavailableError("Платёжный режим ещё не настроен владельцем бизнеса.")
+        return service
 
     async def book_for_client(
         self,
@@ -446,12 +1016,6 @@ class BookingService:
         if service is None or not service.is_active:
             raise BookingUnavailableError("Эта услуга сейчас недоступна для записи.")
         return service
-
-    def _ensure_privacy_policy(self) -> None:
-        if not self._privacy_policy_configured:
-            raise PrivacyConsentRequiredError(
-                "Онлайн-запись временно недоступна: политика конфиденциальности не настроена."
-            )
 
     @staticmethod
     def _service_fits(service: Service, start_at: datetime, end_at: datetime) -> bool:

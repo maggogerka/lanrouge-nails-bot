@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from secrets import token_urlsafe
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -12,9 +13,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message, ReplyKeyboardRemove
 from pydantic import ValidationError
 
-from app.config import Settings
 from app.domain.booking import normalize_phone
+from app.domain.enums import AppointmentStatus
 from app.domain.errors import BookingConflictError, DomainError
+from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.handlers.client.booking_common import (
     available_dates,
     render_admin_new_booking,
@@ -38,6 +40,8 @@ from app.keyboards.client.booking import (
 from app.keyboards.client.main import client_main_keyboard
 from app.logging import log_event
 from app.schemas.booking import BookingRequest, ReferenceMediaDraft
+from app.security import LEGACY_ADMIN_ROLES
+from app.services.authorization_service import AuthorizationService
 from app.services.booking_service import BookingService
 from app.services.menu_service import MenuService
 from app.states.booking import BookingFlow
@@ -91,9 +95,13 @@ async def booking_back_message(
         try:
             service_id = int(data["service_id"])
             local_date = date.fromisoformat(str(data["local_date"]))
+            staff_member_id = (
+                int(data["staff_member_id"]) if data.get("staff_member_id") is not None else None
+            )
             availability = await booking_service.list_availability(
                 actor_from_telegram(message.from_user),
                 service_id,
+                staff_member_id=staff_member_id,
                 local_date=local_date,
             )
         except (DomainError, KeyError, ValueError) as exc:
@@ -283,9 +291,13 @@ async def _show_booking_confirmation(
         service_id = int(str(data["service_id"]))
         window_id = int(data["window_id"])
         local_date = date.fromisoformat(str(data["local_date"]))
+        staff_member_id = (
+            int(str(data["staff_member_id"])) if data.get("staff_member_id") is not None else None
+        )
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            staff_member_id=staff_member_id,
             local_date=local_date,
         )
         window = next(item for item in availability.windows if item.id == window_id)
@@ -350,16 +362,26 @@ async def confirm_booking(
     callback: CallbackQuery,
     state: FSMContext,
     booking_service: BookingService,
-    settings: Settings,
+    authorization_service: AuthorizationService,
     bot: Bot,
     correlation_id: str,
     menu_service: MenuService,
 ) -> None:
     data = await state.get_data()
     try:
+        checkout_idempotency_key = data.get("checkout_idempotency_key")
+        reservation_token = data.get("reservation_token")
+        if not isinstance(checkout_idempotency_key, str) or not isinstance(reservation_token, str):
+            checkout_idempotency_key = f"tg-booking:{token_urlsafe(24)}"
+            reservation_token = token_urlsafe(32)
+            await state.update_data(
+                checkout_idempotency_key=checkout_idempotency_key,
+                reservation_token=reservation_token,
+            )
         request = BookingRequest(
             service_id=data["service_id"],
             window_id=data["window_id"],
+            staff_member_id=data.get("staff_member_id"),
             client_name=data["client_name"],
             phone=data["phone"],
             client_comment=data.get("client_comment"),
@@ -367,6 +389,8 @@ async def confirm_booking(
             reference_media=[
                 ReferenceMediaDraft.model_validate(item) for item in data.get("reference_media", [])
             ],
+            checkout_idempotency_key=checkout_idempotency_key,
+            reservation_token=reservation_token,
         )
         receipt = await booking_service.book(
             actor_from_telegram(callback.from_user),
@@ -387,16 +411,26 @@ async def confirm_booking(
             reply_markup=appointment_links_keyboard(
                 receipt.map_url,
                 receipt.master_telegram_url,
+                payment_url=receipt.payment_confirmation_url,
             ),
         )
         await callback.message.answer(
             "Главное меню:",
             reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
         )
-    await callback.answer("Запись создана.")
+    await callback.answer(
+        "Запись подтверждена."
+        if receipt.appointment_status is AppointmentStatus.CONFIRMED
+        else "Время зарезервировано. Завершите оплату."
+    )
 
     admin_text = render_admin_new_booking(receipt)
-    for admin_telegram_id in settings.admin_telegram_ids:
+    recipients = await authorization_service.list_active_staff(
+        business_id=DEFAULT_BUSINESS_ID,
+        roles=LEGACY_ADMIN_ROLES,
+    )
+    for recipient in recipients:
+        admin_telegram_id = recipient.telegram_id
         try:
             await bot.send_message(admin_telegram_id, admin_text)
             if len(receipt.reference_media) == 1:
@@ -438,9 +472,13 @@ async def _show_dates_after_conflict(
 ) -> None:
     try:
         service_id = int(str(data["service_id"]))
+        staff_member_id = (
+            int(str(data["staff_member_id"])) if data.get("staff_member_id") is not None else None
+        )
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            staff_member_id=staff_member_id,
         )
     except (DomainError, KeyError, ValueError):
         await state.clear()
@@ -448,8 +486,12 @@ async def _show_dates_after_conflict(
         return
     await state.set_state(BookingFlow.date)
     if isinstance(callback.message, Message):
+        back_action = "back_masters" if data.get("master_selection_shown") else "back_services"
         await callback.message.edit_text(
             message + "\n\nВыберите другую дату:",
-            reply_markup=dates_keyboard(available_dates(availability.windows)),
+            reply_markup=dates_keyboard(
+                available_dates(availability.windows),
+                back_action=back_action,
+            ),
         )
     await callback.answer(message, show_alert=True)

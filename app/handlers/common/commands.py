@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -9,11 +11,11 @@ from aiogram.types import Message
 router = Router(name="common.commands")
 
 
-def start_text() -> str:
+def start_text(business_name: str = "Студия") -> str:
     """Return the stage-safe greeting without unfinished menu actions."""
 
     return (
-        "Добро пожаловать в <b>lanrouge nails</b>! 💅\n\n"
+        f"Добро пожаловать в <b>{escape(business_name)}</b>! 💅\n\n"
         "Здесь можно будет выбрать услугу и записаться в свободное время. "
         "Онлайн-запись запускается поэтапно.\n\n"
         "Команда /whoami покажет ваш числовой Telegram ID."

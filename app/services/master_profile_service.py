@@ -111,10 +111,11 @@ class MasterProfileService:
         ensure_admin(actor, self._admin_telegram_ids)
         async with self._unit_of_work_factory() as unit_of_work:
             admin = await unit_of_work.users.get_or_create_admin(actor)
-            await self._profile(unit_of_work)
+            profile = await self._profile(unit_of_work)
             link = await unit_of_work.master_profile.add_link(
                 MasterPublicLink(
-                    profile_id=1,
+                    business_id=unit_of_work.business_id,
+                    profile_id=profile.id,
                     created_by_user_id=admin.id,
                     updated_by_user_id=admin.id,
                     **values.model_dump(),

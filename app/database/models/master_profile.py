@@ -12,6 +12,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,11 +23,17 @@ from app.database.models.mixins import TimestampMixin
 class MasterProfile(TimestampMixin, Base):
     __tablename__ = "master_profiles"
     __table_args__ = (
-        CheckConstraint("id = 1", name="singleton"),
         CheckConstraint("bio IS NULL OR char_length(bio) <= 4000", name="bio_length_valid"),
+        UniqueConstraint("business_id", "staff_member_id", name="business_staff"),
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
+    staff_member_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("staff_members.id", ondelete="RESTRICT"), nullable=False
+    )
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     bio: Mapped[str | None] = mapped_column(Text)
     telegram_photo_file_id: Mapped[str | None] = mapped_column(String(512))
@@ -50,6 +57,9 @@ class MasterPublicLink(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     profile_id: Mapped[int] = mapped_column(
         SmallInteger,
         ForeignKey("master_profiles.id", ondelete="RESTRICT"),

@@ -11,15 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import NotificationJob
 from app.domain.enums import NotificationJobStatus, NotificationType
+from app.repositories.scoped import TenantScopedRepository
 
 
-class NotificationRepository:
+class NotificationRepository(TenantScopedRepository):
     """Write notification jobs in their owning appointment transaction."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session: AsyncSession, business_id: int) -> None:
+        super().__init__(session, business_id)
 
     async def add_all(self, jobs: list[NotificationJob]) -> None:
+        for job in jobs:
+            self._require_business(job.business_id)
         self._session.add_all(jobs)
         await self._session.flush()
 
@@ -29,7 +32,10 @@ class NotificationRepository:
         *,
         for_update: bool = False,
     ) -> NotificationJob | None:
-        statement = select(NotificationJob).where(NotificationJob.id == job_id)
+        statement = select(NotificationJob).where(
+            NotificationJob.id == job_id,
+            NotificationJob.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         result = await self._session.scalars(statement)
@@ -48,6 +54,7 @@ class NotificationRepository:
         result = await self._session.scalars(
             select(NotificationJob)
             .where(
+                NotificationJob.business_id == self.business_id,
                 or_(
                     and_(
                         NotificationJob.status == NotificationJobStatus.PENDING,
@@ -58,7 +65,7 @@ class NotificationRepository:
                         NotificationJob.available_at <= now,
                         NotificationJob.locked_at <= lease_expired_before,
                     ),
-                )
+                ),
             )
             .order_by(NotificationJob.available_at, NotificationJob.id)
             .limit(limit)
@@ -75,7 +82,10 @@ class NotificationRepository:
 
     async def list_for_appointment(self, appointment_id: int) -> list[NotificationJob]:
         result = await self._session.scalars(
-            select(NotificationJob).where(NotificationJob.appointment_id == appointment_id)
+            select(NotificationJob).where(
+                NotificationJob.business_id == self.business_id,
+                NotificationJob.appointment_id == appointment_id,
+            )
         )
         return list(result.all())
 
@@ -83,6 +93,7 @@ class NotificationRepository:
         result = await self._session.execute(
             update(NotificationJob)
             .where(
+                NotificationJob.business_id == self.business_id,
                 NotificationJob.appointment_id == appointment_id,
                 NotificationJob.status.in_(
                     (NotificationJobStatus.PENDING, NotificationJobStatus.PROCESSING)
@@ -100,6 +111,7 @@ class NotificationRepository:
         result = await self._session.execute(
             update(NotificationJob)
             .where(
+                NotificationJob.business_id == self.business_id,
                 NotificationJob.notification_type == notification_type,
                 NotificationJob.status.in_(
                     (NotificationJobStatus.PENDING, NotificationJobStatus.PROCESSING)

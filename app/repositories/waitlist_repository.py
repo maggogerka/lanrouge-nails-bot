@@ -10,19 +10,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Service, User, WaitlistEntry, WaitlistNotification
 from app.domain.enums import WaitlistNotificationStatus, WaitlistStatus
+from app.repositories.scoped import TenantScopedRepository
 
 
-class WaitlistRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+class WaitlistRepository(TenantScopedRepository):
+    def __init__(self, session: AsyncSession, business_id: int) -> None:
+        super().__init__(session, business_id)
 
     async def get(self, entry_id: int, *, for_update: bool = False) -> WaitlistEntry | None:
-        statement = select(WaitlistEntry).where(WaitlistEntry.id == entry_id)
+        statement = select(WaitlistEntry).where(
+            WaitlistEntry.id == entry_id,
+            WaitlistEntry.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         return (await self._session.scalars(statement)).one_or_none()
 
     async def add(self, entry: WaitlistEntry) -> WaitlistEntry:
+        self._require_business(entry.business_id)
         self._session.add(entry)
         await self._session.flush()
         return entry
@@ -35,7 +40,10 @@ class WaitlistRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[WaitlistEntry], int]:
-        filters = [WaitlistEntry.client_id == client_id]
+        filters = [
+            WaitlistEntry.client_id == client_id,
+            WaitlistEntry.business_id == self.business_id,
+        ]
         if active_only:
             filters.append(
                 WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED))
@@ -60,7 +68,7 @@ class WaitlistRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[WaitlistEntry], int]:
-        filters = []
+        filters = [WaitlistEntry.business_id == self.business_id]
         if status is not None:
             filters.append(WaitlistEntry.status == status)
         if service_id is not None:
@@ -91,6 +99,8 @@ class WaitlistRepository:
             .join(Service, Service.id == WaitlistEntry.service_id)
             .join(User, User.id == WaitlistEntry.client_id)
             .where(
+                WaitlistEntry.business_id == self.business_id,
+                Service.business_id == self.business_id,
                 WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED)),
                 WaitlistEntry.date_from <= local_date,
                 WaitlistEntry.date_to >= local_date,
@@ -124,7 +134,10 @@ class WaitlistRepository:
         *,
         for_update: bool = False,
     ) -> WaitlistNotification | None:
-        statement = select(WaitlistNotification).where(WaitlistNotification.id == notification_id)
+        statement = select(WaitlistNotification).where(
+            WaitlistNotification.id == notification_id,
+            WaitlistNotification.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         return (await self._session.scalars(statement)).one_or_none()
@@ -132,6 +145,7 @@ class WaitlistRepository:
     async def cancel_unsent(self, entry_id: int) -> None:
         jobs = await self._session.scalars(
             select(WaitlistNotification).where(
+                WaitlistNotification.business_id == self.business_id,
                 WaitlistNotification.waitlist_entry_id == entry_id,
                 WaitlistNotification.status.in_(
                     (
@@ -165,6 +179,8 @@ class WaitlistRepository:
                         WaitlistNotification.waitlist_entry_id == WaitlistEntry.id,
                     )
                     .where(
+                        WaitlistEntry.business_id == self.business_id,
+                        WaitlistNotification.business_id == self.business_id,
                         WaitlistEntry.client_id == client_id,
                         WaitlistEntry.service_id == service_id,
                         WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED)),
@@ -193,6 +209,7 @@ class WaitlistRepository:
         statement = (
             insert(WaitlistNotification)
             .values(
+                business_id=self.business_id,
                 waitlist_entry_id=entry_id,
                 window_id=window_id,
                 scheduled_at=scheduled_at,
@@ -214,6 +231,7 @@ class WaitlistRepository:
         result = await self._session.scalars(
             select(WaitlistNotification)
             .where(
+                WaitlistNotification.business_id == self.business_id,
                 WaitlistNotification.status.in_(
                     (WaitlistNotificationStatus.PENDING, WaitlistNotificationStatus.RETRY)
                 )

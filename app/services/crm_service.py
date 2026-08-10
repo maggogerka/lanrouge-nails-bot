@@ -117,7 +117,12 @@ class CrmService:
         async with self._unit_of_work_factory() as unit_of_work:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             tag = await unit_of_work.crm.add_tag(
-                ClientTag(name=values.name, marker=values.marker, is_active=True)
+                ClientTag(
+                    business_id=unit_of_work.business_id,
+                    name=values.name,
+                    marker=values.marker,
+                    is_active=True,
+                )
             )
             await unit_of_work.audit.add(
                 actor_user_id=actor_user.id,
@@ -228,7 +233,12 @@ class CrmService:
             if client is None:
                 raise EntityNotFoundError("Клиентка больше не существует.")
             note = await unit_of_work.crm.add_note(
-                ClientNote(client_id=client_id, author_id=actor_user.id, text=values.text)
+                ClientNote(
+                    business_id=unit_of_work.business_id,
+                    client_id=client_id,
+                    author_id=actor_user.id,
+                    text=values.text,
+                )
             )
             await unit_of_work.audit.add(
                 actor_user_id=actor_user.id,

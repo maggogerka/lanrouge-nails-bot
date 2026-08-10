@@ -17,6 +17,7 @@ from app.database.models import (
 )
 from app.domain.appointments import (
     ensure_active_appointment,
+    ensure_appointment_transition,
     ensure_client_change_deadline,
 )
 from app.domain.availability import utc_day_bounds
@@ -172,6 +173,7 @@ class AppointmentService:
             position = max((row.position for row in active), default=-1) + 1
             row = await unit_of_work.reference_media.add(
                 AppointmentReferenceMedia(
+                    business_id=unit_of_work.business_id,
                     appointment_id=appointment.id,
                     telegram_file_id=values.telegram_file_id,
                     telegram_file_unique_id=values.telegram_file_unique_id,
@@ -393,6 +395,7 @@ class AppointmentService:
                     "Подтвердить визит можно только для новой активной записи."
                 )
             previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.CLIENT_CONFIRMED)
             appointment.status = AppointmentStatus.CLIENT_CONFIRMED
             appointment.client_confirmed_at = current_time
             await unit_of_work.appointments.add_history(
@@ -443,6 +446,7 @@ class AppointmentService:
             ensure_owner(appointment, client)
             if appointment.status is not AppointmentStatus.CONFIRMED:
                 raise AppointmentStateError("Визит уже подтверждён или запись неактивна.")
+            ensure_appointment_transition(appointment.status, AppointmentStatus.CLIENT_CONFIRMED)
             appointment.status = AppointmentStatus.CLIENT_CONFIRMED
             appointment.client_confirmed_at = current_time
             await unit_of_work.appointments.add_history(
@@ -503,6 +507,7 @@ class AppointmentService:
             if window.end_at > current_time:
                 raise AppointmentStateError("Завершить визит можно после окончания окна записи.")
             previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.COMPLETED)
             appointment.status = AppointmentStatus.COMPLETED
             appointment.completed_at = current_time
             window.status = AvailabilityWindowStatus.CLOSED
@@ -531,6 +536,7 @@ class AppointmentService:
                 await unit_of_work.notifications.add_all(
                     [
                         NotificationJob(
+                            business_id=unit_of_work.business_id,
                             appointment_id=appointment.id,
                             recipient_user_id=client.id,
                             notification_type=NotificationType.REVIEW_REQUEST,
@@ -549,6 +555,7 @@ class AppointmentService:
                 await unit_of_work.notifications.add_all(
                     [
                         NotificationJob(
+                            business_id=unit_of_work.business_id,
                             appointment_id=appointment.id,
                             recipient_user_id=client.id,
                             notification_type=NotificationType.REPEAT_BOOKING_REMINDER,
@@ -611,6 +618,7 @@ class AppointmentService:
             if window.end_at > current_time:
                 raise AppointmentStateError("Неявку можно отметить после окончания записи.")
             previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.NO_SHOW)
             appointment.status = AppointmentStatus.NO_SHOW
             appointment.no_show_at = current_time
             window.status = AvailabilityWindowStatus.CLOSED
@@ -651,7 +659,9 @@ class AppointmentService:
         initial = await self._appointment(unit_of_work, appointment_id)
         initial_window = await self._window(unit_of_work, initial.window_id)
         local_date = initial_window.start_at.astimezone(ZoneInfo(timezone)).date()
-        await unit_of_work.windows.lock_local_date(local_date)
+        await unit_of_work.windows.lock_local_date(
+            local_date, staff_member_id=initial_window.staff_member_id
+        )
         locked_windows = await unit_of_work.windows.get_many_for_update({initial.window_id})
         appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
         if len(locked_windows) != 1 or appointment.window_id != locked_windows[0].id:
@@ -674,6 +684,7 @@ class AppointmentService:
         if window.status is not AvailabilityWindowStatus.BOOKED:
             raise AppointmentStateError("Окно записи уже находится в другом состоянии.")
         previous = appointment.status
+        ensure_appointment_transition(previous, new_status)
         appointment.status = new_status
         appointment.cancelled_at = now
         appointment.cancellation_reason = reason

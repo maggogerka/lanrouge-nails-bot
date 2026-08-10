@@ -12,7 +12,9 @@ from app.domain.enums import (
     WaitlistStatus,
 )
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from app.schemas.features import FeatureName
 from app.schemas.waitlist import WaitlistDelivery
+from app.services.feature_guard import is_feature_enabled
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -59,6 +61,15 @@ class WaitlistDeliveryService:
         async with self._unit_of_work_factory() as uow:
             job = await self._claimed(uow, notification_id, worker_id)
             if job is None:
+                return None
+            if not await is_feature_enabled(uow, FeatureName.WAITLIST):
+                await self._finish(
+                    uow,
+                    job,
+                    WaitlistNotificationStatus.CANCELLED,
+                    "feature_disabled",
+                )
+                await uow.commit()
                 return None
             entry = await uow.waitlist.get(job.waitlist_entry_id)
             window = await uow.windows.get(job.window_id)

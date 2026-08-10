@@ -30,11 +30,19 @@ class Review(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("rating BETWEEN 1 AND 5", name="rating_valid"),
         CheckConstraint("text IS NULL OR char_length(text) <= 2000", name="text_length_valid"),
-        Index("ix_reviews_moderation_created", "moderation_status", "created_at"),
-        Index("ix_reviews_deleted_created", "deleted_at", "created_at"),
+        Index(
+            "ix_reviews_business_moderation_created",
+            "business_id",
+            "moderation_status",
+            "created_at",
+        ),
+        Index("ix_reviews_business_deleted_created", "business_id", "deleted_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     appointment_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("appointments.id", ondelete="RESTRICT"),

@@ -33,6 +33,12 @@ class PortfolioItem(TimestampMixin, Base):
     __tablename__ = "portfolio_items"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
+    staff_member_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("staff_members.id", ondelete="RESTRICT"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     linked_service_id: Mapped[int | None] = mapped_column(
@@ -56,7 +62,14 @@ class PortfolioItem(TimestampMixin, Base):
 
     __table_args__ = (
         CheckConstraint("design_price IS NULL OR design_price >= 0", name="design_price_valid"),
-        Index("ix_portfolio_items_status_order", "status", "sort_order", "published_at"),
+        Index(
+            "ix_portfolio_items_business_staff_status_order",
+            "business_id",
+            "staff_member_id",
+            "status",
+            "sort_order",
+            "published_at",
+        ),
     )
 
 
@@ -101,8 +114,11 @@ class PortfolioTag(Base):
     __tablename__ = "portfolio_tags"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -110,7 +126,10 @@ class PortfolioTag(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (Index("uq_portfolio_tags_name_ci", func.lower(name), unique=True),)
+    __table_args__ = (
+        Index("uq_portfolio_tags_business_slug", business_id, slug, unique=True),
+        Index("uq_portfolio_tags_business_name_ci", business_id, func.lower(name), unique=True),
+    )
 
 
 class PortfolioItemTag(Base):

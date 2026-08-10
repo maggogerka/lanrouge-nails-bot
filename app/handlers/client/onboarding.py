@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.config import Settings
+from app.domain.acquisition import CampaignValidationError, validate_campaign_code
+from app.domain.errors import DomainError
+from app.domain.legal import MARKETING_CONSENT_TEXT
 from app.handlers.client.common import actor_from_telegram
 from app.handlers.client.portfolio import show_deep_linked_portfolio_item
 from app.keyboards.client.consent import (
@@ -17,21 +21,28 @@ from app.keyboards.client.consent import (
     privacy_consent_keyboard,
 )
 from app.keyboards.client.main import client_main_keyboard
+from app.schemas.authorization import StaffIdentity
+from app.schemas.booking import ClientActor
+from app.schemas.features import FeatureName
+from app.services.acquisition_service import AcquisitionRuntimeService
+from app.services.authorization_service import AuthorizationService
 from app.services.consent_service import ConsentService
+from app.services.feature_flag_service import FeatureFlagService
 from app.services.menu_service import MenuService
 from app.services.portfolio_service import PortfolioService
+from app.services.presentation_service import PresentationService
+from app.services.privacy_service import DeletionRequestNotificationService
 
 router = Router(name="client.onboarding")
+_PENDING_ACQUISITION_KEY = "pending_acquisition_code"
 
-_PRIVACY_TEXT = (
-    "Добро пожаловать в <b>lanrouge nails</b>! 💅\n\n"
-    "Для записи бот хранит только необходимые контактные данные, согласия и историю "
-    "визитов. Ознакомьтесь с политикой и явно подтвердите согласие на обработку данных."
-)
-_MARKETING_TEXT = (
-    "Хотите отдельно получать рекламные сообщения о новых дизайнах и свободных окнах? "
-    "Отказ не отключает подтверждения записи и сервисные напоминания."
-)
+
+def privacy_text(business_name: str) -> str:
+    return (
+        f"Добро пожаловать в <b>{escape(business_name)}</b>! 💅\n\n"
+        "Для записи бот хранит только необходимые контактные данные, согласия и историю "
+        "визитов. Ознакомьтесь с политикой и явно подтвердите согласие на обработку данных."
+    )
 
 
 @router.message(CommandStart())
@@ -39,37 +50,70 @@ async def handle_start(
     message: Message,
     state: FSMContext,
     consent_service: ConsentService,
-    settings: Settings,
     portfolio_service: PortfolioService,
     bot: Bot,
     menu_service: MenuService,
+    presentation_service: PresentationService,
+    feature_flag_service: FeatureFlagService,
+    acquisition_service: AcquisitionRuntimeService,
+    authorization_service: AuthorizationService,
+    correlation_id: str,
 ) -> None:
     if message.from_user is None:
         return
     await state.clear()
+    payload = (message.text or "").split(maxsplit=1)
+    start_payload = payload[1] if len(payload) == 2 else None
+    if start_payload is not None and start_payload.startswith("staff_"):
+        await _accept_staff_invitation(
+            message,
+            authorization_service,
+            start_payload.removeprefix("staff_"),
+            correlation_id=correlation_id,
+        )
+        return
+    campaign_code = _campaign_code(start_payload)
+    if campaign_code is not None:
+        await state.update_data({_PENDING_ACQUISITION_KEY: campaign_code})
+    try:
+        business = await presentation_service.get_business()
+    except DomainError:
+        await message.answer("Бот временно недоступен: профиль бизнеса не настроен.")
+        return
     status = await consent_service.get_or_create_status(actor_from_telegram(message.from_user))
     if not status.privacy_accepted:
-        if settings.privacy_policy_url is None:
+        if business.privacy_policy_url is None:
             await message.answer(
-                "Добро пожаловать в <b>lanrouge nails</b>! 💅\n\n"
+                f"Добро пожаловать в <b>{escape(business.display_name)}</b>! 💅\n\n"
                 "Онлайн-запись временно недоступна: владелец ещё не опубликовал политику "
                 "конфиденциальности. Команда /whoami продолжает работать."
             )
             return
         await message.answer(
-            _PRIVACY_TEXT,
-            reply_markup=privacy_consent_keyboard(str(settings.privacy_policy_url)),
+            privacy_text(business.display_name),
+            reply_markup=privacy_consent_keyboard(business.privacy_policy_url),
         )
         return
+    await _record_pending_acquisition(
+        state,
+        acquisition_service,
+        actor_from_telegram(message.from_user),
+    )
     if not status.marketing_answered:
-        await message.answer(_MARKETING_TEXT, reply_markup=marketing_consent_keyboard())
+        await message.answer(
+            MARKETING_CONSENT_TEXT,
+            reply_markup=marketing_consent_keyboard(),
+        )
         return
     await message.answer(
-        "С возвращением в <b>lanrouge nails</b>!",
+        f"С возвращением в <b>{escape(business.display_name)}</b>!",
         reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
     )
-    payload = (message.text or "").split(maxsplit=1)
     if len(payload) == 2 and payload[1].startswith("portfolio_"):
+        try:
+            await feature_flag_service.require_enabled(FeatureName.PORTFOLIO)
+        except DomainError:
+            return
         try:
             item_id = int(payload[1].removeprefix("portfolio_"))
         except ValueError:
@@ -80,17 +124,25 @@ async def handle_start(
 @router.callback_query(ConsentCallback.filter(F.action == "privacy_accept"))
 async def accept_privacy(
     callback: CallbackQuery,
+    state: FSMContext,
     consent_service: ConsentService,
+    acquisition_service: AcquisitionRuntimeService,
     correlation_id: str,
 ) -> None:
     await consent_service.accept_privacy(
         actor_from_telegram(callback.from_user),
         correlation_id=correlation_id,
     )
+    await _record_pending_acquisition(
+        state,
+        acquisition_service,
+        actor_from_telegram(callback.from_user),
+        correlation_id=correlation_id,
+    )
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Согласие на обработку данных сохранено.")
         await callback.message.answer(
-            _MARKETING_TEXT,
+            MARKETING_CONSENT_TEXT,
             reply_markup=marketing_consent_keyboard(),
         )
     await callback.answer()
@@ -126,9 +178,17 @@ async def choose_marketing(
 
 
 @router.message(Command("delete_my_data"))
-async def request_data_deletion(message: Message) -> None:
+async def request_data_deletion(
+    message: Message,
+    presentation_service: PresentationService,
+) -> None:
+    try:
+        business = await presentation_service.get_business()
+        recipient = f"в <b>{escape(business.display_name)}</b>"
+    except DomainError:
+        recipient = "в компанию"
     await message.answer(
-        "Отправить мастеру запрос на удаление или допустимую анонимизацию ваших данных? "
+        f"Отправить {recipient} запрос на удаление или допустимую анонимизацию ваших данных? "
         "История записей может сохраняться в обезличенном виде в пределах обязательных сроков.",
         reply_markup=deletion_request_keyboard(),
     )
@@ -138,18 +198,27 @@ async def request_data_deletion(message: Message) -> None:
 async def confirm_data_deletion_request(
     callback: CallbackQuery,
     consent_service: ConsentService,
+    deletion_request_notification_service: DeletionRequestNotificationService,
+    bot: Bot,
     correlation_id: str,
 ) -> None:
-    await consent_service.request_deletion(
+    outcome = await consent_service.request_deletion(
         actor_from_telegram(callback.from_user),
         correlation_id=correlation_id,
     )
+    if outcome.created:
+        await deletion_request_notification_service.notify(
+            bot,
+            business_id=outcome.request.business_id,
+            request_id=outcome.request.id,
+        )
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "Запрос сохранён. Рекламная подписка отключена. Мастер свяжется с вами "
-            "для подтверждения допустимого состава удаления или анонимизации."
+            "Запрос зарегистрирован. Рекламная подписка отключена. "
+            "История записей и финансовые документы могут храниться в обезличенном виде "
+            "в пределах обязательных сроков."
         )
-    await callback.answer("Запрос отправлен.")
+    await callback.answer("Запрос зарегистрирован.")
 
 
 @router.callback_query(ConsentCallback.filter(F.action == "deletion_cancel"))
@@ -157,3 +226,62 @@ async def cancel_data_deletion_request(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Запрос на удаление данных отменён.")
     await callback.answer()
+
+
+def _campaign_code(payload: str | None) -> str | None:
+    if payload is None or payload.startswith("portfolio_"):
+        return None
+    candidate = payload.removeprefix("source_")
+    try:
+        return validate_campaign_code(candidate)
+    except CampaignValidationError:
+        return None
+
+
+async def _accept_staff_invitation(
+    message: Message,
+    service: AuthorizationService,
+    token: str,
+    *,
+    correlation_id: str,
+) -> None:
+    if message.from_user is None:
+        return
+    identity = StaffIdentity(
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+        last_name=message.from_user.last_name,
+    )
+    try:
+        accepted = await service.accept_invitation(
+            token,
+            identity,
+            correlation_id=correlation_id,
+        )
+    except DomainError:
+        await message.answer("Приглашение недействительно, уже использовано или истекло.")
+        return
+    command = "/master" if accepted.staff.role.value == "master" else "/admin"
+    await message.answer(
+        f"Приглашение принято. Ваша роль: <b>{escape(accepted.staff.role.value)}</b>.\n"
+        f"Откройте рабочую панель командой {command}."
+    )
+
+
+async def _record_pending_acquisition(
+    state: FSMContext,
+    service: AcquisitionRuntimeService,
+    actor: ClientActor,
+    *,
+    correlation_id: str | None = None,
+) -> None:
+    data = await state.get_data()
+    raw_code = data.pop(_PENDING_ACQUISITION_KEY, None)
+    await state.set_data(data)
+    if isinstance(raw_code, str):
+        await service.record_known_touch(
+            actor,
+            raw_code=raw_code,
+            correlation_id=correlation_id,
+        )

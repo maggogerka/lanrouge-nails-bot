@@ -39,11 +39,23 @@ class WaitlistEntry(TimestampMixin, Base):
             "preferred_time_from IS NULL OR preferred_time_from < preferred_time_to",
             name="preferred_time_range_valid",
         ),
-        Index("ix_waitlist_entries_active_dates", "status", "date_from", "date_to"),
-        Index("ix_waitlist_entries_client_status", "client_id", "status"),
+        Index(
+            "ix_waitlist_entries_business_active_dates",
+            "business_id",
+            "status",
+            "date_from",
+            "date_to",
+        ),
+        Index("ix_waitlist_entries_business_client_status", "business_id", "client_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
+    preferred_staff_member_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("staff_members.id", ondelete="RESTRICT")
+    )
     client_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -77,10 +89,13 @@ class WaitlistNotification(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
         UniqueConstraint("waitlist_entry_id", "window_id", name="uq_waitlist_notifications_match"),
-        Index("ix_waitlist_notifications_due", "status", "available_at"),
+        Index("ix_waitlist_notifications_business_due", "business_id", "status", "available_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     waitlist_entry_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("waitlist_entries.id", ondelete="RESTRICT"), nullable=False
     )

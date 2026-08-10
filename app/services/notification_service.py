@@ -9,7 +9,9 @@ from app.database.models import NotificationJob
 from app.domain.appointments import ACTIVE_APPOINTMENT_STATUSES
 from app.domain.enums import AppointmentStatus, NotificationJobStatus, NotificationType
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from app.schemas.features import FeatureName
 from app.schemas.notification import NotificationDelivery
+from app.services.feature_guard import is_feature_enabled
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -60,6 +62,11 @@ class NotificationService:
         async with self._unit_of_work_factory() as unit_of_work:
             job = await self._claimed_job(unit_of_work, job_id, worker_id)
             if job is None:
+                return None
+            required_feature = self._required_feature(job.notification_type)
+            if not await is_feature_enabled(unit_of_work, required_feature):
+                await self._cancel_job(unit_of_work, job, "feature_disabled")
+                await unit_of_work.commit()
                 return None
             appointment = await unit_of_work.appointments.get(job.appointment_id)
             recipient = await unit_of_work.users.get_by_id(job.recipient_user_id)
@@ -253,6 +260,14 @@ class NotificationService:
         job.locked_by = None
         job.last_error = error_code[:1000]
         await unit_of_work.session.flush()
+
+    @staticmethod
+    def _required_feature(notification_type: NotificationType) -> FeatureName:
+        if notification_type is NotificationType.REVIEW_REQUEST:
+            return FeatureName.REVIEWS
+        if notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+            return FeatureName.REPEAT_BOOKING
+        return FeatureName.REMINDERS
 
     @staticmethod
     def _aware_now(value: datetime | None) -> datetime:

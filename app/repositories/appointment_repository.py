@@ -9,20 +9,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Appointment, AppointmentStatusHistory, AvailabilityWindow
 from app.domain.enums import AppointmentStatus
+from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.repositories.scoped import TenantScopedRepository
 
-CAPACITY_STATUSES = (
+FUTURE_ACTIVE_STATUSES = (
+    AppointmentStatus.PENDING_PAYMENT,
+    AppointmentStatus.PENDING_MANUAL_CONFIRMATION,
     AppointmentStatus.CONFIRMED,
     AppointmentStatus.CLIENT_CONFIRMED,
+)
+CAPACITY_STATUSES = (
+    *FUTURE_ACTIVE_STATUSES,
     AppointmentStatus.COMPLETED,
     AppointmentStatus.NO_SHOW,
 )
 
 
-class AppointmentRepository:
+class AppointmentRepository(TenantScopedRepository):
     """Appointment queries sharing the Unit of Work transaction."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session: AsyncSession, business_id: int = DEFAULT_BUSINESS_ID) -> None:
+        super().__init__(session, business_id)
 
     async def get(
         self,
@@ -30,7 +37,10 @@ class AppointmentRepository:
         *,
         for_update: bool = False,
     ) -> Appointment | None:
-        statement = select(Appointment).where(Appointment.id == appointment_id)
+        statement = select(Appointment).where(
+            Appointment.id == appointment_id,
+            Appointment.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         result = await self._session.scalars(statement)
@@ -46,7 +56,9 @@ class AppointmentRepository:
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
             .where(
                 Appointment.client_id == client_id,
-                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                Appointment.business_id == self.business_id,
+                Appointment.status.in_(FUTURE_ACTIVE_STATUSES),
+                AvailabilityWindow.business_id == self.business_id,
                 AvailabilityWindow.start_at > now,
             )
             .order_by(AvailabilityWindow.start_at, Appointment.id)
@@ -57,17 +69,24 @@ class AppointmentRepository:
         self,
         start_at: datetime,
         end_at: datetime,
+        *,
+        staff_member_id: int | None = None,
     ) -> list[tuple[Appointment, AvailabilityWindow]]:
-        result = await self._session.execute(
+        statement = (
             select(Appointment, AvailabilityWindow)
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
             .where(
-                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                Appointment.business_id == self.business_id,
+                Appointment.status.in_(FUTURE_ACTIVE_STATUSES),
+                AvailabilityWindow.business_id == self.business_id,
                 AvailabilityWindow.start_at >= start_at,
                 AvailabilityWindow.start_at < end_at,
             )
             .order_by(AvailabilityWindow.start_at, Appointment.id)
         )
+        if staff_member_id is not None:
+            statement = statement.where(Appointment.staff_member_id == staff_member_id)
+        result = await self._session.execute(statement)
         return [(row[0], row[1]) for row in result.all()]
 
     async def list_upcoming(
@@ -75,17 +94,23 @@ class AppointmentRepository:
         now: datetime,
         *,
         limit: int = 50,
+        staff_member_id: int | None = None,
     ) -> list[tuple[Appointment, AvailabilityWindow]]:
-        result = await self._session.execute(
+        statement = (
             select(Appointment, AvailabilityWindow)
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
             .where(
-                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                Appointment.business_id == self.business_id,
+                Appointment.status.in_(FUTURE_ACTIVE_STATUSES),
+                AvailabilityWindow.business_id == self.business_id,
                 AvailabilityWindow.start_at > now,
             )
             .order_by(AvailabilityWindow.start_at, Appointment.id)
             .limit(limit)
         )
+        if staff_member_id is not None:
+            statement = statement.where(Appointment.staff_member_id == staff_member_id)
+        result = await self._session.execute(statement)
         return [(row[0], row[1]) for row in result.all()]
 
     async def list_future_active(
@@ -96,7 +121,9 @@ class AppointmentRepository:
             select(Appointment, AvailabilityWindow)
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
             .where(
-                Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                Appointment.business_id == self.business_id,
+                Appointment.status.in_(FUTURE_ACTIVE_STATUSES),
+                AvailabilityWindow.business_id == self.business_id,
                 AvailabilityWindow.start_at > now,
             )
             .order_by(AvailabilityWindow.start_at, Appointment.id)
@@ -109,6 +136,7 @@ class AppointmentRepository:
         end_at: datetime,
         *,
         exclude_appointment_id: int | None = None,
+        staff_member_id: int | None = None,
     ) -> int:
         statement = (
             select(func.count(Appointment.id))
@@ -116,14 +144,19 @@ class AppointmentRepository:
             .where(
                 AvailabilityWindow.start_at >= start_at,
                 AvailabilityWindow.start_at < end_at,
+                Appointment.business_id == self.business_id,
+                AvailabilityWindow.business_id == self.business_id,
                 Appointment.status.in_(CAPACITY_STATUSES),
             )
         )
+        if staff_member_id is not None:
+            statement = statement.where(Appointment.staff_member_id == staff_member_id)
         if exclude_appointment_id is not None:
             statement = statement.where(Appointment.id != exclude_appointment_id)
         return int((await self._session.scalar(statement)) or 0)
 
     async def add(self, appointment: Appointment) -> Appointment:
+        self._require_business(appointment.business_id)
         self._session.add(appointment)
         await self._session.flush()
         return appointment
@@ -139,7 +172,10 @@ class AppointmentRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[tuple[Appointment, AvailabilityWindow]], int]:
-        filters = [Appointment.client_id == client_id]
+        filters = [
+            Appointment.client_id == client_id,
+            Appointment.business_id == self.business_id,
+        ]
         rows = await self._session.execute(
             select(Appointment, AvailabilityWindow)
             .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
@@ -159,7 +195,10 @@ class AppointmentRepository:
     ) -> dict[AppointmentStatus, int]:
         rows = await self._session.execute(
             select(Appointment.status, func.count(Appointment.id))
-            .where(Appointment.client_id == client_id)
+            .where(
+                Appointment.client_id == client_id,
+                Appointment.business_id == self.business_id,
+            )
             .group_by(Appointment.status)
         )
         return {status: int(count) for status, count in rows.all()}
@@ -171,6 +210,7 @@ class AppointmentRepository:
                 .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
                 .where(
                     Appointment.client_id == client_id,
+                    Appointment.business_id == self.business_id,
                     Appointment.status == AppointmentStatus.COMPLETED,
                 )
                 .order_by(AvailabilityWindow.start_at.desc(), Appointment.id.desc())
@@ -185,7 +225,9 @@ class AppointmentRepository:
                 .join(AvailabilityWindow, AvailabilityWindow.id == Appointment.window_id)
                 .where(
                     Appointment.client_id == client_id,
-                    Appointment.status.in_(CAPACITY_STATUSES[:2]),
+                    Appointment.business_id == self.business_id,
+                    Appointment.status.in_(FUTURE_ACTIVE_STATUSES),
+                    AvailabilityWindow.business_id == self.business_id,
                     AvailabilityWindow.start_at > now,
                 )
             )

@@ -20,6 +20,7 @@ from app.schemas.booking import ClientActor
 from app.schemas.pagination import Page, PageRequest
 from app.schemas.review import ReviewAdminUpdate, ReviewCreate, ReviewView
 from app.schemas.service import AdminActor
+from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -64,6 +65,7 @@ class ReviewService:
                     raise ReviewStateError("Отзыв по этой записи уже оставлен.")
                 review = await uow.reviews.add(
                     Review(
+                        business_id=uow.business_id,
                         appointment_id=appointment.id,
                         client_id=client.id,
                         rating=values.rating,
@@ -346,8 +348,7 @@ class ReviewService:
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Недостаточно прав администратора.")
+        ensure_admin(actor, self._admin_telegram_ids)
 
     @staticmethod
     async def _ensure_enabled(uow: SqlAlchemyUnitOfWork) -> None:

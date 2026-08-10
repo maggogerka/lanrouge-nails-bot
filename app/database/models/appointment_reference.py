@@ -51,6 +51,9 @@ class AppointmentReferenceMedia(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     appointment_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("appointments.id", ondelete="RESTRICT"),
@@ -82,15 +85,18 @@ class AppointmentReferenceMedia(Base):
 
 
 class ReferenceCleanupState(Base):
-    """Singleton health state without an append-only maintenance log."""
+    """Per-business cleanup health state without sensitive identifiers."""
 
     __tablename__ = "reference_cleanup_state"
     __table_args__ = (
-        CheckConstraint("id = 1", name="singleton"),
         CheckConstraint("consecutive_failures >= 0", name="failures_non_negative"),
+        UniqueConstraint("business_id", name="business"),
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consecutive_failures: Mapped[int] = mapped_column(

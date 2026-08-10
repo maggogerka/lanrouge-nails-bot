@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from pydantic import ValidationError
 
 from app.handlers.admin.service_common import actor_from_telegram
-from app.keyboards.admin.main import ADMIN_CLIENTS_TEXT, ADMIN_SETTINGS_TEXT, admin_main_keyboard
+from app.keyboards.admin.main import ADMIN_SETTINGS_TEXT, admin_main_keyboard
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.admin.settings import SettingsCallback, settings_keyboard
 from app.schemas.service import AdminActor
@@ -199,8 +199,3 @@ async def toggle_reviews(
     await callback.answer(
         "Отзывы включены." if settings.reviews_enabled else "Отзывы полностью отключены."
     )
-
-
-@router.message(F.text == ADMIN_CLIENTS_TEXT)
-async def clients_placeholder(message: Message) -> None:
-    await message.answer("Карточки клиенток появятся в v0.2.0.")

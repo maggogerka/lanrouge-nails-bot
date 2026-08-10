@@ -1,165 +1,145 @@
-# lanrouge nails bot
+# White-label Telegram CRM bot
 
-Production-ready Telegram CRM и бот онлайн-записи для частного мастера **lanrouge nails**. Текущая версия — **v0.3.1**.
+Production-ready Telegram CRM и онлайн-запись для частного мастера или салона.
+Текущая версия — **v0.4.0**. Название `lanrouge nails` сохранено только в истории
+репозитория и технических именах старого экземпляра; runtime-интерфейс получает бренд из БД.
 
-В v0.3.1 добавлена управляемая политика хранения фото-референсов: сроки зависят
-от статуса записи, отдельный worker автоматически обезличивает просроченные
-Telegram file ID, а администратор и клиент могут удалить доступ бота вручную.
+## Что умеет v0.4.0
 
-## Возможности
+- один `solo`-мастер или `salon` с несколькими мастерами, индивидуальными услугами и расписанием;
+- роли `OWNER`, `MANAGER`, `MASTER`, `RECEPTIONIST` с проверкой членства в БД на каждом действии;
+- одноразовые приглашения сотрудников, отзыв и аудит;
+- независимые расписания, недельные интервалы, исключения и защита PostgreSQL от пересечений;
+- запись, отмена, перенос, напоминания, CRM, портфолио, отзывы, лист ожидания и рассылки;
+- feature flags бизнеса и динамические меню;
+- отключённая, ручная или YooKassa-предоплата, временный резерв, webhook и возвраты;
+- заявки на удаление данных, versioned consent и контролируемая анонимизация;
+- campaign deep links и обезличенная воронка источников;
+- отдельный защищённый `/api/v1` для будущего Mini App;
+- Sentry с очисткой данных, heartbeat health checks, зашифрованный offsite backup и restore test.
 
-- безопасная запись в ручные окна, отмена, перенос и сервисные напоминания;
-- админ-панель `/admin`, доступная только числовым ID из `ADMIN_TELEGRAM_IDS`;
-- портфолио с фотографиями, тегами, deep links и привязкой дизайна к записи;
-- CRM-карточки клиентов, теги, приватные заметки и блокировка самостоятельной записи;
-- лист ожидания с персистентными уведомлениями о подходящих окнах;
-- отзывы после завершённого визита и отдельное согласие на публикацию;
-- повторная запись по последней услуге с текущей ценой;
-- сегментированные рекламные рассылки с preview, test-send, явным подтверждением,
-  замороженной аудиторией, лимитом скорости и повторами;
-- независимые настройки рекламных и repeat-уведомлений с append-only историей согласий.
-- автоматическое и ручное удаление доступа бота к устаревшим фото-референсам.
+## Быстрый локальный запуск
 
-## Быстрый запуск в Docker
-
-Требуются Git, Docker Desktop с Compose и бот от `@BotFather`.
+Требуются Python 3.12, Docker Desktop с Compose и Telegram-бот от `@BotFather`.
 
 ```powershell
 Copy-Item .env.example .env
+New-Item -ItemType Directory -Force .secrets
+Set-Content -NoNewline .secrets/postgres_password "replace-with-long-random-secret"
+Set-Content -NoNewline .secrets/redis_password "replace_with_32_byte_url_safe_secret"
 ```
 
-Заполните в `.env`:
-
-```dotenv
-BOT_TOKEN=токен_из_BotFather
-ADMIN_TELEGRAM_IDS=ваш_числовой_Telegram_ID
-PRIVACY_POLICY_URL=https://example.com/privacy
-POSTGRES_PASSWORD=длинный_случайный_пароль
-DATABASE_URL=postgresql+asyncpg://lanrouge:тот_же_пароль@postgres:5432/lanrouge
-```
-
-`POSTGRES_PASSWORD` и пароль внутри `DATABASE_URL` должны совпадать. Настоящий `.env`
-игнорируется Git и не должен отправляться в чат или попадать в коммит.
+В `.env` обязательно задайте `BOT_TOKEN`, `PRIVACY_POLICY_URL`, `DATABASE_URL` и
+аутентифицированный `REDIS_URL`. Пароли внутри URL должны совпадать с файлами в `.secrets`.
+Настоящие `.env` и `.secrets` игнорируются Git; не отправляйте их в чат и не коммитьте.
 
 ```powershell
-docker compose config
+docker compose config --quiet
 docker compose up --build -d
 docker compose ps
-docker compose logs -f bot notification-worker broadcast-worker reference-cleanup-worker
+docker compose logs -f bot
 ```
 
-Compose поднимает PostgreSQL, Redis, одноразовый `migrate`, бот и отдельные workers
-уведомлений, рассылок и очистки референсов. Проверка подключений без Telegram polling:
+Базовый Compose запускает PostgreSQL, Redis, миграции, бота и постоянные workers.
+Опциональные API и очистка просроченных резервов:
 
 ```powershell
-docker compose run --rm bot python -m app.healthcheck
+docker compose -f docker-compose.yml -f compose.profiles.yml --profile api --profile reservation up --build -d
 ```
 
-Остановка без удаления данных:
+Production hardening и backup подключаются отдельным override:
 
 ```powershell
-docker compose down
+docker compose -f docker-compose.yml -f compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f compose.production.yml up -d
 ```
 
-## Администратор и мастер
+Полные команды и границы секретов: [docs/deployment-v0.4.md](docs/deployment-v0.4.md).
 
-1. Отправьте боту `/whoami` и скопируйте числовой ID.
-2. Запишите его в `.env`: `ADMIN_TELEGRAM_IDS=123456789`. Несколько ID разделяются
-   запятыми: `123456789,987654321`.
-3. После изменения `.env` обязательно пересоздайте процесс бота:
+## Первый владелец и сотрудники
 
-   ```powershell
-   docker compose up -d --force-recreate bot
-   ```
+1. Отправьте `/whoami` и запишите числовой ID в `ADMIN_TELEGRAM_IDS`.
+2. Пересоздайте bot-контейнер: `docker compose up -d --force-recreate bot`.
+3. На старте ID однократно bootstrap'ится как `OWNER` бизнеса №1.
+4. После bootstrap переменная **не является runtime-списком доступа**. `/admin` и `/master`
+   каждый раз проверяют активный `StaffMember`, роль и tenant scope в БД.
+5. Следующих сотрудников приглашайте через «Мастера и сотрудники»; ссылка одноразовая и
+   действует 24 часа по умолчанию.
 
-4. Отправьте `/admin`. Админские кнопки не заменяют клиентское меню: панель открывается
-   этой командой и закрыта фильтром по env-списку. Поле `role` в БД и username сами по
-   себе прав не дают. В текущей модели один и тот же авторизованный пользователь является
-   владельцем/мастером и администратором.
+Несколько bootstrap-ID разделяются запятыми: `123456789,987654321`. Username Telegram не
+используется для авторизации.
 
-Если панель не появилась, проверьте `docker compose exec bot printenv ADMIN_TELEGRAM_IDS`
-и что ID указан без `@`, пробелов и кавычек, затем пересоздайте контейнер.
+## Платежи
 
-## Политика и согласие на рассылку
+`DISABLED` сразу подтверждает запись. `MANUAL` резервирует слот и показывает безопасную
+инструкцию владельца; сотрудник явно подтверждает фактическое получение денег. `YOOKASSA`
+использует отдельные credentials конкретного бизнеса, идемпотентный provider flow и проверенный
+webhook с обязательным authoritative GET. Карточные данные, CVV, SMS-коды и полные provider
+payload не сохраняются.
 
-- публичная юридически утверждённая политика размещается владельцем по адресу из
+YooKassa опциональна: API и ручная оплата запускаются без неё. Если задана хотя бы часть
+`YOOKASSA_*`, конфигурация должна быть полной. Подробно:
+[docs/payments.md](docs/payments.md) и [docs/yookassa.md](docs/yookassa.md).
+
+## Политика и согласия
+
+- ссылка/версия политики хранятся у `Business`; fallback для первого запуска —
   `PRIVACY_POLICY_URL`;
-- технический draft и границы обработки описаны в [docs/privacy.md](docs/privacy.md);
-- текст onboarding находится в `app/handlers/client/onboarding.py` (`_PRIVACY_TEXT` и
-  `_MARKETING_TEXT`), кнопки — в `app/keyboards/client/consent.py`;
-- решения сохраняет `app/services/consent_service.py`, текущие timestamps лежат в
-  `users`, а неизменяемая история — в `consent_history`;
-- клиент в любой момент меняет рекламную подписку через «🔔 Настройки уведомлений».
-  Отказ от рекламы не отключает сервисные сообщения по действующей записи.
+- versioned текст отдельного согласия на рассылку находится в
+  `app/domain/legal.py` (`MARKETING_CONSENT_*`);
+- решения и повторное согласие обслуживает `app/services/consent_service.py`;
+- append-only история — `consent_history`, заявки на удаление — `data_deletion_requests`;
+- клиент управляет рассылкой и удалением через раздел «Конфиденциальность».
 
-Технический draft не заменяет проверку политики владельцем и профильным специалистом до
-production-запуска.
+Технические тексты не заменяют юридическое утверждение политики, оферты, отмены и возврата.
 
-## Локальная разработка
+## Разработка и проверки
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python -m pip install --require-hashes -r requirements.lock
 Copy-Item .env.example .env
 alembic upgrade head
 python -m app.bot
 ```
-
-В отдельных терминалах:
-
-```powershell
-python -m app.workers.reminders
-python -m app.workers.broadcasts
-python -m app.workers.reference_cleanup
-```
-
-Для запуска вне Compose замените хосты `postgres` и `redis` на `localhost`.
-
-## Проверки
 
 ```powershell
 ruff format --check .
 ruff check .
 mypy app
 pytest
+pytest --cov=app --cov-report=term-missing --cov-fail-under=60
+bandit --recursive app --severity-level medium --confidence-level medium
+pip-audit --require-hashes --disable-pip -r requirements-prod.lock
 ```
 
-Интеграционные тесты требуют отдельную БД с `test` в имени через
-`TEST_DATABASE_URL`; fixture очищает её таблицы. Полная инструкция —
-[docs/testing.md](docs/testing.md).
+PostgreSQL integration tests требуют отдельную БД с `test` в имени через
+`TEST_DATABASE_URL`. CI дополнительно проверяет чистую миграцию, копию схемы v0.3.1,
+Compose/Docker, gitleaks и Trivy. См. [docs/testing-v0.4.md](docs/testing-v0.4.md).
 
 ## Документация
 
-- [архитектура](docs/architecture.md)
-- [portfolio](docs/portfolio.md)
-- [CRM](docs/crm.md)
-- [лист ожидания](docs/waitlist.md)
-- [рассылки](docs/broadcasts.md)
-- [правила бронирования](docs/booking-rules.md)
-- [выбор даты и времени](docs/date-time-picker.md)
-- [фото-референсы записи](docs/booking-reference-media.md)
-- [retention и очистка референсов](docs/reference-retention.md)
-- [управление отзывами](docs/review-administration.md)
-- [режимы портфолио](docs/portfolio-modes.md)
-- [профиль мастера](docs/master-profile.md)
-- [миграция v0.2 → v0.3](docs/migration-v0.2-to-v0.3.md)
-- [миграция v0.3.0 → v0.3.1](docs/migration-v0.3-to-v0.3.1.md)
-- [миграция v0.1 → v0.2](docs/migration-v0.1-to-v0.2.md)
-- [развёртывание и rollback](docs/deployment.md)
-- [privacy и consent](docs/privacy.md)
-- [тестирование](docs/testing.md)
+- [архитектура v0.4](docs/architecture.md)
+- [миграция v0.3.1 → v0.4.0](docs/migration-v0.3.1-to-v0.4.md)
+- [Mini App API](docs/mini-app-plan.md)
+- [production deployment](docs/deployment-v0.4.md)
+- [платежи](docs/payments.md) и [YooKassa](docs/yookassa.md)
+- [backup/restore](docs/backup-restore.md)
+- [мониторинг](docs/monitoring.md)
+- [ротация секретов](docs/secrets-rotation.md)
+- [incident response](docs/incident-response.md)
+- [privacy](docs/privacy.md)
 
-## Ограничения
+## Осознанные границы релиза
 
-- один мастер и одна студия, long polling, без предоплаты и Mini App;
-- Telegram Bot API не предоставляет идемпотентный ключ отправки, поэтому после аварии
-  между успешной отправкой и commit теоретически возможен редкий дубль;
-- рассылки по умолчанию выключены настройкой бизнеса и включаются администратором только
-  после миграции и smoke test;
-- GitHub Actions проверяет код, но сам по себе не является hosting для постоянно
-  работающих bot/PostgreSQL/Redis.
+- большой frontend Mini App не входит в v0.4.0; готов backend и ADR;
+- YooKassa нельзя включать до получения shop ID/secret и публичного HTTPS webhook;
+- offsite backup явно выключен, пока не заданы restic repository и credentials;
+- юридические тексты должны утвердить владелец бизнеса и профильный специалист;
+- CRM-подписка отделена от платежей клиенток; рублёвая продажа цифровой подписки внутри
+  Telegram не реализована.
 
 ## Лицензия
 
-[MIT](LICENSE).
+[MIT](LICENSE)

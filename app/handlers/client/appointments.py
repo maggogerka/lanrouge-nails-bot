@@ -9,8 +9,6 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
 )
@@ -33,8 +31,10 @@ from app.keyboards.client.appointments import (
 )
 from app.keyboards.client.booking import appointment_links_keyboard
 from app.keyboards.client.main import CLIENT_APPOINTMENTS_TEXT
+from app.keyboards.client.presentation import business_links_keyboard
 from app.schemas.booking import ReferenceMediaDraft
 from app.services.appointment_service import AppointmentService
+from app.services.presentation_service import PresentationService
 from app.services.reschedule_service import RescheduleService
 from app.states.booking import BookingReferenceEdit
 
@@ -257,6 +257,7 @@ async def cancel_my_appointment(
     callback: CallbackQuery,
     callback_data: AppointmentCallback,
     appointment_service: AppointmentService,
+    presentation_service: PresentationService,
     correlation_id: str,
 ) -> None:
     try:
@@ -266,7 +267,7 @@ async def cancel_my_appointment(
             correlation_id=correlation_id,
         )
     except CancellationDeadlineError:
-        await _show_deadline_message(callback)
+        await _show_deadline_message(callback, presentation_service)
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -279,6 +280,7 @@ async def begin_my_reschedule(
     callback: CallbackQuery,
     callback_data: AppointmentCallback,
     reschedule_service: RescheduleService,
+    presentation_service: PresentationService,
 ) -> None:
     try:
         options = await reschedule_service.list_my_options(
@@ -286,7 +288,7 @@ async def begin_my_reschedule(
             callback_data.appointment_id,
         )
     except CancellationDeadlineError:
-        await _show_deadline_message(callback)
+        await _show_deadline_message(callback, presentation_service)
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -366,6 +368,7 @@ async def confirm_my_reschedule(
     callback: CallbackQuery,
     callback_data: AppointmentCallback,
     reschedule_service: RescheduleService,
+    presentation_service: PresentationService,
     correlation_id: str,
 ) -> None:
     try:
@@ -376,7 +379,7 @@ async def confirm_my_reschedule(
             correlation_id=correlation_id,
         )
     except CancellationDeadlineError:
-        await _show_deadline_message(callback)
+        await _show_deadline_message(callback, presentation_service)
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -392,19 +395,14 @@ async def confirm_my_reschedule(
     await callback.answer("Запись перенесена.")
 
 
-async def _show_deadline_message(callback: CallbackQuery) -> None:
+async def _show_deadline_message(
+    callback: CallbackQuery,
+    presentation_service: PresentationService,
+) -> None:
     if isinstance(callback.message, Message):
+        business = await presentation_service.get_business()
         await callback.message.edit_text(
             CLIENT_CHANGE_BLOCKED_MESSAGE,
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Написать мастеру",
-                            url="https://t.me/lanrouge",
-                        )
-                    ]
-                ]
-            ),
+            reply_markup=business_links_keyboard(business),
         )
     await callback.answer("Самостоятельное изменение уже недоступно.", show_alert=True)

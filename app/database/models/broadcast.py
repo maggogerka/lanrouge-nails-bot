@@ -39,9 +39,14 @@ class Broadcast(TimestampMixin, Base):
     """An administrator-confirmed marketing campaign."""
 
     __tablename__ = "broadcasts"
-    __table_args__ = (Index("ix_broadcasts_status_schedule", "status", "scheduled_at"),)
+    __table_args__ = (
+        Index("ix_broadcasts_business_status_schedule", "business_id", "status", "scheduled_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     parse_mode: Mapped[str | None] = mapped_column(String(16))
@@ -112,11 +117,14 @@ class BroadcastRecipient(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
         UniqueConstraint("broadcast_id", "user_id", name="uq_broadcast_recipients_user"),
-        Index("ix_broadcast_recipients_due", "status", "available_at"),
+        Index("ix_broadcast_recipients_business_due", "business_id", "status", "available_at"),
         Index("ix_broadcast_recipients_broadcast_status", "broadcast_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     broadcast_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("broadcasts.id", ondelete="RESTRICT"), nullable=False
     )
@@ -143,9 +151,19 @@ class MarketingEvent(Base):
     """A minimal callback interaction, not an unreliable message-open event."""
 
     __tablename__ = "marketing_events"
-    __table_args__ = (Index("ix_marketing_events_broadcast_created", "broadcast_id", "created_at"),)
+    __table_args__ = (
+        Index(
+            "ix_marketing_events_business_broadcast_created",
+            "business_id",
+            "broadcast_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )

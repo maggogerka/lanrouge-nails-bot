@@ -1,6 +1,7 @@
-# Архитектура lanrouge nails bot v0.3.1
+# Архитектура white-label Telegram CRM v0.4.0
 
-Статус: архитектура v0.2.0 реализована; раздел 16 фиксирует принятые решения CRM и маркетингового расширения, раздел 17 — контракты расширения v0.3.0.
+Статус: разделы 1–17 сохраняют историю архитектурных решений v0.1–v0.3.1; раздел 18
+описывает действующее коммерческое ядро v0.4.0.
 
 ## 1. Цели и границы базового MVP v0.1
 
@@ -452,3 +453,66 @@ Redis FSM хранит ограниченный черновик Telegram file I
 безопасны благодаря блокировке строки и повторной проверке после lock. Singleton
 `reference_cleanup_state` даёт bounded health-state без бесконечного maintenance log.
 Полный контракт описан в [reference-retention.md](reference-retention.md).
+
+## 19. Коммерческое ядро v0.4.0
+
+### 19.1. Tenant и авторизация
+
+Один запущенный экземпляр обслуживает один явно выбранный `Business`, но схема и все новые
+репозитории содержат `business_id`. `ADMIN_TELEGRAM_IDS` используется только startup bootstrap:
+после создания первого OWNER каждый update получает свежий immutable `StaffContext` из БД.
+Service layer повторно проверяет active membership, роль, permission и business scope. MASTER
+никогда не принимает master ID из callback для собственного workspace.
+
+```mermaid
+erDiagram
+    BUSINESS ||--o{ BUSINESS_CLIENT : contains
+    BUSINESS ||--o{ STAFF_MEMBER : employs
+    BUSINESS ||--o{ SERVICE : owns
+    STAFF_MEMBER ||--o{ STAFF_WEEKLY_INTERVAL : schedules
+    STAFF_MEMBER ||--o{ STAFF_SCHEDULE_EXCEPTION : overrides
+    STAFF_MEMBER ||--o{ STAFF_SERVICE_ASSIGNMENT : offers
+    SERVICE ||--o{ STAFF_SERVICE_ASSIGNMENT : assigned
+    BUSINESS_CLIENT ||--o{ CLIENT_ACQUISITION_ATTRIBUTION : attributed
+    STAFF_MEMBER ||--o{ APPOINTMENT : performs
+    SERVICE ||--o{ APPOINTMENT : snapshot
+    APPOINTMENT ||--o| BOOKING_RESERVATION : reserves
+    APPOINTMENT ||--o{ PAYMENT : charged
+    PAYMENT ||--o{ REFUND : refunded
+    BUSINESS_CLIENT ||--o{ DATA_DELETION_REQUEST : requests
+```
+
+### 19.2. Расписание и бронирование
+
+Недельные интервалы и date exceptions проецируются лениво в ограниченном горизонте 1–365 дней.
+Staff assignment определяет эффективные цену, длительность и предоплату. Appointment сохраняет
+snapshots услуги, мастера, денег, валюты и режима оплаты. Сервис блокирует локальную дату/слот,
+повторно валидирует callback и лимиты; exclusion constraint PostgreSQL запрещает пересечение
+активных записей одного мастера, но разрешает одинаковое время у разных мастеров.
+
+### 19.3. Платёжная state machine
+
+`PaymentProvider` изолирует manual/mock/YooKassa. Pending appointment и reservation фиксируются
+до внешнего запроса. Provider call не держит транзакцию бронирования; повтор использует тот же
+idempotency key. Webhook inbox хранит только digest/bounded metadata, после чего authoritative GET
+сверяет статус, сумму, валюту, account и metadata. `ReservationService` является единственным
+местом consume/expire/cancel переходов; история Appointment обновляется синхронно.
+
+CRM subscription хранится отдельно в `business_subscriptions` и доступна через
+`SubscriptionStatusProvider`. Истечение grace period запрещает только новые записи: данные,
+экспорт и уже созданные визиты не удаляются.
+
+### 19.4. Privacy, HTTP и operations
+
+Versioned consent связывает решение с URL/hash политики. Data deletion проходит reviewable
+state machine и анонимизирует допустимую PII без удаления финансовых/booking snapshots.
+Acquisition хранит validated first/last touch без PII в start parameter.
+
+ASGI `/api/v1` обменивает проверенный raw Telegram `initData` на короткую opaque Redis session.
+Product routes вызывают те же Booking/Appointment/Reschedule/Consent services, что handlers.
+Host/CORS/HTTPS/body/header/rate/replay boundaries fail closed.
+
+Отдельные процессы публикуют heartbeat. Sentry включается только при DSN и очищает события.
+Backup profile делает custom `pg_dump`, отправляет его в зашифрованный restic repository и имеет
+отдельный guarded restore test. Подробнее: [mini-app-plan.md](mini-app-plan.md),
+[payments.md](payments.md), [deployment-v0.4.md](deployment-v0.4.md).

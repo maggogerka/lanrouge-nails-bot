@@ -1,0 +1,130 @@
+# Optional long-running services and one-shot maintenance jobs.
+x-profile-logging: &profile-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-profile-environment: &profile-environment
+  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-lanrouge}
+
+x-profile-runtime: &profile-runtime
+  build:
+    context: .
+    target: runtime
+  env_file: ${ENV_FILE:-.env}
+  environment: *profile-environment
+  init: true
+  stop_grace_period: 20s
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 128
+  mem_limit: 512m
+  cpus: 1.0
+  networks:
+    - backend
+    - egress
+  logging: *profile-logging
+
+x-profile-dependencies: &profile-dependencies
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+services:
+  api:
+    <<: *profile-runtime
+    profiles: ["api"]
+    command: ["python", "-m", "app.api"]
+    environment:
+      <<: *profile-environment
+      API_HOST: 0.0.0.0
+      API_PORT: "8080"
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import http.client
+          import os
+          import sys
+
+          allowed_host = os.environ["API_ALLOWED_HOSTS"].split(",", 1)[0].strip()
+          connection = http.client.HTTPConnection("127.0.0.1", 8080, timeout=5)
+          try:
+              connection.request(
+                  "GET",
+                  "/health/ready",
+                  headers={"Host": allowed_host, "Connection": "close"},
+              )
+              response = connection.getresponse()
+              response.read(4096)
+              sys.exit(0 if response.status == 200 else 1)
+          finally:
+              connection.close()
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    depends_on: *profile-dependencies
+
+  reservation-worker:
+    <<: *profile-runtime
+    profiles: ["reservation"]
+    command: ["python", "-m", "app.workers.reservation_expiry"]
+    environment:
+      <<: *profile-environment
+      HEALTHCHECK_COMPONENT: reservation_expiry
+    restart: unless-stopped
+    depends_on: *profile-dependencies
+
+  backup:
+    build:
+      context: .
+      target: backup
+    profiles: ["backup"]
+    env_file: ${ENV_FILE:-.env}
+    environment:
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+    command: ["python", "-m", "app.maintenance.backup_restore", "backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - restic_password
+    restart: "no"
+    init: true
+    stop_grace_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${BACKUP_TMPFS_SIZE:-1g},mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: ${BACKUP_MEMORY_LIMIT:-2g}
+    cpus: ${BACKUP_CPU_LIMIT:-1.0}
+    networks:
+      - backend
+      - egress
+    logging: *profile-logging
+    healthcheck:
+      disable: true
+
+secrets:
+  restic_password:
+    file: ${RESTIC_PASSWORD_SECRET_FILE:-./.secrets/restic_password}

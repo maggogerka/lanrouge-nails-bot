@@ -59,6 +59,7 @@ class RepeatBookingService:
                 client.repeat_booking_opt_out_at = current.astimezone(UTC)
                 await uow.crm.add_consent_history(
                     ConsentHistory(
+                        business_id=uow.business_id,
                         user_id=client.id,
                         consent_type=ConsentType.REPEAT_BOOKING,
                         previous_value=True,

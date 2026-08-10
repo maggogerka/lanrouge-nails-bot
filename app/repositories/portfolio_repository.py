@@ -7,21 +7,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import PortfolioItem, PortfolioItemTag, PortfolioMedia, PortfolioTag
 from app.domain.enums import PortfolioStatus
+from app.repositories.scoped import TenantScopedRepository
 
 
-class PortfolioRepository:
+class PortfolioRepository(TenantScopedRepository):
     """Keep portfolio ordering, filtering and joins outside Telegram handlers."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, session: AsyncSession, business_id: int) -> None:
+        super().__init__(session, business_id)
 
     async def get(self, item_id: int, *, for_update: bool = False) -> PortfolioItem | None:
-        statement = select(PortfolioItem).where(PortfolioItem.id == item_id)
+        statement = select(PortfolioItem).where(
+            PortfolioItem.id == item_id,
+            PortfolioItem.business_id == self.business_id,
+        )
         if for_update:
             statement = statement.with_for_update()
         return (await self._session.scalars(statement)).one_or_none()
 
     async def add(self, item: PortfolioItem) -> PortfolioItem:
+        self._require_business(item.business_id)
         self._session.add(item)
         await self._session.flush()
         return item
@@ -34,7 +39,7 @@ class PortfolioRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[PortfolioItem], int]:
-        filters = []
+        filters = [PortfolioItem.business_id == self.business_id]
         if status is not None:
             filters.append(PortfolioItem.status == status)
         items = select(PortfolioItem)
@@ -66,39 +71,75 @@ class PortfolioRepository:
     async def list_media(self, item_id: int) -> list[PortfolioMedia]:
         result = await self._session.scalars(
             select(PortfolioMedia)
+            .join(PortfolioItem, PortfolioItem.id == PortfolioMedia.portfolio_item_id)
             .where(PortfolioMedia.portfolio_item_id == item_id)
+            .where(PortfolioItem.business_id == self.business_id)
             .order_by(PortfolioMedia.position, PortfolioMedia.id)
         )
         return list(result.all())
 
     async def add_media(self, media: list[PortfolioMedia]) -> None:
+        item_ids = {item.portfolio_item_id for item in media}
+        if item_ids:
+            allowed = set(
+                (
+                    await self._session.scalars(
+                        select(PortfolioItem.id).where(
+                            PortfolioItem.id.in_(item_ids),
+                            PortfolioItem.business_id == self.business_id,
+                        )
+                    )
+                ).all()
+            )
+            if allowed != item_ids:
+                raise ValueError("portfolio media parent belongs to another business")
         self._session.add_all(media)
         await self._session.flush()
 
     async def delete_media(self, item_id: int) -> None:
         await self._session.execute(
-            delete(PortfolioMedia).where(PortfolioMedia.portfolio_item_id == item_id)
+            delete(PortfolioMedia).where(
+                PortfolioMedia.portfolio_item_id.in_(
+                    select(PortfolioItem.id).where(
+                        PortfolioItem.id == item_id,
+                        PortfolioItem.business_id == self.business_id,
+                    )
+                )
+            )
         )
 
     async def get_tag(self, tag_id: int) -> PortfolioTag | None:
         return (
-            await self._session.scalars(select(PortfolioTag).where(PortfolioTag.id == tag_id))
+            await self._session.scalars(
+                select(PortfolioTag).where(
+                    PortfolioTag.id == tag_id,
+                    PortfolioTag.business_id == self.business_id,
+                )
+            )
         ).one_or_none()
 
     async def get_tag_by_name(self, name: str) -> PortfolioTag | None:
         return (
             await self._session.scalars(
-                select(PortfolioTag).where(func.lower(PortfolioTag.name) == name.casefold())
+                select(PortfolioTag).where(
+                    PortfolioTag.business_id == self.business_id,
+                    func.lower(PortfolioTag.name) == name.casefold(),
+                )
             )
         ).one_or_none()
 
     async def get_tag_by_slug(self, slug: str) -> PortfolioTag | None:
         return (
-            await self._session.scalars(select(PortfolioTag).where(PortfolioTag.slug == slug))
+            await self._session.scalars(
+                select(PortfolioTag).where(
+                    PortfolioTag.business_id == self.business_id,
+                    PortfolioTag.slug == slug,
+                )
+            )
         ).one_or_none()
 
     async def list_tags(self, *, active_only: bool = True) -> list[PortfolioTag]:
-        statement = select(PortfolioTag)
+        statement = select(PortfolioTag).where(PortfolioTag.business_id == self.business_id)
         if active_only:
             statement = statement.where(PortfolioTag.is_active.is_(True))
         result = await self._session.scalars(
@@ -110,17 +151,44 @@ class PortfolioRepository:
         result = await self._session.scalars(
             select(PortfolioTag)
             .join(PortfolioItemTag, PortfolioItemTag.tag_id == PortfolioTag.id)
-            .where(PortfolioItemTag.portfolio_item_id == item_id)
+            .join(PortfolioItem, PortfolioItem.id == PortfolioItemTag.portfolio_item_id)
+            .where(
+                PortfolioItemTag.portfolio_item_id == item_id,
+                PortfolioItem.business_id == self.business_id,
+                PortfolioTag.business_id == self.business_id,
+            )
             .order_by(func.lower(PortfolioTag.name), PortfolioTag.id)
         )
         return list(result.all())
 
     async def add_tag(self, tag: PortfolioTag) -> PortfolioTag:
+        self._require_business(tag.business_id)
         self._session.add(tag)
         await self._session.flush()
         return tag
 
     async def replace_tags(self, item_id: int, tag_ids: set[int]) -> None:
+        item_exists = await self._session.scalar(
+            select(PortfolioItem.id).where(
+                PortfolioItem.id == item_id,
+                PortfolioItem.business_id == self.business_id,
+            )
+        )
+        if item_exists is None:
+            raise ValueError("portfolio item belongs to another business or is missing")
+        if tag_ids:
+            allowed_tags = set(
+                (
+                    await self._session.scalars(
+                        select(PortfolioTag.id).where(
+                            PortfolioTag.id.in_(tag_ids),
+                            PortfolioTag.business_id == self.business_id,
+                        )
+                    )
+                ).all()
+            )
+            if allowed_tags != tag_ids:
+                raise ValueError("portfolio tag belongs to another business or is missing")
         await self._session.execute(
             delete(PortfolioItemTag).where(PortfolioItemTag.portfolio_item_id == item_id)
         )

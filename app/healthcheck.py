@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import os
+from collections.abc import Sequence
 
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.config import Settings, get_settings
+from app.config import RuntimeConfigurationError, Settings, get_settings
 from app.logging import configure_logging, log_event
+from app.runtime_health import (
+    ComponentUnhealthyError,
+    check_component_heartbeat,
+    runtime_component_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,21 +69,55 @@ async def check_dependencies(settings: Settings) -> None:
     )
 
 
-async def _main() -> None:
+async def check_runtime_health(settings: Settings, *, component: str | None = None) -> None:
+    """Check shared dependencies and, when selected, this container's heartbeat."""
+
+    await check_dependencies(settings)
+    if component is not None:
+        await check_component_heartbeat(settings, component)
+
+
+async def _main(*, component: str | None = None) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     try:
-        await check_dependencies(settings)
+        await check_runtime_health(settings, component=component)
+    except ComponentUnhealthyError as exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            "healthcheck.component_unhealthy",
+            component=exc.component,
+            status=exc.status,
+            error_code=exc.error_code,
+        )
+        raise
     except Exception:
         logger.exception("dependency_healthcheck_failed", extra={"event": "healthcheck.failed"})
         raise
-    log_event(logger, logging.INFO, "healthcheck.ok")
+    log_event(logger, logging.INFO, "healthcheck.ok", component=component)
 
 
-def run() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Dependency and component readiness check")
+    parser.add_argument("--component", choices=runtime_component_names())
+    return parser
+
+
+def run(argv: Sequence[str] | None = None) -> None:
     """Synchronous console entry point."""
 
-    asyncio.run(_main())
+    args = build_parser().parse_args(argv)
+    component = args.component or os.environ.get("HEALTHCHECK_COMPONENT", "").strip() or None
+    if component is not None and component not in runtime_component_names():
+        raise SystemExit(2)
+    try:
+        asyncio.run(_main(component=component))
+    except RuntimeConfigurationError as exc:
+        log_event(logger, logging.CRITICAL, "configuration.invalid", missing=exc.missing)
+        raise SystemExit(2) from exc
+    except Exception as exc:
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
