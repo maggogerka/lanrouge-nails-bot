@@ -2,12 +2,15 @@
 
 from decimal import Decimal
 
+from app.domain.enums import StaffRole
 from app.handlers.admin.service_common import (
     parse_positive_minutes,
     parse_price,
     render_service,
 )
+from app.keyboards.admin.main import ADMIN_SERVICES_TEXT, admin_main_keyboard
 from app.keyboards.admin.services import ServiceCallback, service_details_keyboard
+from app.schemas.authorization import StaffContext
 from app.schemas.service import ServiceView
 
 
@@ -48,3 +51,20 @@ def test_service_callbacks_fit_telegram_limit() -> None:
 
     assert len(callback.encode()) <= 64
     assert service_details_keyboard(service_view()).inline_keyboard
+
+
+def test_admin_services_button_sends_handler_text_without_hidden_whitespace() -> None:
+    context = StaffContext(
+        business_id=1,
+        staff_member_id=1,
+        user_id=1,
+        telegram_id=123,
+        display_name="Владелец",
+        role=StaffRole.OWNER,
+        is_bookable=False,
+    )
+    keyboard = admin_main_keyboard(staff_context=context)
+    button_texts = {button.text for row in keyboard.keyboard for button in row}
+
+    assert ADMIN_SERVICES_TEXT == "Услуги"
+    assert ADMIN_SERVICES_TEXT in button_texts
