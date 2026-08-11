@@ -15,7 +15,7 @@ from app.schemas.settings import BusinessSettingsView
 def admin_appointment() -> AdminAppointmentView:
     return AdminAppointmentView(
         id=11,
-        service_name="Маникюр <premium>",
+        service_name="Консультация <premium>",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
         duration_max_minutes=180,
@@ -25,7 +25,7 @@ def admin_appointment() -> AdminAppointmentView:
         timezone="Europe/Moscow",
         address="Дом <20>",
         map_url="https://example.com/map",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         can_self_manage=True,
         client_name="Анна & Ко",
         client_phone="+7<999>",
@@ -35,11 +35,11 @@ def admin_appointment() -> AdminAppointmentView:
 
 def settings_view() -> BusinessSettingsView:
     return BusinessSettingsView(
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Address",
         map_url="https://example.com/map",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,
@@ -55,7 +55,7 @@ def settings_view() -> BusinessSettingsView:
 def test_admin_appointment_render_escapes_contact_values() -> None:
     rendered = render_admin_appointment(admin_appointment())
 
-    assert "Маникюр &lt;premium&gt;" in rendered
+    assert "Консультация &lt;premium&gt;" in rendered
     assert "Анна &amp; Ко" in rendered
     assert "+7&lt;999&gt;" in rendered
 

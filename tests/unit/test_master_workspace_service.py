@@ -56,7 +56,7 @@ def build_uow() -> MagicMock:
                 SimpleNamespace(
                     id=11,
                     client_id=12,
-                    service_name_snapshot="Маникюр",
+                    service_name_snapshot="Консультация",
                     status=AppointmentStatus.CONFIRMED,
                 ),
                 SimpleNamespace(
@@ -108,7 +108,7 @@ def build_action_uow(
         staff_member_id=staff_member_id,
         client_id=12,
         window_id=13,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         status=AppointmentStatus.CONFIRMED,
         completed_at=None,
         no_show_at=None,

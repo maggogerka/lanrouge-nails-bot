@@ -19,6 +19,7 @@ from app.keyboards.admin.reviews import (
     hard_delete_review_keyboard,
 )
 from app.keyboards.admin.services import cancel_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.pagination import PageRequest
 from app.schemas.review import ReviewAdminUpdate, ReviewView
 from app.services.review_service import ReviewService
@@ -30,7 +31,7 @@ router = Router(name="admin.reviews")
 def _render(review: ReviewView) -> str:
     return (
         f"Отзыв #{review.id} · запись #{review.appointment_id}\n"
-        f"Клиентка: {escape(review.client_name)}\n"
+        f"Клиент: {escape(review.client_name)}\n"
         f"Оценка: {review.rating}/5\n"
         f"Текст: {escape(review.text or 'без текста')}\n"
         f"Разрешение на публикацию: {'да' if review.publication_consent else 'нет'}\n"
@@ -148,7 +149,14 @@ async def begin_review_edit(
     next_state, prompt = prompts[callback_data.action]
     await state.set_state(next_state)
     if isinstance(callback.message, Message):
-        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+        await callback.message.answer(
+            prompt,
+            reply_markup=(
+                optional_input_keyboard()
+                if callback_data.action == "edit_text"
+                else cancel_keyboard()
+            ),
+        )
     await callback.answer()
 
 
@@ -192,7 +200,7 @@ async def save_review_text(
         review = await review_service.edit_admin(
             actor_from_telegram(message.from_user),
             int(data["review_id"]),
-            ReviewAdminUpdate(text=None if raw == "-" else raw),
+            ReviewAdminUpdate(text=None if is_optional_skip(raw) else raw),
             correlation_id=correlation_id,
         )
     except (DomainError, ValueError) as exc:

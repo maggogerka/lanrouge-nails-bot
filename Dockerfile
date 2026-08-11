@@ -21,6 +21,7 @@ COPY --chown=10001:10001 pyproject.toml README.md LICENSE ./
 COPY --chown=10001:10001 app ./app
 COPY --chown=10001:10001 alembic.ini ./
 COPY --chown=10001:10001 alembic ./alembic
+RUN chown 10001:10001 /app
 
 USER 10001:10001
 

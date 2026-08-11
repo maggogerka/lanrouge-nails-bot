@@ -166,3 +166,42 @@ async def test_only_bootstrap_can_enable_its_solo_specialist_profile() -> None:
     authorization.authorize = AsyncMock(return_value=actor())
     with pytest.raises(AuthorizationError, match="bootstrap"):
         await service.set_bootstrap_bookable(actor(), enabled=True)
+
+
+@pytest.mark.asyncio
+async def test_welcome_draft_does_not_replace_public_content_until_publish() -> None:
+    live_actor = actor()
+    authorization = MagicMock()
+    authorization.authorize = AsyncMock(return_value=live_actor)
+    current = business()
+    current.welcome_published_text = "Старое приветствие"
+    current.welcome_published_photo_file_id = "old-photo"
+    unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
+    unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
+    unit_of_work.__aexit__ = AsyncMock(return_value=None)
+    unit_of_work.businesses.get = AsyncMock(return_value=current)
+    unit_of_work.businesses.flush = AsyncMock()
+    unit_of_work.audit.add = AsyncMock()
+    unit_of_work.commit = AsyncMock()
+    service = BusinessAdministrationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        authorization,
+    )
+
+    draft = await service.save_welcome_text(
+        live_actor,
+        "<b>Новое</b> & безопасное",
+        correlation_id="welcome-draft",
+    )
+
+    assert draft.draft_text == "<b>Новое</b> &amp; безопасное"
+    assert draft.published_text == "Старое приветствие"
+    assert current.welcome_published_photo_file_id == "old-photo"
+
+    current.welcome_draft_photo_file_id = "new-photo"
+    current.welcome_draft_photo_unique_id = "new-photo-unique"
+    published = await service.publish_welcome(live_actor, correlation_id="welcome-publish", now=NOW)
+    assert published.published_text == draft.draft_text
+    assert published.published_photo_file_id == "new-photo"
+    assert published.published_at == NOW

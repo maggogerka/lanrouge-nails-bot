@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
@@ -58,6 +59,7 @@ class ClientSummaryView(BaseModel):
     telegram_id: int
     display_name: str
     username: str | None
+    telegram_profile_url: str | None = None
     masked_phone: str | None
     marketing_subscribed: bool
     is_blocked: bool
@@ -93,3 +95,11 @@ class ClientPage(BaseModel):
     @property
     def pages(self) -> int:
         return max(1, (self.total + self.page_size - 1) // self.page_size)
+
+
+def safe_telegram_profile_url(username: str | None) -> str | None:
+    """Build a public profile URL only for a currently valid Telegram username."""
+
+    if username is None or re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) is None:
+        return None
+    return f"https://t.me/{username}"

@@ -59,7 +59,7 @@ async def seed_booking_case(database: Database) -> None:
         await session.flush()
         service = Service(
             business_id=1,
-            name="Маникюр",
+            name="Консультация",
             description=None,
             price=Decimal("2500.00"),
             duration_min_minutes=120,

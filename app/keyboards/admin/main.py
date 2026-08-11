@@ -7,12 +7,12 @@ from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.menu import MenuCapabilities
 from app.security import get_staff_context
 
-ADMIN_SERVICES_TEXT = "💅 Услуги"
+ADMIN_SERVICES_TEXT = " Услуги"
 ADMIN_ADD_WINDOW_TEXT = "➕ Добавить окно"
 ADMIN_WINDOWS_TEXT = "🕒 Открытые окна"
 ADMIN_TODAY_TEXT = "📅 Сегодня"
 ADMIN_UPCOMING_TEXT = "🗓 Ближайшие записи"
-ADMIN_CLIENTS_TEXT = "👥 Клиентки"
+ADMIN_CLIENTS_TEXT = "👥 Клиенты"
 ADMIN_PORTFOLIO_TEXT = "🖼 Портфолио"
 ADMIN_SETTINGS_TEXT = "⚙️ Настройки"
 ADMIN_WAITLIST_TEXT = "⏳ Лист ожидания"

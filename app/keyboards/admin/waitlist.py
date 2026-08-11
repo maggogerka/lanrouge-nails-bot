@@ -40,7 +40,7 @@ def admin_waitlist_entry_keyboard(entry_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Написать клиентке",
+                    text="Написать клиенту",
                     callback_data=AdminWaitlistCallback(action="write", entry_id=entry_id).pack(),
                 )
             ],

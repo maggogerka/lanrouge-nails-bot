@@ -86,9 +86,9 @@ async def test_statistics_are_aggregate_and_live_authorized() -> None:
 def test_campaign_link_contains_only_public_bot_name_and_validated_code() -> None:
     view = AcquisitionSourceView.model_validate(source())
 
-    link = AcquisitionAdministrationService.link_for(view, "@example_nails_bot")
+    link = AcquisitionAdministrationService.link_for(view, "@example_service_bot")
 
-    assert link.deep_link == "https://t.me/example_nails_bot?start=avito"
+    assert link.deep_link == "https://t.me/example_service_bot?start=avito"
     assert link.qr_payload == link.deep_link
     with pytest.raises(ValueError):
         AcquisitionAdministrationService.link_for(view, "bad host/name")

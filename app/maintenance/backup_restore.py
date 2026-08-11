@@ -386,9 +386,9 @@ class BackupRestoreService:
                     "backup",
                     "--stdin",
                     "--stdin-filename",
-                    "lanrouge-postgres.dump",
+                    "telegram-crm-postgres.dump",
                     "--tag",
-                    "lanrouge-postgres",
+                    "telegram-crm-postgres",
                 ),
                 environment=_restic_environment(
                     self._settings.process_environment,
@@ -407,7 +407,7 @@ class BackupRestoreService:
                     "restic",
                     "forget",
                     "--tag",
-                    "lanrouge-postgres",
+                    "telegram-crm-postgres",
                     "--keep-daily",
                     str(self._settings.keep_daily),
                     "--keep-weekly",
@@ -432,9 +432,9 @@ class BackupRestoreService:
                     "restic",
                     "dump",
                     "--tag",
-                    "lanrouge-postgres",
+                    "telegram-crm-postgres",
                     "latest",
-                    "lanrouge-postgres.dump",
+                    "telegram-crm-postgres.dump",
                 ),
                 environment=_restic_environment(
                     self._settings.process_environment,
@@ -545,7 +545,7 @@ class BackupRestoreService:
 
 @contextmanager
 def _secure_temporary_dump() -> Iterator[Path]:
-    descriptor, raw_path = tempfile.mkstemp(prefix="lanrouge-backup-", suffix=".dump")
+    descriptor, raw_path = tempfile.mkstemp(prefix="telegram-crm-backup-", suffix=".dump")
     path = Path(raw_path)
     try:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)

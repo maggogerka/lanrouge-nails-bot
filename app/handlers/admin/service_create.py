@@ -18,6 +18,7 @@ from app.keyboards.admin.services import (
     cancel_keyboard,
     service_details_keyboard,
 )
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.service import ServiceCreate
 from app.services.service_catalog import ServiceCatalog
 from app.states.admin_service import AdminServiceCreate
@@ -42,13 +43,15 @@ async def capture_service_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(name=name)
     await state.set_state(AdminServiceCreate.description)
-    await message.answer("Введите описание или отправьте «-», если его нет:")
+    await message.answer(
+        "Введите описание или пропустите этот шаг:", reply_markup=optional_input_keyboard()
+    )
 
 
 @router.message(AdminServiceCreate.description)
 async def capture_service_description(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
-    description = None if raw == "-" else raw
+    description = None if is_optional_skip(raw) else raw
     if description is not None and len(description) > 4000:
         await message.answer("Описание не должно превышать 4000 символов.")
         return

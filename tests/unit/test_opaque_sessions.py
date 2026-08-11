@@ -87,7 +87,7 @@ async def test_issuer_returns_only_random_opaque_token_and_hashes_redis_key() ->
     }
     assert "telegram" not in json.dumps(response).lower()
     [(key, value)] = redis.values.items()
-    assert key.startswith("lanrouge:webapp_session:")
+    assert key.startswith("telegram_crm:webapp_session:")
     assert key != TOKEN
     assert TOKEN not in key
     assert TOKEN not in value

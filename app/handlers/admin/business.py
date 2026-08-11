@@ -22,6 +22,7 @@ from app.domain.errors import DomainError, EntityNotFoundError
 from app.keyboards.admin.business import BusinessProfileCallback, business_profile_keyboard
 from app.keyboards.admin.main import ADMIN_BUSINESS_SETTINGS_TEXT
 from app.keyboards.admin.services import cancel_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.authorization import StaffContext
 from app.schemas.business import BusinessAdminView, BusinessProfileUpdate
 from app.services.business_service import BusinessAdministrationService
@@ -54,6 +55,15 @@ _PROMPT_BY_ACTION = {
     "terms": "Введите HTTPS-ссылку на оферту или «-», чтобы очистить:",
     "support_name": "Введите имя клиентской поддержки или «-», чтобы очистить:",
     "support_url": "Введите HTTPS-ссылку клиентской поддержки или «-», чтобы очистить:",
+}
+_OPTIONAL_ACTIONS = {
+    "description",
+    "short",
+    "phone",
+    "address",
+    "terms",
+    "support_name",
+    "support_url",
 }
 
 
@@ -209,7 +219,11 @@ async def begin_text_edit(
     if isinstance(callback.message, Message):
         await callback.message.answer(
             _PROMPT_BY_ACTION[callback_data.action],
-            reply_markup=cancel_keyboard(),
+            reply_markup=(
+                optional_input_keyboard()
+                if callback_data.action in _OPTIONAL_ACTIONS
+                else cancel_keyboard()
+            ),
         )
     await callback.answer()
 
@@ -228,7 +242,7 @@ async def save_text_value(
         await state.clear()
         return
     raw = (message.text or "").strip()
-    value = None if raw == "-" else raw
+    value = None if is_optional_skip(raw) else raw
     try:
         update = BusinessProfileUpdate.model_validate({field: value})
         view = await business_service.update(
@@ -319,5 +333,5 @@ async def _subscription_summary(
         rows.append(f"Следующее списание: {subscription.next_payment_at:%d.%m.%Y}")
     if SubscriptionService.owner_warning_due(subscription):
         rows.append("⚠️ Срок подписки заканчивается или требуется оплата.")
-    rows.append("Оплата услуг клиентками учитывается отдельно от CRM-подписки.")
+    rows.append("Оплата услуг клиентами учитывается отдельно от CRM-подписки.")
     return "\n".join(rows)

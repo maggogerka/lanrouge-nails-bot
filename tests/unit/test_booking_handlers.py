@@ -27,7 +27,7 @@ from app.schemas.service import ServiceAddonView, ServiceView
 def test_confirmation_uses_local_time_and_escapes_client_values() -> None:
     service = ServiceView(
         id=3,
-        name="Маникюр <premium>",
+        name="Консультация <premium>",
         description=None,
         price=Decimal("2500.00"),
         duration_min_minutes=120,
@@ -41,10 +41,10 @@ def test_confirmation_uses_local_time_and_escapes_client_values() -> None:
         timezone="Europe/Moscow",
     )
     info = BusinessInfo(
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         address="Дом <20>",
         map_url="https://example.com/map",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
     )
 
     rendered = render_booking_confirmation(
@@ -54,7 +54,7 @@ def test_confirmation_uses_local_time_and_escapes_client_values() -> None:
         client_name="Анна & Ко",
     )
 
-    assert "Маникюр &lt;premium&gt;" in rendered
+    assert "Консультация &lt;premium&gt;" in rendered
     assert "23.07.2026" in rendered
     assert "10:00" in rendered
     assert "Анна &amp; Ко" in rendered

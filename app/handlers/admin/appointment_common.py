@@ -12,7 +12,7 @@ def render_admin_appointment(appointment: AdminAppointmentView) -> str:
     return (
         render_appointment(appointment)
         + "\n\n"
-        + f"Клиентка: {escape(appointment.client_name)}\n"
+        + f"Клиент: {escape(appointment.client_name)}\n"
         + f"Telegram: {username}\n"
         + f"Телефон: {phone}"
     )

@@ -68,7 +68,7 @@ def build_uow() -> MagicMock:
     unit_of_work.services.get = AsyncMock(
         return_value=Service(
             id=3,
-            name="Маникюр",
+            name="Консультация",
             price=Decimal("2500.00"),
             duration_min_minutes=120,
             duration_max_minutes=180,

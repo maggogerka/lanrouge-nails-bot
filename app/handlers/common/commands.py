@@ -26,7 +26,7 @@ def start_text(business_name: str = "Студия") -> str:
     """Return the stage-safe greeting without unfinished menu actions."""
 
     return (
-        f"Добро пожаловать в <b>{escape(business_name)}</b>! 💅\n\n"
+        f"Добро пожаловать в <b>{escape(business_name)}</b>!\n\n"
         "Здесь можно будет выбрать услугу и записаться в свободное время. "
         "Онлайн-запись запускается поэтапно.\n\n"
         "Команда /whoami покажет ваш числовой Telegram ID."

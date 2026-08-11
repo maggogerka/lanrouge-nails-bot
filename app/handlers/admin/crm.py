@@ -22,6 +22,7 @@ from app.keyboards.admin.crm import (
     notes_keyboard,
 )
 from app.keyboards.admin.main import ADMIN_CLIENTS_TEXT
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.crm import ClientCardView, ClientNoteCreate, ClientTagCreate
 from app.schemas.pagination import PageRequest
@@ -89,6 +90,7 @@ async def show_client_card(
     callback: CallbackQuery,
     callback_data: CrmCallback,
     crm_service: CrmService,
+    staff_context: StaffContext,
 ) -> None:
     try:
         card = await crm_service.get_card(
@@ -99,7 +101,10 @@ async def show_client_card(
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            _render_card(card),
+            _render_card(
+                card,
+                show_phone=staff_context.has_permission(StaffPermission.VIEW_CLIENT_PHONE),
+            ),
             reply_markup=client_card_keyboard(card, page=callback_data.page),
         )
     await callback.answer()
@@ -138,7 +143,7 @@ async def show_client_tags(
     tags = await crm_service.list_tags(actor, active_only=True)
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            "Теги клиентки:",
+            "Теги клиента:",
             reply_markup=client_tags_keyboard(card.id, tags, {tag.id for tag in card.tags}),
         )
     await callback.answer()
@@ -331,7 +336,10 @@ async def begin_self_booking_block(
     await state.set_state(AdminCrmFlow.block_reason)
     await state.update_data(client_id=callback_data.client_id)
     if isinstance(callback.message, Message):
-        await callback.message.answer("Укажите короткую организационную причину или отправьте «-»:")
+        await callback.message.answer(
+            "Укажите короткую организационную причину или пропустите этот шаг:",
+            reply_markup=optional_input_keyboard(),
+        )
     await callback.answer()
 
 
@@ -350,7 +358,7 @@ async def finish_self_booking_block(
         actor_from_telegram(message.from_user),
         int(data["client_id"]),
         blocked=True,
-        reason=None if reason == "-" else reason,
+        reason=None if is_optional_skip(reason) else reason,
         correlation_id=correlation_id,
     )
     await state.clear()
@@ -389,7 +397,7 @@ async def begin_write_client(
     await state.set_state(AdminCrmFlow.write_client)
     await state.update_data(client_id=callback_data.client_id)
     if isinstance(callback.message, Message):
-        await callback.message.answer("Введите сервисное сообщение клиентке:")
+        await callback.message.answer("Введите сервисное сообщение клиенту:")
     await callback.answer()
 
 
@@ -413,7 +421,7 @@ async def write_client(
     try:
         await bot.send_message(card.telegram_id, text)
     except TelegramAPIError:
-        await message.answer("Не удалось отправить сообщение: клиентка недоступна в Telegram.")
+        await message.answer("Не удалось отправить сообщение: клиент недоступен в Telegram.")
         return
     await state.clear()
     await message.answer("Сообщение отправлено.")
@@ -497,7 +505,8 @@ async def confirm_manual_booking_override(
     await state.set_state(AdminCrmFlow.manual_booking_override_reason)
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            "Укажите причину превышения лимита или отправьте «-» для типа repeat_session."
+            "Укажите причину превышения лимита или пропустите для типа repeat_session.",
+            reply_markup=optional_input_keyboard(),
         )
     await callback.answer()
 
@@ -520,7 +529,9 @@ async def create_manual_booking_override(
             service_id=int(data["service_id"]),
             window_id=int(data["window_id"]),
             staff_context=staff_context,
-            quota_override_reason=(message.text or "").strip(),
+            quota_override_reason=(
+                "-" if is_optional_skip(message.text or "") else (message.text or "").strip()
+            ),
             quota_override_confirmed=True,
             correlation_id=correlation_id,
         )
@@ -540,20 +551,33 @@ async def _send_client_list(
 ) -> None:
     result = await service.list_clients(actor, PageRequest(page=page, page_size=10))
     await message.answer(
-        "Клиенток пока нет." if not result.items else f"Клиентки: {result.total}",
+        "Клиентов пока нет." if not result.items else f"Клиенты: {result.total}",
         reply_markup=client_list_keyboard(result.items, page=result.page, pages=result.pages),
     )
 
 
-def _render_card(card: ClientCardView) -> str:
+def _render_card(card: ClientCardView, *, show_phone: bool = False) -> str:
     subscription = "включена" if card.marketing_subscribed else "выключена"
     booking = "запрещена" if card.is_self_booking_blocked else "разрешена"
     tags = ", ".join(escape(tag.name) for tag in card.tags) or "—"
+    username = f"@{escape(card.username)}" if card.username else "не указан"
+    profile = (
+        f'<a href="{escape(card.telegram_profile_url, quote=True)}">Открыть профиль</a>'
+        if card.telegram_profile_url
+        else "Профиль по username недоступен"
+    )
+    phone = (
+        escape(card.phone)
+        if show_phone and card.phone
+        else ("не указан" if show_phone else "скрыт по правам доступа")
+    )
     return (
         f"<b>{escape(card.display_name)}</b>\n"
         f"Внутренний ID: {card.id}\n"
-        f"Telegram: @{escape(card.username) if card.username else '—'}\n"
-        f"Телефон: {escape(card.phone) if card.phone else '—'}\n"
+        f"Telegram ID: <code>{card.telegram_id}</code>\n"
+        f"Username: {username}\n"
+        f"{profile}\n"
+        f"Телефон: {phone}\n"
         f"Выполнено: {card.completed_visits}; отмен: {card.cancellations}; "
         f"неявок: {card.no_shows}\n"
         f"Рекламная подписка: {subscription}\n"

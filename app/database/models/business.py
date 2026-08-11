@@ -40,6 +40,11 @@ class Business(TimestampMixin, Base):
             name="slug_format",
         ),
         CheckConstraint("char_length(currency) = 3", name="currency_iso_length"),
+        CheckConstraint(
+            "(welcome_draft_text IS NULL OR char_length(welcome_draft_text) <= 7000) AND "
+            "(welcome_published_text IS NULL OR char_length(welcome_published_text) <= 7000)",
+            name="welcome_text_length_valid",
+        ),
         Index("ix_businesses_status", "status"),
     )
 
@@ -73,6 +78,13 @@ class Business(TimestampMixin, Base):
     contact_email: Mapped[str | None] = mapped_column(String(320))
     logo_telegram_file_id: Mapped[str | None] = mapped_column(String(512))
     logo_telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255))
+    welcome_draft_text: Mapped[str | None] = mapped_column(Text)
+    welcome_draft_photo_file_id: Mapped[str | None] = mapped_column(String(512))
+    welcome_draft_photo_unique_id: Mapped[str | None] = mapped_column(String(255))
+    welcome_published_text: Mapped[str | None] = mapped_column(Text)
+    welcome_published_photo_file_id: Mapped[str | None] = mapped_column(String(512))
+    welcome_published_photo_unique_id: Mapped[str | None] = mapped_column(String(255))
+    welcome_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     social_links: Mapped[dict[str, str]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )

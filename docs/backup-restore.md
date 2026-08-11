@@ -65,7 +65,7 @@ Core никогда не создаёт и не удаляет базы. Опе�
 `postgres`, `template0` и `template1` отклоняются.
 
 ```text
-RESTORE_DATABASE_URL=postgresql+asyncpg://<restore-user>:<password>@<host>:5432/lanrouge_restore_test
+RESTORE_DATABASE_URL=postgresql+asyncpg://<restore-user>:<password>@<host>:5432/app_restore_test
 RESTORE_ACKNOWLEDGE=RESTORE_TO_SEPARATE_TEST_DATABASE
 ```
 

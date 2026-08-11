@@ -25,11 +25,11 @@ def actor(telegram_id: int = 101) -> AdminActor:
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Новоостаповская, д. 20",
         map_url="https://yandex.ru/maps/-/CTbJz23i",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,

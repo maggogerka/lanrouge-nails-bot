@@ -15,7 +15,7 @@
 `TRUNCATE ... RESTART IDENTITY`, поэтому production URL здесь недопустим.
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test"
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://app_user:password@localhost:5432/app_test"
 alembic upgrade head
 .\.venv\Scripts\python.exe -m pytest tests/integration
 ```
@@ -30,8 +30,8 @@ alembic upgrade 20260722_0001
 alembic upgrade head
 alembic check
 docker compose config
-docker build --target runtime -t lanrouge-nails-bot:test .
-docker build --target test -t lanrouge-nails-bot-tests:test .
+docker build --target runtime -t telegram-crm-bot:test .
+docker build --target test -t telegram-crm-bot-tests:test .
 ```
 
 CI выполняет те же проверки на Python 3.12 с PostgreSQL и Redis. Интеграционные тесты без

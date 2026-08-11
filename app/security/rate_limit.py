@@ -86,7 +86,7 @@ class RateLimitDecision:
 class RedisRateLimiter:
     """Server-time sliding windows executed atomically in one Redis Lua call."""
 
-    def __init__(self, redis: RedisEvalClient, *, namespace: str = "lanrouge") -> None:
+    def __init__(self, redis: RedisEvalClient, *, namespace: str = "telegram_crm") -> None:
         if not _SAFE_NAME.fullmatch(namespace):
             raise ValueError("namespace must be a safe lowercase identifier")
         self._redis = redis

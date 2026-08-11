@@ -1,10 +1,10 @@
-# Развёртывание v0.3.1
+# Развёртывание v0.4.1
 
 ## Подготовка
 
 Скопируйте `.env.example` в `.env`. Обязательны `BOT_TOKEN`, `POSTGRES_PASSWORD`,
 `DATABASE_URL`, `REDIS_URL`, опубликованный `PRIVACY_POLICY_URL` и хотя бы один числовой
-`ADMIN_TELEGRAM_IDS`. Пароль после `lanrouge:` в `DATABASE_URL` должен совпадать с
+`ADMIN_TELEGRAM_IDS`. Пароль пользователя в `DATABASE_URL` должен совпадать с
 `POSTGRES_PASSWORD`. `.env`, дампы и логи с персональными данными не коммитятся.
 
 ```powershell
@@ -12,7 +12,7 @@ docker compose config
 docker compose build
 docker compose up -d
 docker compose ps
-docker compose logs bot notification-worker broadcast-worker reference-cleanup-worker migrate
+docker compose logs bot notification-worker broadcast-worker reference-cleanup-worker privacy-deletion-worker migrate
 docker compose run --rm bot python -m app.healthcheck
 ```
 
@@ -24,6 +24,7 @@ docker compose run --rm bot python -m app.healthcheck
 - `notification-worker` — сервисные/review/repeat/waitlist задания;
 - `broadcast-worker` — отдельная rate-limited очередь рекламных кампаний.
 - `reference-cleanup-worker` — автоматическая очистка просроченных Telegram file ID.
+- `privacy-deletion-worker` — ограниченная по попыткам обработка запросов обезличивания.
 
 Все application-процессы используют один непривилегированный runtime image и стартуют
 только после успешной миграции. `docker compose down` сохраняет volumes. Команда с
@@ -31,11 +32,11 @@ docker compose run --rm bot python -m app.healthcheck
 
 ## Обновление
 
-1. Остановите `bot`, `notification-worker`, `broadcast-worker`, `reference-cleanup-worker`.
+1. Остановите application-процессы, не останавливая PostgreSQL и Redis.
 2. Сделайте backup и тест восстановления:
 
    ```powershell
-   docker compose exec -T postgres pg_dump -U lanrouge -d lanrouge -Fc > lanrouge-before-upgrade.dump
+   docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > before-upgrade.dump
    docker compose run --rm migrate alembic current
    ```
 

@@ -32,7 +32,7 @@ def portfolio_card_keyboard(
     if navigation:
         rows.append(navigation)
     rows.append([_callback_button("🏷 Теги", "tags", page, object_id=item.id)])
-    rows.append([_callback_button("💅 Хочу похожий дизайн", "similar", page, object_id=item.id)])
+    rows.append([_callback_button("Хочу похожий результат", "similar", page, object_id=item.id)])
     rows.append([_callback_button("📅 Записаться", "book", page, object_id=item.id)])
     if share_url is not None:
         rows.append([InlineKeyboardButton(text="Поделиться работой", url=share_url)])

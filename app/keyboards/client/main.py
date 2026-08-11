@@ -4,7 +4,7 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from app.schemas.menu import MenuCapabilities
 
-CLIENT_BOOK_TEXT = "💅 Записаться"
+CLIENT_BOOK_TEXT = "Записаться"
 CLIENT_APPOINTMENTS_TEXT = "📅 Мои записи"
 CLIENT_SERVICES_TEXT = "💵 Услуги и цены"
 CLIENT_MASTERS_TEXT = "👩‍💼 Мастера"

@@ -93,7 +93,7 @@ def render_booking_receipt(receipt: BookingReceipt) -> str:
     payment_amount = receipt.payment_amount or Decimal("0.00")
     payment_currency = escape(receipt.payment_currency or "RUB")
     if receipt.appointment_status is AppointmentStatus.CONFIRMED:
-        heading = "<b>Запись подтверждена! 💅</b>"
+        heading = "<b>Запись подтверждена! </b>"
         payment_block = ""
     elif receipt.payment_mode is PaymentMode.MANUAL:
         heading = "<b>Время зарезервировано — ожидаем подтверждение оплаты</b>"
@@ -167,7 +167,7 @@ def render_admin_new_booking(receipt: BookingReceipt) -> str:
         f"{status_line}"
         f"{payment_line}"
         f"Дата и время: {local:%d.%m.%Y %H:%M}\n"
-        f"Клиентка: {escape(receipt.client_name)}\n"
+        f"Клиент: {escape(receipt.client_name)}\n"
         f"Телефон: {escape(receipt.phone)}"
     )
 

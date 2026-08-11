@@ -10,7 +10,7 @@ _STATUS_LABELS = {
     "confirmed": "подтверждена",
     "client_confirmed": "визит подтверждён",
     "completed": "завершена",
-    "cancelled_by_client": "отменена клиенткой",
+    "cancelled_by_client": "отменена клиентом",
     "cancelled_by_admin": "отменена мастером",
     "no_show": "неявка",
     "rescheduled": "перенесена",

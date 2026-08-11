@@ -27,7 +27,7 @@ def build_uow(*, published: bool = False, enabled: bool = True) -> MagicMock:
     )
     profile = MasterProfile(
         id=1,
-        display_name="Lanrouge nails",
+        display_name="Example Studio",
         bio=None,
         address=None,
         map_url=None,

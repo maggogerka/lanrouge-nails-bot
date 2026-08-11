@@ -50,8 +50,8 @@ _ALL_STAFF_ROLES = frozenset(StaffRole)
 
 
 def privacy_text(business_name: str) -> str:
+    del business_name
     return (
-        f"Добро пожаловать в <b>{escape(business_name)}</b>! 💅\n\n"
         "Для записи бот хранит только необходимые контактные данные, согласия и историю "
         "визитов. Ознакомьтесь с политикой и явно подтвердите согласие на обработку данных."
     )
@@ -164,12 +164,12 @@ async def _show_client_entry(
     except DomainError:
         await message.answer("Бот временно недоступен: профиль бизнеса не настроен.")
         return
+    await _send_public_welcome(message, business.welcome_text, business.welcome_photo_file_id)
     actor = actor_from_telegram(telegram_user)
     status = await consent_service.get_or_create_status(actor)
     if not status.privacy_accepted:
         if business.privacy_policy_url is None:
             await message.answer(
-                f"Добро пожаловать в <b>{escape(business.display_name)}</b>! 💅\n\n"
                 "Онлайн-запись временно недоступна: владелец ещё не опубликовал политику "
                 "конфиденциальности. Команда /whoami продолжает работать."
             )
@@ -191,7 +191,7 @@ async def _show_client_entry(
         )
         return
     await message.answer(
-        f"С возвращением в <b>{escape(business.display_name)}</b>!",
+        "Главное меню",
         reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
     )
     if start_payload is not None and start_payload.startswith("portfolio_"):
@@ -204,6 +204,16 @@ async def _show_client_entry(
         except ValueError:
             return
         await show_deep_linked_portfolio_item(message, portfolio_service, bot, item_id)
+
+
+async def _send_public_welcome(
+    message: Message,
+    text: str,
+    photo_file_id: str | None,
+) -> None:
+    if photo_file_id is not None:
+        await message.answer_photo(photo_file_id)
+    await message.answer(text)
 
 
 @router.callback_query(ConsentCallback.filter(F.action == "privacy_accept"))

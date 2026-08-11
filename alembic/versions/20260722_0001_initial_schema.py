@@ -454,11 +454,11 @@ def upgrade() -> None:
             version
         ) VALUES (
             1,
-            'lanrouge nails',
+            'Бизнес',
             'Europe/Moscow',
             'Новоостаповская, д. 20',
             'https://yandex.ru/maps/-/CTbJz23i',
-            'https://t.me/lanrouge',
+            'https://t.me/example_service_bot',
             31,
             36,
             2,

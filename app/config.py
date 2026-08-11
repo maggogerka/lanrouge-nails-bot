@@ -99,7 +99,7 @@ class Settings(BaseSettings):
         exclude=True,
     )
     instance_id: str = Field(default="default-instance", validation_alias="INSTANCE_ID")
-    redis_namespace: str = Field(default="lanrouge", validation_alias="REDIS_NAMESPACE")
+    redis_namespace: str = Field(default="telegram_crm", validation_alias="REDIS_NAMESPACE")
     timezone: str = Field(default="Europe/Moscow", validation_alias="TIMEZONE")
     app_env: AppEnvironment = Field(
         default=AppEnvironment.DEVELOPMENT,

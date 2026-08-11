@@ -56,11 +56,11 @@ def actor() -> ClientActor:
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Новоостаповская, д. 20",
         map_url="https://yandex.ru/maps/-/CTbJz23i",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,
@@ -89,7 +89,7 @@ def catalog_service(*, duration_max: int = 180, active: bool = True) -> Service:
     return Service(
         id=3,
         business_id=1,
-        name="Маникюр с покрытием",
+        name="Консультация с покрытием",
         description=None,
         price=Decimal("2500.00"),
         duration_min_minutes=120,
@@ -591,7 +591,7 @@ async def test_successful_booking_snapshots_service_and_schedules_only_future_jo
     appointment = unit_of_work.appointments.add.await_args.args[0]
     assert receipt.appointment_id == 11
     assert receipt.master_name == "Основной мастер"
-    assert appointment.service_name_snapshot == "Маникюр с покрытием"
+    assert appointment.service_name_snapshot == "Консультация с покрытием"
     assert appointment.price_snapshot == Decimal("2500.00")
     assert target_window.status is AvailabilityWindowStatus.BOOKED
     jobs = unit_of_work.notifications.add_all.await_args.args[0]

@@ -35,7 +35,7 @@ SESSION = OpaqueSession(
 )
 SERVICE = ServiceView(
     id=5,
-    name="Маникюр",
+    name="Консультация",
     description=None,
     price=Decimal("2500.00"),
     duration_min_minutes=60,
@@ -52,7 +52,7 @@ WINDOW = BookingWindowView(
 )
 APPOINTMENT = AppointmentView(
     id=11,
-    service_name="Маникюр",
+    service_name="Консультация",
     price=Decimal("2500.00"),
     duration_min_minutes=60,
     duration_max_minutes=90,
@@ -164,7 +164,7 @@ async def test_booking_is_idempotent_and_never_reflects_reservation_secret() -> 
     services["booking"].book = AsyncMock(
         return_value=BookingReceipt(
             appointment_id=11,
-            service_name="Маникюр",
+            service_name="Консультация",
             master_name="Анна",
             price=Decimal("2500.00"),
             duration_min_minutes=60,

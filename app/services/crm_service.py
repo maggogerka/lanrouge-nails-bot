@@ -18,6 +18,7 @@ from app.schemas.crm import (
     ClientSummaryView,
     ClientTagCreate,
     ClientTagView,
+    safe_telegram_profile_url,
 )
 from app.schemas.pagination import PageRequest
 from app.schemas.service import AdminActor
@@ -65,7 +66,7 @@ class CrmService:
         async with self._unit_of_work_factory() as unit_of_work:
             user = await unit_of_work.users.get_by_id(client_id)
             if user is None:
-                raise EntityNotFoundError("Клиентка больше не существует.")
+                raise EntityNotFoundError("Клиент больше не существует.")
             rows, total = await unit_of_work.appointments.list_history_for_client(
                 client_id, limit=10, offset=0
             )
@@ -149,9 +150,9 @@ class CrmService:
             client = await unit_of_work.users.get_by_id(client_id)
             tag = await unit_of_work.crm.get_tag(tag_id)
             if client is None or tag is None:
-                raise EntityNotFoundError("Клиентка или тег больше не существует.")
+                raise EntityNotFoundError("Клиент или тег больше не существует.")
             if not tag.is_active:
-                raise CrmStateError("Архивный тег нельзя назначить клиентке.")
+                raise CrmStateError("Архивный тег нельзя назначить клиенту.")
             created = await unit_of_work.crm.assign_tag(
                 user_id=client_id, tag_id=tag_id, assigned_by=actor_user.id
             )
@@ -231,7 +232,7 @@ class CrmService:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             client = await unit_of_work.users.get_by_id(client_id)
             if client is None:
-                raise EntityNotFoundError("Клиентка больше не существует.")
+                raise EntityNotFoundError("Клиент больше не существует.")
             note = await unit_of_work.crm.add_note(
                 ClientNote(
                     business_id=unit_of_work.business_id,
@@ -291,7 +292,7 @@ class CrmService:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             client = await unit_of_work.users.get_by_id(client_id, for_update=True)
             if client is None:
-                raise EntityNotFoundError("Клиентка больше не существует.")
+                raise EntityNotFoundError("Клиент больше не существует.")
             client.is_self_booking_blocked = blocked
             client.self_booking_blocked_at = self._aware_now(now) if blocked else None
             client.self_booking_blocked_by = actor_user.id if blocked else None
@@ -315,8 +316,9 @@ class CrmService:
         return ClientSummaryView(
             id=user.id,
             telegram_id=user.telegram_id,
-            display_name=display_name or user.username or f"Клиентка #{user.id}",
+            display_name=display_name or user.username or f"Клиент #{user.id}",
             username=user.username,
+            telegram_profile_url=safe_telegram_profile_url(user.username),
             masked_phone=_mask_phone(user.phone),
             marketing_subscribed=(
                 user.marketing_consent_at is not None and user.marketing_unsubscribed_at is None

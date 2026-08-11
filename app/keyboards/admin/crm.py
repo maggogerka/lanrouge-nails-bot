@@ -44,23 +44,27 @@ def client_card_keyboard(card: ClientCardView, *, page: int = 1) -> InlineKeyboa
         if card.is_self_booking_blocked
         else "⛔ Запретить самостоятельную запись"
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [_button("📚 История", "history", client_id=card.id)],
-            [_button("🏷 Теги", "client_tags", client_id=card.id)],
-            [_button("📝 Заметки", "notes", client_id=card.id)],
-            [_button("✉️ Написать", "write", client_id=card.id)],
-            [_button("➕ Создать запись", "manual", client_id=card.id)],
-            [
-                _button(
-                    block_text,
-                    "unblock" if card.is_self_booking_blocked else "block",
-                    client_id=card.id,
-                )
-            ],
-            [_button("🔙 К списку", "list", page=page)],
-        ]
-    )
+    rows = [
+        [_button("📚 История", "history", client_id=card.id)],
+        [_button("🏷 Теги", "client_tags", client_id=card.id)],
+        [_button("📝 Заметки", "notes", client_id=card.id)],
+        [_button("✉️ Написать", "write", client_id=card.id)],
+        [_button("➕ Создать запись", "manual", client_id=card.id)],
+        [
+            _button(
+                block_text,
+                "unblock" if card.is_self_booking_blocked else "block",
+                client_id=card.id,
+            )
+        ],
+        [_button("🔙 К списку", "list", page=page)],
+    ]
+    if card.telegram_profile_url is not None:
+        rows.insert(
+            0,
+            [InlineKeyboardButton(text="Открыть профиль", url=card.telegram_profile_url)],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def booking_limit_override_keyboard(client_id: int) -> InlineKeyboardMarkup:
@@ -132,7 +136,7 @@ def all_tags_keyboard(tags: list[ClientTagView]) -> InlineKeyboardMarkup:
         for tag in tags
     ]
     rows.append([_button("➕ Новый тег", "tag_create")])
-    rows.append([_button("🔙 Клиентки", "list")])
+    rows.append([_button("🔙 Клиенты", "list")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

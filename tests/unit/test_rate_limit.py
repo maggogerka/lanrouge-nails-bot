@@ -46,7 +46,7 @@ async def test_consume_is_one_atomic_lua_call_and_reuses_safe_business_key() -> 
     assert len(redis.eval_calls) == 1
     script, numkeys, args = redis.eval_calls[0]
     assert numkeys == 1
-    assert args == ("lanrouge:rate:7:booking_attempts:41", 60_000, 5, "request-12345678")
+    assert args == ("telegram_crm:rate:7:booking_attempts:41", 60_000, 5, "request-12345678")
     assert "redis.call('TIME')" in script
     assert "ZREMRANGEBYSCORE" in script
     assert "ZSCORE" in script
@@ -108,8 +108,8 @@ async def test_invalid_scope_never_reaches_redis() -> None:
 @pytest.mark.asyncio
 async def test_reset_uses_the_same_scoped_key() -> None:
     redis = FakeRedis([])
-    limiter = RedisRateLimiter(redis, namespace="nails")
+    limiter = RedisRateLimiter(redis, namespace="studio")
 
     await limiter.reset("booking_failures", business_id=7, subject_id=41)
 
-    assert redis.deleted == ["nails:rate:7:booking_failures:41"]
+    assert redis.deleted == ["studio:rate:7:booking_failures:41"]

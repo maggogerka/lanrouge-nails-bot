@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from app.database.models.business import Business
 from app.domain.enums import BusinessStatus, BusinessType
 from app.domain.errors import AuthorizationError, BusinessTypeTransitionError, EntityNotFoundError
+from app.domain.welcome import default_welcome_html, sanitize_welcome_html
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.authorization import StaffContext, StaffPermission
-from app.schemas.business import BusinessAdminView, BusinessProfileUpdate
+from app.schemas.business import BusinessAdminView, BusinessProfileUpdate, BusinessWelcomeView
 from app.services.authorization_service import AuthorizationService
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -132,6 +134,161 @@ class BusinessAdministrationService:
             await unit_of_work.commit()
             return live_actor.model_copy(update={"is_bookable": enabled})
 
+    async def get_welcome(self, actor: StaffContext) -> BusinessWelcomeView:
+        live_actor = await self._authorize(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get()
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            return self._welcome_view(business)
+
+    async def save_welcome_text(
+        self,
+        actor: StaffContext,
+        text: str | None,
+        *,
+        correlation_id: str | None = None,
+    ) -> BusinessWelcomeView:
+        safe_text = sanitize_welcome_html(text) if text is not None else None
+        live_actor = await self._authorize(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            business.welcome_draft_text = safe_text
+            await unit_of_work.businesses.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="business.welcome_draft_text_updated",
+                entity_type="business",
+                entity_id=str(business.id),
+                changes={
+                    "uses_default": safe_text is None,
+                    "text_length": len(safe_text or ""),
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._welcome_view(business)
+
+    async def save_welcome_photo(
+        self,
+        actor: StaffContext,
+        *,
+        file_id: str,
+        file_unique_id: str,
+        correlation_id: str | None = None,
+    ) -> BusinessWelcomeView:
+        if not 1 <= len(file_id) <= 512 or not 1 <= len(file_unique_id) <= 255:
+            raise ValueError("welcome photo identifier has invalid length")
+        live_actor = await self._authorize(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            business.welcome_draft_photo_file_id = file_id
+            business.welcome_draft_photo_unique_id = file_unique_id
+            await unit_of_work.businesses.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="business.welcome_draft_photo_updated",
+                entity_type="business",
+                entity_id=str(business.id),
+                changes={"photo_present": True},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._welcome_view(business)
+
+    async def remove_welcome_photo(
+        self,
+        actor: StaffContext,
+        *,
+        correlation_id: str | None = None,
+    ) -> BusinessWelcomeView:
+        live_actor = await self._authorize(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            business.welcome_draft_photo_file_id = None
+            business.welcome_draft_photo_unique_id = None
+            await unit_of_work.businesses.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="business.welcome_draft_photo_removed",
+                entity_type="business",
+                entity_id=str(business.id),
+                changes={"photo_present": False},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._welcome_view(business)
+
+    async def reset_welcome_draft(
+        self,
+        actor: StaffContext,
+        *,
+        correlation_id: str | None = None,
+    ) -> BusinessWelcomeView:
+        live_actor = await self._authorize(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            business.welcome_draft_text = None
+            business.welcome_draft_photo_file_id = None
+            business.welcome_draft_photo_unique_id = None
+            await unit_of_work.businesses.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="business.welcome_draft_reset",
+                entity_type="business",
+                entity_id=str(business.id),
+                changes={"uses_default": True, "photo_present": False},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._welcome_view(business)
+
+    async def publish_welcome(
+        self,
+        actor: StaffContext,
+        *,
+        correlation_id: str | None = None,
+        now: datetime | None = None,
+    ) -> BusinessWelcomeView:
+        live_actor = await self._authorize(actor)
+        changed_at = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            if business is None:
+                raise EntityNotFoundError("Business was not found")
+            business.welcome_published_text = business.welcome_draft_text
+            business.welcome_published_photo_file_id = business.welcome_draft_photo_file_id
+            business.welcome_published_photo_unique_id = business.welcome_draft_photo_unique_id
+            business.welcome_published_at = changed_at
+            await unit_of_work.businesses.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="business.welcome_published",
+                entity_type="business",
+                entity_id=str(business.id),
+                changes={
+                    "uses_default": business.welcome_published_text is None,
+                    "photo_present": business.welcome_published_photo_file_id is not None,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._welcome_view(business)
+
     async def _authorize(self, actor: StaffContext) -> StaffContext:
         return await self._authorization.authorize(
             business_id=actor.business_id,
@@ -150,3 +307,15 @@ class BusinessAdministrationService:
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("now must be timezone-aware")
         return current.astimezone(UTC)
+
+    @staticmethod
+    def _welcome_view(business: Business) -> BusinessWelcomeView:
+        name = business.display_name
+        fallback = default_welcome_html(name)
+        return BusinessWelcomeView(
+            draft_text=business.welcome_draft_text or fallback,
+            draft_photo_file_id=business.welcome_draft_photo_file_id,
+            published_text=business.welcome_published_text or fallback,
+            published_photo_file_id=business.welcome_published_photo_file_id,
+            published_at=business.welcome_published_at,
+        )

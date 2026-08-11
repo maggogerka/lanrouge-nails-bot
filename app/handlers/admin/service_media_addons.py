@@ -25,6 +25,7 @@ from app.keyboards.admin.services import (
     cancel_keyboard,
     service_photo_keyboard,
 )
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.service import (
     ServiceAddonCreate,
     ServiceAddonPatch,
@@ -212,7 +213,9 @@ async def addon_create_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(name=name)
     await state.set_state(AdminAddonCreate.description)
-    await message.answer("Введите описание или «-», если его нет:")
+    await message.answer(
+        "Введите описание или пропустите этот шаг:", reply_markup=optional_input_keyboard()
+    )
 
 
 @router.message(AdminAddonCreate.description)
@@ -221,7 +224,7 @@ async def addon_create_description(message: Message, state: FSMContext) -> None:
     if len(raw) > 4000:
         await message.answer("Описание не должно превышать 4000 символов.")
         return
-    await state.update_data(description=None if raw == "-" else raw)
+    await state.update_data(description=None if is_optional_skip(raw) else raw)
     await state.set_state(AdminAddonCreate.price)
     await message.answer("Введите стоимость дополнительной услуги:")
 
@@ -245,7 +248,10 @@ async def addon_create_duration(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(duration_min=duration[0], duration_max=duration[1])
     await state.set_state(AdminAddonCreate.photo)
-    await message.answer("Отправьте фотографию или «-», чтобы пропустить.")
+    await message.answer(
+        "Отправьте фотографию или пропустите этот шаг.",
+        reply_markup=optional_input_keyboard(),
+    )
 
 
 @router.message(AdminAddonCreate.photo)
@@ -261,10 +267,13 @@ async def finish_addon_create(
         photo = message.photo[-1]
         file_id: str | None = photo.file_id
         unique_id: str | None = photo.file_unique_id
-    elif (message.text or "").strip() == "-":
+    elif is_optional_skip(message.text or ""):
         file_id = unique_id = None
     else:
-        await message.answer("Отправьте фотографию или «-», чтобы пропустить.")
+        await message.answer(
+            "Отправьте фотографию или пропустите этот шаг.",
+            reply_markup=optional_input_keyboard(),
+        )
         return
     data = await state.get_data()
     try:
@@ -298,12 +307,17 @@ async def _begin_addon_edit(
     state: FSMContext,
     target: object,
     prompt: str,
+    *,
+    optional: bool = False,
 ) -> None:
     await state.clear()
     await state.update_data(service_id=callback_data.service_id, addon_id=callback_data.addon_id)
     await state.set_state(target)  # type: ignore[arg-type]
     if isinstance(callback.message, Message):
-        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+        await callback.message.answer(
+            prompt,
+            reply_markup=optional_input_keyboard() if optional else cancel_keyboard(),
+        )
     await callback.answer()
 
 
@@ -326,6 +340,7 @@ async def begin_addon_description(
         state,
         AdminAddonEdit.description,
         "Введите описание или «-», чтобы очистить:",
+        optional=True,
     )
 
 
@@ -389,7 +404,7 @@ async def edit_addon_description(
 ) -> None:
     raw = (message.text or "").strip()
     try:
-        patch = ServiceAddonPatch(description=None if raw == "-" else raw)
+        patch = ServiceAddonPatch(description=None if is_optional_skip(raw) else raw)
     except ValidationError as exc:
         await message.answer(str(exc))
         return

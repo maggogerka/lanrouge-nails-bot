@@ -19,6 +19,7 @@ from app.handlers.admin.settings import router as settings_router
 from app.handlers.admin.staff import router as staff_router
 from app.handlers.admin.statistics import router as statistics_router
 from app.handlers.admin.waitlist import router as waitlist_router
+from app.handlers.admin.welcome import router as welcome_router
 from app.handlers.admin.windows import router as windows_router
 from app.middlewares.staff_context import StaffContextMiddleware
 from app.schemas.authorization import StaffPermission
@@ -58,6 +59,7 @@ _require_permission(staff_router, StaffPermission.VIEW_STAFF)
 _require_permission(statistics_router, StaffPermission.VIEW_ALL_STATISTICS)
 _require_permission(waitlist_router, StaffPermission.MANAGE_ALL_APPOINTMENTS)
 _require_permission(windows_router, StaffPermission.MANAGE_ALL_SCHEDULES)
+_require_permission(welcome_router, StaffPermission.MANAGE_BUSINESS)
 
 _require_feature(broadcasts_router, FeatureName.BROADCASTS)
 _require_feature(portfolio_router, FeatureName.PORTFOLIO)
@@ -69,6 +71,7 @@ router.include_routers(
     appointments_router,
     broadcasts_router,
     business_router,
+    welcome_router,
     crm_router,
     features_router,
     services_router,

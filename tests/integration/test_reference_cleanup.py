@@ -45,7 +45,7 @@ async def seed_expired_reference(database: Database) -> int:
         await session.flush()
         catalog_service = Service(
             business_id=1,
-            name="Маникюр",
+            name="Консультация",
             price=Decimal("2500.00"),
             duration_min_minutes=120,
             duration_max_minutes=180,

@@ -64,7 +64,7 @@ class RedisOpaqueSessionStore:
         redis: RedisSessionClient,
         pepper: SecretStr,
         *,
-        namespace: str = "lanrouge",
+        namespace: str = "telegram_crm",
     ) -> None:
         if _SAFE_NAMESPACE.fullmatch(namespace) is None:
             raise ValueError("namespace must be a safe lowercase identifier")

@@ -38,6 +38,18 @@ class BusinessAdminView(BaseModel):
     setup_completed_at: datetime | None
 
 
+class BusinessWelcomeView(BaseModel):
+    """Draft and published welcome projections without Telegram user data."""
+
+    model_config = ConfigDict(frozen=True)
+
+    draft_text: str
+    draft_photo_file_id: str | None
+    published_text: str
+    published_photo_file_id: str | None
+    published_at: datetime | None
+
+
 class BusinessProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

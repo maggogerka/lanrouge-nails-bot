@@ -14,7 +14,7 @@ from app.schemas.service import ServiceView
 def service_view() -> ServiceView:
     return ServiceView(
         id=10,
-        name="Маникюр <premium>",
+        name="Консультация <premium>",
         description="Безопасно & красиво",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
@@ -26,7 +26,7 @@ def service_view() -> ServiceView:
 def test_service_render_escapes_html_and_formats_snapshot_values() -> None:
     rendered = render_service(service_view())
 
-    assert "Маникюр &lt;premium&gt;" in rendered
+    assert "Консультация &lt;premium&gt;" in rendered
     assert "Безопасно &amp; красиво" in rendered
     assert "2500.00 ₽" in rendered
     assert "120–180 мин." in rendered

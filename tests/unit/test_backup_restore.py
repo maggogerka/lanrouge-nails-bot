@@ -21,8 +21,8 @@ from app.maintenance.backup_restore import (
 def environment(**overrides: str) -> dict[str, str]:
     values = {
         "BACKUP_ENABLED": "true",
-        "DATABASE_URL": ("postgresql+asyncpg://app_user:production-password@db:5432/lanrouge"),
-        "RESTIC_REPOSITORY": "s3:s3.example.test/lanrouge-backups",
+        "DATABASE_URL": ("postgresql+asyncpg://app_user:production-password@db:5432/app_db"),
+        "RESTIC_REPOSITORY": "s3:s3.example.test/telegram-crm-backups",
         "RESTIC_PASSWORD": "restic-password",
         "AWS_ACCESS_KEY_ID": "access-key",
         "AWS_SECRET_ACCESS_KEY": "object-storage-secret",
@@ -139,14 +139,14 @@ def test_restore_rejects_production_or_unguarded_target_before_any_command() -> 
     runner = FakeRunner()
     same_database = BackupSettings.from_environment(
         environment(
-            RESTORE_DATABASE_URL=("postgresql+asyncpg://restore:restore-password@db:5432/lanrouge"),
+            RESTORE_DATABASE_URL=("postgresql+asyncpg://restore:restore-password@db:5432/app_db"),
             RESTORE_ACKNOWLEDGE="RESTORE_TO_SEPARATE_TEST_DATABASE",
         )
     )
     unacknowledged = BackupSettings.from_environment(
         environment(
             RESTORE_DATABASE_URL=(
-                "postgresql+asyncpg://restore:restore-password@db:5432/lanrouge_restore"
+                "postgresql+asyncpg://restore:restore-password@db:5432/app_restore"
             )
         )
     )
@@ -164,7 +164,7 @@ def test_guarded_restore_downloads_validates_restores_and_verifies_separate_data
     settings = BackupSettings.from_environment(
         environment(
             RESTORE_DATABASE_URL=(
-                "postgresql+asyncpg://restore_user:restore-password@db:5432/lanrouge_restore_test"
+                "postgresql+asyncpg://restore_user:restore-password@db:5432/app_restore_test"
             ),
             RESTORE_ACKNOWLEDGE="RESTORE_TO_SEPARATE_TEST_DATABASE",
         )
@@ -187,7 +187,7 @@ def test_guarded_restore_downloads_validates_restores_and_verifies_separate_data
     assert "--clean" in restore.argv
     assert "--if-exists" in restore.argv
     assert "--exit-on-error" in restore.argv
-    assert restore.environment["PGDATABASE"] == "lanrouge_restore_test"
+    assert restore.environment["PGDATABASE"] == "app_restore_test"
     assert restore.environment["PGPASSWORD"] == "restore-password"
     all_arguments = " ".join(item for call in runner.calls for item in call.argv)
     assert "production-password" not in all_arguments

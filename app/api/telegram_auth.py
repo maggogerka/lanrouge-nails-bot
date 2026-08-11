@@ -50,7 +50,7 @@ class RedisSetClient(Protocol):
 class RedisReplayStore:
     """Atomic SET NX replay guard storing only a keyed digest of initData."""
 
-    def __init__(self, redis: RedisSetClient, *, namespace: str = "lanrouge") -> None:
+    def __init__(self, redis: RedisSetClient, *, namespace: str = "telegram_crm") -> None:
         if _SAFE_NAMESPACE.fullmatch(namespace) is None:
             raise ValueError("namespace must be a safe lowercase identifier")
         self._redis = redis

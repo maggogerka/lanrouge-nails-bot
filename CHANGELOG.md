@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.1] - 2026-08-11
+
+### Added
+
+- recoverable, lease-protected privacy anonymization with bounded retries and worker health;
+- draft/preview/publish workflow for a safe formatted welcome text and optional photo;
+- service add-ons, duration ranges, media and immutable appointment snapshots;
+- rolling future-booking quota with audited permissioned override;
+- one-tap skip controls and safe Telegram profile links in CRM cards.
+
+### Changed
+
+- navigation now recovers from active and stale FSM forms;
+- manual prepayment lifecycle is transactional and concurrency safe;
+- staff roles, bootstrap ownership and solo/salon transitions are enforced in PostgreSQL;
+- runtime copy and test fixtures are vertical-neutral and white-label.
+
+### Security
+
+- active staff and bootstrap identities cannot enter anonymization;
+- failed anonymization stores only bounded machine codes and never exception PII;
+- CRM phone visibility requires an explicit permission;
+- welcome formatting uses a strict Telegram HTML whitelist and HTTPS-only links.
+
 ## [0.4.0] - 2026-08-11
 
 ### Added

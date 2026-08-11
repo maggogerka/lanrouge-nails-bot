@@ -455,7 +455,7 @@ class AppointmentService:
                     previous_status=AppointmentStatus.CONFIRMED,
                     new_status=AppointmentStatus.CLIENT_CONFIRMED,
                     changed_by_user_id=client.id,
-                    reason="Подтверждено клиенткой",
+                    reason="Подтверждено клиентом",
                 )
             )
             await unit_of_work.audit.add(

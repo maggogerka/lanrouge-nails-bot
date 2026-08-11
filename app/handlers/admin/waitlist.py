@@ -77,7 +77,7 @@ async def view_admin_waitlist(
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            f"Запрос #{entry.id}\nКлиентка: {entry.client_name}\n"
+            f"Запрос #{entry.id}\nКлиент: {entry.client_name}\n"
             f"Telegram ID: {entry.client_telegram_id}\nУслуга: {entry.service_name}\n"
             f"Даты: {entry.date_from:%d.%m.%Y}–{entry.date_to:%d.%m.%Y}\n"
             f"Статус: {entry.status.value}",
@@ -93,7 +93,7 @@ async def begin_waitlist_message(
     await state.set_state(AdminWaitlistFlow.message)
     await state.update_data(waitlist_entry_id=callback_data.entry_id)
     if isinstance(callback.message, Message):
-        await callback.message.answer("Введите сообщение клиентке:")
+        await callback.message.answer("Введите сообщение клиенту:")
     await callback.answer()
 
 

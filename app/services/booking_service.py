@@ -1137,10 +1137,10 @@ class BookingService:
         async with self._unit_of_work_factory() as unit_of_work:
             client = await unit_of_work.users.get_by_id(client_id)
             if client is None:
-                raise BookingUnavailableError("Клиентка больше не существует.")
+                raise BookingUnavailableError("Клиент больше не существует.")
             if not client.first_name or not client.phone:
                 raise BookingUnavailableError(
-                    "В карточке клиентки должны быть заполнены имя и телефон."
+                    "В карточке клиента должны быть заполнены имя и телефон."
                 )
             client_actor = ClientActor(
                 telegram_id=client.telegram_id,

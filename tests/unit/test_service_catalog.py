@@ -39,7 +39,7 @@ def build_uow() -> MagicMock:
 
 def create_values() -> ServiceCreate:
     return ServiceCreate(
-        name="Маникюр",
+        name="Консультация",
         description="Описание",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
@@ -124,7 +124,7 @@ async def test_service_with_appointments_cannot_be_deleted() -> None:
     unit_of_work = build_uow()
     service = Service(
         id=7,
-        name="Маникюр",
+        name="Консультация",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
         duration_max_minutes=180,
@@ -146,7 +146,7 @@ async def test_archive_changes_state_and_writes_audit() -> None:
     unit_of_work = build_uow()
     service = Service(
         id=7,
-        name="Маникюр",
+        name="Консультация",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
         duration_max_minutes=180,

@@ -38,6 +38,7 @@ from app.keyboards.client.booking import (
     windows_keyboard,
 )
 from app.keyboards.client.main import client_main_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.logging import log_event
 from app.schemas.booking import BookingRequest, ReferenceMediaDraft
 from app.security import LEGACY_ADMIN_ROLES
@@ -160,7 +161,7 @@ async def capture_client_phone(message: Message, state: FSMContext) -> None:
     await state.set_state(BookingFlow.comment)
     await message.answer(
         "Добавьте комментарий к записи или отправьте «-», если комментария нет:",
-        reply_markup=booking_navigation_keyboard(),
+        reply_markup=optional_input_keyboard(no_comment=True),
     )
 
 
@@ -173,7 +174,7 @@ async def capture_client_comment(
     if message.from_user is None:
         return
     raw_comment = (message.text or "").strip()
-    comment = None if raw_comment == "-" else raw_comment
+    comment = None if is_optional_skip(raw_comment) else raw_comment
     if comment is not None and len(comment) > 2000:
         await message.answer("Комментарий не должен превышать 2000 символов.")
         return
@@ -264,7 +265,7 @@ async def handle_reference_action(
             await callback.message.edit_text("Фотографии удалены из черновика.")
             await callback.message.answer(
                 "Добавьте комментарий к записи или отправьте «-», если комментария нет:",
-                reply_markup=booking_navigation_keyboard(),
+                reply_markup=optional_input_keyboard(no_comment=True),
             )
         await callback.answer()
         return

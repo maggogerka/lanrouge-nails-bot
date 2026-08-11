@@ -217,7 +217,7 @@ async def _show_page_message(
         await message.answer(str(exc))
         return
     if not page.items:
-        await message.answer("Мастер пока не добавила работы. Загляните немного позже 💅")
+        await message.answer("Мастер пока не добавила работы. Загляните немного позже ")
         return
     await _send_item(
         message,

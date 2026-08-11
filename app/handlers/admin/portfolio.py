@@ -26,6 +26,7 @@ from app.keyboards.admin.portfolio import (
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.client.portfolio import external_portfolio_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.pagination import PageRequest
 from app.schemas.portfolio import (
     PortfolioCreate,
@@ -176,7 +177,7 @@ async def preview_portfolio_display(
     if isinstance(callback.message, Message):
         if config.mode is PortfolioDisplayMode.EXTERNAL_LINK and config.external_url:
             await callback.message.answer(
-                "Так клиентка увидит внешнее портфолио:",
+                "Так клиент увидит внешнее портфолио:",
                 reply_markup=external_portfolio_keyboard(config.external_url, config.button_text),
             )
         elif config.mode is PortfolioDisplayMode.INTERNAL:
@@ -347,7 +348,10 @@ async def capture_portfolio_title(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(title=title)
     await state.set_state(AdminPortfolioCreate.description)
-    await message.answer("Введите короткое описание или отправьте «-»:")
+    await message.answer(
+        "Введите короткое описание или пропустите этот шаг:",
+        reply_markup=optional_input_keyboard(),
+    )
 
 
 @router.message(AdminPortfolioCreate.description)
@@ -359,7 +363,7 @@ async def capture_portfolio_description(
     if message.from_user is None:
         return
     raw = (message.text or "").strip()
-    description = None if raw == "-" else raw
+    description = None if is_optional_skip(raw) else raw
     if description is not None and len(description) > 2000:
         await message.answer("Описание не должно превышать 2000 символов.")
         return
@@ -385,7 +389,10 @@ async def capture_linked_service(
     await state.update_data(linked_service_id=linked_service_id)
     await state.set_state(AdminPortfolioCreate.design_price)
     if isinstance(callback.message, Message):
-        await callback.message.answer("Введите ориентировочную доплату за дизайн или «-»:")
+        await callback.message.answer(
+            "Введите ориентировочную доплату или пропустите этот шаг:",
+            reply_markup=optional_input_keyboard(),
+        )
     await callback.answer()
 
 
@@ -393,7 +400,7 @@ async def capture_linked_service(
 async def capture_design_price(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip().replace(",", ".")
     try:
-        price = None if raw == "-" else Decimal(raw)
+        price = None if is_optional_skip(raw) else Decimal(raw)
     except InvalidOperation:
         price = Decimal("-1")
     exponent = price.as_tuple().exponent if price is not None else None
@@ -419,13 +426,20 @@ async def capture_sort_order(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(sort_order=sort_order)
     await state.set_state(AdminPortfolioCreate.tags)
-    await message.answer("Введите теги через запятую или отправьте «-»:")
+    await message.answer(
+        "Введите теги через запятую или пропустите этот шаг:",
+        reply_markup=optional_input_keyboard(),
+    )
 
 
 @router.message(AdminPortfolioCreate.tags)
 async def capture_portfolio_tags(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
-    tags = [] if raw == "-" else [value.strip() for value in raw.split(",") if value.strip()]
+    tags = (
+        []
+        if is_optional_skip(raw)
+        else [value.strip() for value in raw.split(",") if value.strip()]
+    )
     if len(tags) > 10 or any(len(tag) > 100 for tag in tags):
         await message.answer("Можно указать до 10 тегов, каждый не длиннее 100 символов.")
         return

@@ -7,7 +7,7 @@ x-default-logging: &default-logging
 x-app-environment: &app-environment
   # Isolates locks, rate limits, sessions, and component heartbeats when one
   # Redis deployment is shared by multiple application instances.
-  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-lanrouge}
+  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-telegram_crm}
   DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
   REDIS_PASSWORD_FILE: /run/secrets/redis_password
 
@@ -50,9 +50,9 @@ services:
     image: postgres:18.4-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-lanrouge}
+      POSTGRES_USER: ${POSTGRES_USER:-app_user}
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_DB: ${POSTGRES_DB:-lanrouge}
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
     secrets:
       - postgres_password
     volumes:

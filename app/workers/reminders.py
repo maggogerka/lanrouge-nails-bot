@@ -112,7 +112,7 @@ async def process_waitlist_delivery(
         await bot.send_message(
             delivery.recipient_telegram_id,
             f"Освободилось подходящее время для услуги «{delivery.service_name}»: "
-            f"{local:%d.%m.%Y в %H:%M}. Окно получит первая клиентка, завершившая запись.",
+            f"{local:%d.%m.%Y в %H:%M}. Окно получит первый клиент, завершивший запись.",
             reply_markup=waitlist_offer_keyboard(delivery.entry_id, delivery.window_id),
         )
     except TelegramRetryAfter as exc:

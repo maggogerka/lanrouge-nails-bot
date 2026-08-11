@@ -6,7 +6,7 @@ x-profile-logging: &profile-logging
     max-file: "3"
 
 x-profile-environment: &profile-environment
-  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-lanrouge}
+  REDIS_NAMESPACE: ${REDIS_NAMESPACE:-telegram_crm}
 
 x-profile-runtime: &profile-runtime
   build:

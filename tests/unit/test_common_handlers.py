@@ -19,8 +19,9 @@ def test_whoami_text_contains_only_supplied_numeric_id() -> None:
     assert text == "Ваш Telegram ID: <code>123456789</code>"
 
 
-def test_privacy_greeting_uses_escaped_white_label_name() -> None:
+def test_privacy_copy_is_universal_because_welcome_is_rendered_separately() -> None:
     text = privacy_text("Новая <студия>")
 
-    assert "Новая &lt;студия&gt;" in text
+    assert "обработку данных" in text
+    assert "Новая" not in text
     assert "lanrouge" not in text.lower()

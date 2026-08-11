@@ -16,6 +16,7 @@ from app.handlers.admin.service_common import (
 )
 from app.keyboards.admin.main import admin_main_keyboard
 from app.keyboards.admin.services import ServiceCallback, cancel_keyboard, service_details_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.service import ServiceCreate, ServicePatch
 from app.services.menu_service import MenuService
 from app.services.service_catalog import ServiceCatalog
@@ -30,12 +31,17 @@ async def begin_edit(
     service_id: int,
     target_state: State,
     prompt: str,
+    *,
+    optional: bool = False,
 ) -> None:
     await state.clear()
     await state.update_data(service_id=service_id)
     await state.set_state(target_state)
     if isinstance(callback.message, Message):
-        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+        await callback.message.answer(
+            prompt,
+            reply_markup=optional_input_keyboard() if optional else cancel_keyboard(),
+        )
     await callback.answer()
 
 
@@ -66,6 +72,7 @@ async def begin_edit_description(
         callback_data.service_id,
         AdminServiceEdit.description,
         "Введите новое описание или «-», чтобы очистить:",
+        optional=True,
     )
 
 
@@ -166,7 +173,7 @@ async def finish_edit_description(
 ) -> None:
     raw = (message.text or "").strip()
     try:
-        patch = ServicePatch(description=None if raw == "-" else raw)
+        patch = ServicePatch(description=None if is_optional_skip(raw) else raw)
     except ValidationError:
         await message.answer("Описание не должно превышать 4000 символов.")
         return

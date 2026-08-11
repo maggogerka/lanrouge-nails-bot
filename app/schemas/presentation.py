@@ -28,6 +28,8 @@ class BusinessPresentation(BaseModel):
     support_instructions: str | None = None
     privacy_policy_url: str | None = None
     terms_url: str | None = None
+    welcome_text: str = "Добро пожаловать!"
+    welcome_photo_file_id: str | None = None
 
 
 class PublicMasterPresentation(BaseModel):

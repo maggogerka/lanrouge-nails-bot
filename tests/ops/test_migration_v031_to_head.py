@@ -50,9 +50,13 @@ async def _seed_v031(database_url: str) -> tuple[datetime, datetime]:
             await connection.execute(
                 text(
                     "UPDATE master_profiles SET display_name=:name, bio=:bio, "
-                    "is_published=true WHERE id=1"
+                    "telegram_url=:telegram_url, is_published=true WHERE id=1"
                 ),
-                {"name": "Preserved Master", "bio": "Legacy profile"},
+                {
+                    "name": "lanrouge nails",
+                    "bio": "Legacy profile",
+                    "telegram_url": "https://t.me/lanrouge",
+                },
             )
             await connection.execute(
                 text(
@@ -68,7 +72,7 @@ async def _seed_v031(database_url: str) -> tuple[datetime, datetime]:
                     "INSERT INTO services "
                     "(id, name, description, price, duration_min_minutes, "
                     "duration_max_minutes, is_active) VALUES "
-                    "(72001, 'Legacy manicure', 'must survive', 3450.00, 120, 180, true)"
+                    "(72001, 'Legacy service', 'must survive', 3450.00, 120, 180, true)"
                 )
             )
             await connection.execute(
@@ -85,7 +89,7 @@ async def _seed_v031(database_url: str) -> tuple[datetime, datetime]:
                     "(id, client_id, window_id, service_id, service_name_snapshot, "
                     "price_snapshot, duration_min_snapshot, duration_max_snapshot, status, "
                     "client_comment) VALUES "
-                    "(74001, 71001, 73001, 72001, 'Legacy manicure', 3450.00, 120, "
+                    "(74001, 71001, 73001, 72001, 'Legacy service', 3450.00, 120, "
                     "180, 'confirmed', 'preserve me')"
                 )
             )
@@ -142,7 +146,14 @@ async def _assert_preserved(database_url: str, start: datetime, end: datetime) -
                     )
                 )
             ).one()
-            assert staff == ("Preserved Master", 1, "owner", True)
+            assert staff == ("Специалист", 1, "owner", True)
+
+            legacy_profile = (
+                await connection.execute(
+                    text("SELECT display_name, telegram_url FROM master_profiles WHERE id=1")
+                )
+            ).one()
+            assert legacy_profile == ("Специалист", "https://t.me/example_service_bot")
 
             service = (
                 await connection.execute(
@@ -152,7 +163,7 @@ async def _assert_preserved(database_url: str, start: datetime, end: datetime) -
                     )
                 )
             ).one()
-            assert service.name == "Legacy manicure"
+            assert service.name == "Legacy service"
             assert str(service.price) == "3450.00"
             assert service.business_id == 1
             assert str(service.prepayment_amount) == "0.00"
@@ -171,7 +182,7 @@ async def _assert_preserved(database_url: str, start: datetime, end: datetime) -
             assert appointment == (
                 1,
                 1,
-                "Preserved Master",
+                "Специалист",
                 start,
                 end,
                 "RUB",

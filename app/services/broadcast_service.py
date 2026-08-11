@@ -143,7 +143,7 @@ class BroadcastService:
                 now=current,
             )
             if not user_ids:
-                raise BroadcastStateError("В выбранной аудитории нет подписанных клиенток.")
+                raise BroadcastStateError("В выбранной аудитории нет подписанных клиентов.")
             frozen = await uow.broadcasts.freeze_recipients(
                 broadcast_id=broadcast.id,
                 user_ids=user_ids,

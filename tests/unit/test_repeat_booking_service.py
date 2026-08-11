@@ -22,7 +22,7 @@ def completed() -> Appointment:
         client_id=5,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2200"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,
@@ -33,7 +33,7 @@ def completed() -> Appointment:
 def catalog_service(*, active: bool = True) -> Service:
     return Service(
         id=3,
-        name="Маникюр и покрытие",
+        name="Консультация и покрытие",
         price=Decimal("2500"),
         duration_min_minutes=120,
         duration_max_minutes=180,
@@ -69,7 +69,7 @@ async def test_repeat_offer_uses_current_price_and_reports_change() -> None:
     assert offer.previous_price == Decimal("2200")
     assert offer.current_price == Decimal("2500")
     assert offer.price_changed
-    assert offer.service_name == "Маникюр и покрытие"
+    assert offer.service_name == "Консультация и покрытие"
 
 
 @pytest.mark.asyncio

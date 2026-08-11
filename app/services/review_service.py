@@ -58,7 +58,7 @@ class ReviewService:
                 if appointment is None:
                     raise EntityNotFoundError("Запись не найдена.")
                 if appointment.client_id != client.id:
-                    raise AuthorizationError("Нельзя оставить отзыв за другую клиентку.")
+                    raise AuthorizationError("Нельзя оставить отзыв за другого клиента.")
                 if appointment.status is not AppointmentStatus.COMPLETED:
                     raise ReviewStateError("Отзыв можно оставить только после завершённого визита.")
                 if await uow.reviews.get_for_appointment(appointment.id) is not None:
@@ -88,7 +88,7 @@ class ReviewService:
                     correlation_id=correlation_id,
                 )
                 await uow.commit()
-                return self._view(review, client.first_name or "Клиентка")
+                return self._view(review, client.first_name or "Клиент")
         except IntegrityError as exc:
             raise ReviewStateError("Отзыв по этой записи уже оставлен.") from exc
 
@@ -182,7 +182,7 @@ class ReviewService:
             changes = values.model_dump(exclude_unset=True)
             new_status = changes.get("moderation_status", review.moderation_status)
             if new_status is ReviewModerationStatus.APPROVED and not review.publication_consent:
-                raise ReviewStateError("Клиентка не разрешила публикацию этого отзыва.")
+                raise ReviewStateError("Клиент не разрешила публикацию этого отзыва.")
             await uow.reviews.add_revision(
                 ReviewRevision(
                     review_id=review.id,
@@ -224,7 +224,7 @@ class ReviewService:
             client = await uow.users.get_by_id(review.client_id)
             await uow.commit()
             return self._view(
-                review, client.first_name if client and client.first_name else "Клиентка"
+                review, client.first_name if client and client.first_name else "Клиент"
             )
 
     async def soft_delete(
@@ -262,7 +262,7 @@ class ReviewService:
             client = await uow.users.get_by_id(review.client_id)
             await uow.commit()
             return self._view(
-                review, client.first_name if client and client.first_name else "Клиентка"
+                review, client.first_name if client and client.first_name else "Клиент"
             )
 
     async def restore(
@@ -295,7 +295,7 @@ class ReviewService:
             client = await uow.users.get_by_id(review.client_id)
             await uow.commit()
             return self._view(
-                review, client.first_name if client and client.first_name else "Клиентка"
+                review, client.first_name if client and client.first_name else "Клиент"
             )
 
     async def hard_delete(
@@ -326,7 +326,7 @@ class ReviewService:
 
     async def _with_client(self, uow: SqlAlchemyUnitOfWork, review: Review) -> ReviewView:
         client = await uow.users.get_by_id(review.client_id)
-        return self._view(review, client.first_name if client and client.first_name else "Клиентка")
+        return self._view(review, client.first_name if client and client.first_name else "Клиент")
 
     @staticmethod
     def _view(review: Review, client_name: str) -> ReviewView:

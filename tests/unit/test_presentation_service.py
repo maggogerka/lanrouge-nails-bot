@@ -25,6 +25,8 @@ def test_business_projection_prefers_tenant_branding_and_sanitizes_links() -> No
         privacy_policy_url=None,
         terms_url="http://insecure.example.test/terms",
         instance_id="instance-1",
+        welcome_published_text="<b>Публичное приветствие</b>",
+        welcome_published_photo_file_id="welcome-photo",
     )
     settings = BusinessSettings(
         id=1,
@@ -47,6 +49,8 @@ def test_business_projection_prefers_tenant_branding_and_sanitizes_links() -> No
     assert projection.support_url == "https://support.example.test/chat"
     assert projection.privacy_policy_url == "https://legal.example.test/privacy"
     assert projection.terms_url is None
+    assert projection.welcome_text == "<b>Публичное приветствие</b>"
+    assert projection.welcome_photo_file_id == "welcome-photo"
     assert "lanrouge" not in projection.model_dump_json().lower()
 
 

@@ -11,6 +11,7 @@ from app.database.models.business import Business, StaffMember
 from app.database.models.settings import BusinessSettings
 from app.domain.errors import EntityNotFoundError
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.domain.welcome import default_welcome_html
 from app.schemas.presentation import BusinessPresentation, PublicMasterPresentation
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -94,6 +95,10 @@ class PresentationService:
             privacy_policy_url=self._safe_url(business.privacy_policy_url)
             or self._fallback_privacy_policy_url,
             terms_url=self._safe_url(business.terms_url),
+            welcome_text=(
+                business.welcome_published_text or default_welcome_html(business.display_name)
+            ),
+            welcome_photo_file_id=business.welcome_published_photo_file_id,
         )
 
     @staticmethod

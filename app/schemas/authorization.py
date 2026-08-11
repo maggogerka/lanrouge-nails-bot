@@ -34,6 +34,7 @@ class StaffPermission(StrEnum):
     MANAGE_OWN_APPOINTMENTS = "manage_own_appointments"
     VIEW_ALL_CLIENTS = "view_all_clients"
     MANAGE_ALL_CLIENTS = "manage_all_clients"
+    VIEW_CLIENT_PHONE = "view_client_phone"
     VIEW_OWN_CLIENTS = "view_own_clients"
     MANAGE_OWN_CLIENTS = "manage_own_clients"
     VIEW_PAYMENTS = "view_payments"
@@ -78,6 +79,7 @@ _MANAGER_PERMISSIONS = frozenset(
         StaffPermission.MANAGE_ALL_APPOINTMENTS,
         StaffPermission.VIEW_ALL_CLIENTS,
         StaffPermission.MANAGE_ALL_CLIENTS,
+        StaffPermission.VIEW_CLIENT_PHONE,
         StaffPermission.VIEW_PAYMENTS,
         StaffPermission.MANAGE_PAYMENTS,
         StaffPermission.VIEW_PREPAYMENTS,
@@ -115,6 +117,7 @@ _RECEPTIONIST_PERMISSIONS = frozenset(
         StaffPermission.MANAGE_ALL_APPOINTMENTS,
         StaffPermission.VIEW_ALL_CLIENTS,
         StaffPermission.MANAGE_ALL_CLIENTS,
+        StaffPermission.VIEW_CLIENT_PHONE,
         StaffPermission.VIEW_PAYMENTS,
         StaffPermission.VIEW_PREPAYMENTS,
         StaffPermission.APPROVE_PREPAYMENTS,

@@ -53,7 +53,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         await session.flush()
         fitting = Service(
             business_id=1,
-            name="Маникюр",
+            name="Консультация",
             price=Decimal("2500"),
             duration_min_minutes=120,
             duration_max_minutes=180,

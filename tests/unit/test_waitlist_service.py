@@ -33,7 +33,7 @@ NOW = datetime(2026, 7, 22, 9, tzinfo=UTC)
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Test address",
         map_url="https://example.com/map",
@@ -79,7 +79,7 @@ def window(status: AvailabilityWindowStatus = AvailabilityWindowStatus.OPEN):
 def service() -> Service:
     return Service(
         id=3,
-        name="Маникюр",
+        name="Консультация",
         price=Decimal("2500"),
         duration_min_minutes=120,
         duration_max_minutes=180,

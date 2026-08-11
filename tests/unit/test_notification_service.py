@@ -51,7 +51,7 @@ def appointment(
         client_id=5,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2500.00"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,
@@ -72,11 +72,11 @@ def window() -> AvailabilityWindow:
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Новоостаповская, д. 20",
         map_url="https://yandex.ru/maps/-/CTbJz23i",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,

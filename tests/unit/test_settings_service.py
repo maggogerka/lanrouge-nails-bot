@@ -123,7 +123,7 @@ async def test_reminder_offset_update_rebuilds_only_unsent_future_jobs() -> None
         client_id=5,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2500.00"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,

@@ -109,7 +109,7 @@ class ComponentHealthMonitor:
         redis: HeartbeatRedis,
         policies: tuple[ComponentPolicy, ...],
         *,
-        namespace: str = "lanrouge",
+        namespace: str = "telegram_crm",
         instance_id: str | None = None,
         failure_hook: ComponentFailureHook | None = None,
     ) -> None:

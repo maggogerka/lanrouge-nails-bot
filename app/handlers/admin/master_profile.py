@@ -19,6 +19,7 @@ from app.keyboards.admin.master_profile import (
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.client.master_profile import master_profile_links_keyboard
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.master_profile import MasterProfileUpdate, MasterProfileView, MasterPublicLinkInput
 from app.services.master_profile_service import MasterProfileService
 from app.states.admin_master_profile import AdminMasterProfileEdit
@@ -68,7 +69,14 @@ async def begin_text_edit(
     await state.set_state(AdminMasterProfileEdit.text_value)
     await state.update_data(profile_field=callback_data.action)
     if isinstance(callback.message, Message):
-        await callback.message.answer(prompts[callback_data.action], reply_markup=cancel_keyboard())
+        await callback.message.answer(
+            prompts[callback_data.action],
+            reply_markup=(
+                cancel_keyboard()
+                if callback_data.action == "edit_name"
+                else optional_input_keyboard()
+            ),
+        )
     await callback.answer()
 
 
@@ -94,7 +102,7 @@ async def save_text_edit(
         await state.clear()
         return
     raw_value = (message.text or "").strip()
-    value = None if raw_value == "-" else raw_value
+    value = None if is_optional_skip(raw_value) else raw_value
     try:
         profile = await master_profile_service.update(
             actor_from_telegram(message.from_user),

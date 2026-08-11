@@ -36,7 +36,7 @@ async def test_heartbeat_uses_server_time_atomic_set_and_bounded_ttl() -> None:
     assert timestamp.isoformat() == "2023-11-14T22:13:20+00:00"
     script, numkeys, args = redis.calls[0]
     assert numkeys == 1
-    assert args == ("lanrouge:heartbeat:reminders", 90_000)
+    assert args == ("telegram_crm:heartbeat:reminders", 90_000)
     assert "redis.call('TIME')" in script
     assert "'PX'" in script
 

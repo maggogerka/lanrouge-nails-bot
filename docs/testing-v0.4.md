@@ -24,7 +24,7 @@ database name contains `test` or `migration`. Run it only against a fresh,
 disposable database already migrated to `20260724_0010`:
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_migration_test"
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://app_user:password@localhost:5432/app_migration_test"
 $env:DATABASE_URL = $env:TEST_DATABASE_URL
 $env:MIGRATION_PRESERVATION_TEST = "1"
 alembic upgrade 20260724_0010

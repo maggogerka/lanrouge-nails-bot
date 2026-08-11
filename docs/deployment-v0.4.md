@@ -40,7 +40,7 @@ file must also contain the normal runtime values such as
 `BOT_TOKEN`, `ADMIN_TELEGRAM_IDS`, `PRIVACY_POLICY_URL`, and optional
 `SENTRY_DSN`. Do not put that file in the image or repository.
 
-Set `REDIS_NAMESPACE` in the shell or Compose `.env` file (default `lanrouge`).
+Set `REDIS_NAMESPACE` in the shell or Compose `.env` file (default `telegram_crm`).
 The variable is preserved through the Compose environment anchors and is wired
 into every application container, including optional API and reservation
 profiles. Redis-backed sessions, limits, locks, and heartbeats use this namespace.
@@ -48,8 +48,8 @@ profiles. Redis-backed sessions, limits, locks, and heartbeats use this namespac
 Compose no longer forces a global project name. Set a unique name per deployment:
 
 ```powershell
-$env:COMPOSE_PROJECT_NAME = "lanrouge-production"
-$env:ENV_FILE = "C:\secure\lanrouge.env"
+$env:COMPOSE_PROJECT_NAME = "telegram-crm-production"
+$env:ENV_FILE = "C:\secure\telegram-crm.env"
 $env:POSTGRES_PASSWORD_SECRET_FILE = "C:\secure\postgres_password"
 $env:REDIS_PASSWORD_SECRET_FILE = "C:\secure\redis_password"
 ```

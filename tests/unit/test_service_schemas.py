@@ -10,14 +10,14 @@ from app.schemas.service import ServiceAddonCreate, ServiceCreate, ServicePatch
 
 def test_service_create_normalizes_values() -> None:
     values = ServiceCreate(
-        name="  Маникюр с покрытием  ",
+        name="  Консультация с покрытием  ",
         description="  Базовая услуга  ",
         price="2500.50",
         duration_min_minutes=120,
         duration_max_minutes=180,
     )
 
-    assert values.name == "Маникюр с покрытием"
+    assert values.name == "Консультация с покрытием"
     assert values.description == "Базовая услуга"
     assert values.price == Decimal("2500.50")
 
@@ -25,7 +25,7 @@ def test_service_create_normalizes_values() -> None:
 def test_service_create_rejects_invalid_range_and_money() -> None:
     with pytest.raises(ValidationError, match="minimum duration"):
         ServiceCreate(
-            name="Маникюр",
+            name="Консультация",
             price=1000,
             duration_min_minutes=180,
             duration_max_minutes=120,
@@ -33,7 +33,7 @@ def test_service_create_rejects_invalid_range_and_money() -> None:
 
     with pytest.raises(ValidationError):
         ServiceCreate(
-            name="Маникюр",
+            name="Консультация",
             price="1000.999",
             duration_min_minutes=120,
             duration_max_minutes=180,

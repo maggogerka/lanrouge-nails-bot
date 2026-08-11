@@ -31,18 +31,18 @@ def render_reminder(delivery: NotificationDelivery) -> str:
         )
     if delivery.notification_type is NotificationType.REVIEW_REQUEST:
         return (
-            "<b>Спасибо, что посетили lanrouge nails!</b>\n"
+            "<b>Спасибо за визит!</b>\n"
             "Будем рады узнать, как всё прошло. Оценка займёт меньше минуты."
         )
     if delivery.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
         return (
-            "<b>Возможно, пришло время обновить маникюр 💅</b>\n"
+            "<b>Возможно, пришло время записаться снова</b>\n"
             f"В прошлый раз вы выбирали: {escape(delivery.service_name)}.\n"
             "Посмотреть новые свободные окна?"
         )
     if delivery.notification_type is NotificationType.CLIENT_REMINDER:
         return (
-            "<b>Напоминание о записи 💅</b>\n"
+            "<b>Напоминание о записи</b>\n"
             f"Услуга: {escape(delivery.service_name)}\n"
             f"Дата и время: {local:%d.%m.%Y %H:%M}\n"
             f"Адрес: {escape(delivery.address)}"
@@ -52,7 +52,7 @@ def render_reminder(delivery: NotificationDelivery) -> str:
         "<b>Ближайшая запись</b>\n"
         f"Услуга: {escape(delivery.service_name)}\n"
         f"Дата и время: {local:%d.%m.%Y %H:%M}\n"
-        f"Клиентка: {escape(delivery.client_name)}\n"
+        f"Клиент: {escape(delivery.client_name)}\n"
         f"Телефон: {phone}"
     )
 
