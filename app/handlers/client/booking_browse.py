@@ -21,7 +21,7 @@ from app.keyboards.client.booking import (
     windows_keyboard,
 )
 from app.keyboards.client.main import CLIENT_BOOK_TEXT
-from app.schemas.booking import BookingMasterOptions
+from app.schemas.booking import BookingMasterOptions, ClientActor
 from app.services.booking_service import BookingService
 from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
@@ -46,13 +46,15 @@ async def start_booking(
     message: Message,
     state: FSMContext,
     booking_service: BookingService,
+    *,
+    actor: ClientActor | None = None,
 ) -> None:
-    if message.from_user is None:
-        return
+    if actor is None:
+        if message.from_user is None:
+            return
+        actor = actor_from_telegram(message.from_user)
     try:
-        services = await booking_service.list_active_services(
-            actor_from_telegram(message.from_user)
-        )
+        services = await booking_service.list_active_services(actor)
     except DomainError as exc:
         await message.answer(str(exc))
         return

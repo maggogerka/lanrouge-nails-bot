@@ -2,6 +2,8 @@
 
 from aiogram.fsm.state import State, StatesGroup
 
+PENDING_MARKETING_BOOKING_KEY = "pending_marketing_booking"
+
 
 class BookingFlow(StatesGroup):
     service = State()

@@ -11,10 +11,11 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.types import User as TelegramUser
 
 from app.domain.acquisition import CampaignValidationError, validate_campaign_code
-from app.domain.enums import StaffRole
+from app.domain.enums import MarketingEventType, StaffRole
 from app.domain.errors import DomainError
 from app.domain.legal import MARKETING_CONSENT_TEXT
 from app.filters import IsStaff
+from app.handlers.client.booking_browse import start_booking
 from app.handlers.client.common import actor_from_telegram
 from app.handlers.client.portfolio import show_deep_linked_portfolio_item
 from app.keyboards.client.consent import (
@@ -33,12 +34,15 @@ from app.schemas.booking import ClientActor
 from app.schemas.features import FeatureName
 from app.services.acquisition_service import AcquisitionRuntimeService
 from app.services.authorization_service import AuthorizationService
+from app.services.booking_service import BookingService
 from app.services.consent_service import ConsentService
 from app.services.feature_flag_service import FeatureFlagService
+from app.services.marketing_event_service import MarketingEventService
 from app.services.menu_service import MenuService
 from app.services.portfolio_service import PortfolioService
 from app.services.presentation_service import PresentationService
 from app.services.privacy_service import DeletionRequestNotificationService
+from app.states.booking import PENDING_MARKETING_BOOKING_KEY
 
 router = Router(name="client.onboarding")
 _PENDING_ACQUISITION_KEY = "pending_acquisition_code"
@@ -208,6 +212,8 @@ async def accept_privacy(
     state: FSMContext,
     consent_service: ConsentService,
     acquisition_service: AcquisitionRuntimeService,
+    marketing_event_service: MarketingEventService,
+    booking_service: BookingService,
     correlation_id: str,
 ) -> None:
     await consent_service.accept_privacy(
@@ -220,8 +226,28 @@ async def accept_privacy(
         actor_from_telegram(callback.from_user),
         correlation_id=correlation_id,
     )
+    pending_booking = await _pop_pending_marketing_booking(state)
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Согласие на обработку данных сохранено.")
+        if pending_booking is not None:
+            broadcast_id, event_type = pending_booking
+            try:
+                await marketing_event_service.record(
+                    actor_from_telegram(callback.from_user),
+                    broadcast_id,
+                    event_type,
+                )
+            except DomainError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+            await start_booking(
+                callback.message,
+                state,
+                booking_service,
+                actor=actor_from_telegram(callback.from_user),
+            )
+            await callback.answer()
+            return
         await callback.message.answer(
             MARKETING_CONSENT_TEXT,
             reply_markup=marketing_consent_keyboard(),
@@ -366,3 +392,21 @@ async def _record_pending_acquisition(
             raw_code=raw_code,
             correlation_id=correlation_id,
         )
+
+
+async def _pop_pending_marketing_booking(
+    state: FSMContext,
+) -> tuple[int, MarketingEventType] | None:
+    data = await state.get_data()
+    raw = data.pop(PENDING_MARKETING_BOOKING_KEY, None)
+    await state.set_data(data)
+    if not isinstance(raw, dict):
+        return None
+    broadcast_id = raw.get("broadcast_id")
+    event_type = raw.get("event_type")
+    if not isinstance(broadcast_id, int) or broadcast_id <= 0 or not isinstance(event_type, str):
+        return None
+    try:
+        return broadcast_id, MarketingEventType(event_type)
+    except ValueError:
+        return None

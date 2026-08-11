@@ -112,7 +112,12 @@ async def start_booking_from_portfolio(
         await callback.answer()
         return
     if callback_data.action == "book":
-        await start_booking(callback.message, state, booking_service)
+        await start_booking(
+            callback.message,
+            state,
+            booking_service,
+            actor=actor_from_telegram(callback.from_user),
+        )
         await callback.answer()
         return
     try:
