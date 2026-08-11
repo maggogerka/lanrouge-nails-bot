@@ -31,12 +31,15 @@ from app.domain.enums import (
     StaffRole,
 )
 from app.domain.errors import (
+    AuthorizationError,
     BookingConflictError,
     BookingLimitError,
     BookingUnavailableError,
+    FutureBookingLimitError,
     PrivacyConsentRequiredError,
 )
 from app.payments.providers.mock import MockPaymentProvider
+from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.booking import BookingRequest, ClientActor, ReferenceMediaDraft
 from app.schemas.service import AdminActor
 from app.services.booking_service import BookingService
@@ -203,6 +206,10 @@ def build_uow(
     unit_of_work.service_addons.list_snapshots = AsyncMock(return_value=[])
     unit_of_work.portfolio.get = AsyncMock(return_value=None)
     unit_of_work.appointments.count_capacity_between = AsyncMock(return_value=0)
+    unit_of_work.appointments.count_for_future_booking_limit = AsyncMock(return_value=0)
+    unit_of_work.reservations.lock_client_for_booking = AsyncMock(
+        return_value=SimpleNamespace(user_id=target_client.id, is_active=True)
+    )
     unit_of_work.windows.list_open_between = AsyncMock(return_value=[target_window])
     unit_of_work.reservations.get_by_idempotency_key = AsyncMock(return_value=None)
     unit_of_work.reservations.payment_settings = AsyncMock(
@@ -698,6 +705,88 @@ async def test_admin_manual_booking_bypasses_only_self_booking_block() -> None:
 
     assert receipt.appointment_id == 11
     unit_of_work.appointments.add.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_future_booking_limit_is_checked_under_client_lock() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.appointments.count_for_future_booking_limit.return_value = 4
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(FutureBookingLimitError) as raised:
+        await booking.book(actor(), request(), now=NOW)
+
+    assert raised.value.current == raised.value.maximum == 4
+    unit_of_work.reservations.lock_client_for_booking.assert_awaited_once_with(5)
+    unit_of_work.appointments.add.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_authorized_confirmed_manual_override_is_audited_in_booking_transaction() -> None:
+    target_client = client()
+    target_client.phone = "+79991234567"
+    unit_of_work = build_uow(target_client=target_client)
+    unit_of_work.appointments.count_for_future_booking_limit.return_value = 4
+    context = StaffContext(
+        business_id=1,
+        staff_member_id=2,
+        user_id=9,
+        telegram_id=900,
+        display_name="Менеджер",
+        role=StaffRole.MANAGER,
+        is_bookable=False,
+    )
+    authorization = MagicMock()
+    authorization.authorize = AsyncMock(return_value=context)
+    booking = BookingService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        frozenset({900}),
+        authorization_service=authorization,
+    )
+
+    receipt = await booking.book_for_client(
+        AdminActor(telegram_id=900),
+        client_id=5,
+        service_id=3,
+        window_id=7,
+        staff_context=context,
+        quota_override_reason="-",
+        quota_override_confirmed=True,
+        now=NOW,
+        correlation_id="quota-override",
+    )
+
+    assert receipt.appointment_id == 11
+    authorization.authorize.assert_awaited_once_with(
+        business_id=1,
+        telegram_id=900,
+        permission=StaffPermission.OVERRIDE_BOOKING_LIMIT,
+    )
+    override_audit = next(
+        call
+        for call in unit_of_work.audit.add.await_args_list
+        if call.kwargs["action"] == "appointment.booking_limit_overridden"
+    )
+    assert override_audit.kwargs["changes"]["reason"] == "repeat_session"
+    assert override_audit.kwargs["correlation_id"] == "quota-override"
+
+
+@pytest.mark.asyncio
+async def test_manual_override_requires_explicit_confirmation() -> None:
+    unit_of_work = build_uow()
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(AuthorizationError, match="явное подтверждение"):
+        await booking.book_for_client(
+            AdminActor(telegram_id=900),
+            client_id=5,
+            service_id=3,
+            window_id=7,
+            quota_override_reason="repeat_session",
+        )
+
+    unit_of_work.appointments.add.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Appointment, AppointmentStatusHistory, AvailabilityWindow
+from app.domain.appointments import SCHEDULE_OCCUPYING_STATUSES
 from app.domain.enums import AppointmentStatus
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.repositories.scoped import TenantScopedRepository
@@ -45,6 +46,42 @@ class AppointmentRepository(TenantScopedRepository):
             statement = statement.with_for_update()
         result = await self._session.scalars(statement)
         return result.one_or_none()
+
+    async def count_for_future_booking_limit(
+        self,
+        *,
+        client_id: int,
+        now: datetime,
+        horizon_days: int,
+        include_client_cancellations: bool,
+    ) -> int:
+        """Count rolling quota rows after the caller serialized this client."""
+
+        future = and_(
+            Appointment.status.in_(SCHEDULE_OCCUPYING_STATUSES),
+            Appointment.scheduled_start_at >= now,
+            Appointment.scheduled_start_at < now + timedelta(days=horizon_days),
+        )
+        conditions = [future]
+        if include_client_cancellations:
+            conditions.append(
+                and_(
+                    Appointment.status == AppointmentStatus.CANCELLED_BY_CLIENT,
+                    Appointment.cancelled_at.is_not(None),
+                    Appointment.cancelled_at >= now - timedelta(days=30),
+                    Appointment.cancelled_at <= now,
+                )
+            )
+        return int(
+            await self._session.scalar(
+                select(func.count(Appointment.id)).where(
+                    Appointment.business_id == self.business_id,
+                    Appointment.client_id == client_id,
+                    or_(*conditions),
+                )
+            )
+            or 0
+        )
 
     async def list_for_client(
         self,

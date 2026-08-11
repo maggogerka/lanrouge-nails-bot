@@ -36,9 +36,11 @@ from app.domain.enums import (
     ReservationStatus,
 )
 from app.domain.errors import (
+    AuthorizationError,
     BookingConflictError,
     BookingLimitError,
     BookingUnavailableError,
+    FutureBookingLimitError,
     PrivacyConsentRequiredError,
 )
 from app.domain.notifications import future_reminder_schedules
@@ -55,6 +57,7 @@ from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.payments.providers.base import PaymentProviderError
 from app.payments.providers.manual import ManualPaymentProvider
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.booking import (
     BookableMasterView,
     BookingAvailability,
@@ -73,6 +76,7 @@ from app.schemas.reservation import ReservationCreate
 from app.schemas.service import AdminActor, AppointmentAddonView, ServiceAddonView, ServiceView
 from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import ensure_admin
+from app.services.authorization_service import AuthorizationService
 from app.services.feature_guard import require_feature
 from app.services.payment_service import PaymentService
 from app.services.reservation_service import ReservationService
@@ -89,6 +93,12 @@ class _CheckoutResult:
     payment_values: PaymentCreate | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _BookingLimitOverride:
+    actor_user_id: int
+    reason: str
+
+
 class BookingService:
     """Expose safe availability and atomically occupy exactly one window."""
 
@@ -101,6 +111,7 @@ class BookingService:
         payment_services: Mapping[PaymentMode, PaymentService] | None = None,
         payment_return_url: str | None = None,
         subscription_service: SubscriptionService | None = None,
+        authorization_service: AuthorizationService | None = None,
         business_id: int = DEFAULT_BUSINESS_ID,
     ) -> None:
         if business_id <= 0:
@@ -113,6 +124,7 @@ class BookingService:
         )
         self._payment_return_url = payment_return_url
         self._subscription_service = subscription_service
+        self._authorization_service = authorization_service
         self._business_id = business_id
 
     async def list_active_services(self, actor: ClientActor) -> list[ServiceView]:
@@ -316,6 +328,7 @@ class BookingService:
         now: datetime | None = None,
         correlation_id: str | None = None,
         allow_self_booking_blocked: bool = False,
+        _booking_limit_override: _BookingLimitOverride | None = None,
     ) -> BookingReceipt:
         current_time = self._aware_now(now)
         existing = await self._existing_checkout(actor, values)
@@ -356,6 +369,14 @@ class BookingService:
                     actor.telegram_id,
                     for_update=True,
                     allow_self_booking_blocked=allow_self_booking_blocked,
+                )
+                await self._enforce_future_booking_limit(
+                    unit_of_work,
+                    settings,
+                    client.id,
+                    current_time,
+                    override=_booking_limit_override,
+                    correlation_id=correlation_id,
                 )
                 service = self._active_service(
                     await unit_of_work.services.get(values.service_id, for_update=True)
@@ -1083,12 +1104,36 @@ class BookingService:
         client_id: int,
         service_id: int,
         window_id: int,
+        staff_context: StaffContext | None = None,
+        quota_override_reason: str | None = None,
+        quota_override_confirmed: bool = False,
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> BookingReceipt:
         """Create a manual booking while preserving every transactional booking invariant."""
 
         ensure_admin(actor, self._admin_telegram_ids)
+        override: _BookingLimitOverride | None = None
+        if quota_override_reason is not None:
+            if not quota_override_confirmed:
+                raise AuthorizationError("Требуется явное подтверждение превышения лимита.")
+            if self._authorization_service is None or staff_context is None:
+                raise AuthorizationError("Недостаточно прав для превышения лимита.")
+            live_actor = await self._authorization_service.authorize(
+                business_id=staff_context.business_id,
+                telegram_id=staff_context.telegram_id,
+                permission=StaffPermission.OVERRIDE_BOOKING_LIMIT,
+            )
+            if live_actor.telegram_id != actor.telegram_id:
+                raise AuthorizationError("Недостаточно прав для превышения лимита.")
+            normalized_reason = quota_override_reason.strip()
+            if normalized_reason == "-":
+                normalized_reason = "repeat_session"
+            if not 1 <= len(normalized_reason) <= 500:
+                raise BookingUnavailableError(
+                    "Причина превышения лимита должна содержать от 1 до 500 символов."
+                )
+            override = _BookingLimitOverride(live_actor.user_id, normalized_reason)
         async with self._unit_of_work_factory() as unit_of_work:
             client = await unit_of_work.users.get_by_id(client_id)
             if client is None:
@@ -1115,6 +1160,62 @@ class BookingService:
             now=now,
             correlation_id=correlation_id,
             allow_self_booking_blocked=True,
+            _booking_limit_override=override,
+        )
+
+    @staticmethod
+    async def _enforce_future_booking_limit(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        settings: BusinessSettings,
+        client_id: int,
+        now: datetime,
+        *,
+        override: _BookingLimitOverride | None,
+        correlation_id: str | None,
+    ) -> None:
+        enabled_value = getattr(settings, "future_booking_limit_enabled", None)
+        enabled = True if enabled_value is None else bool(enabled_value)
+        if not enabled:
+            if override is not None:
+                raise BookingUnavailableError("Превышение лимита больше не требуется.")
+            return
+        maximum = int(getattr(settings, "future_booking_limit_max", None) or 4)
+        horizon_days = int(getattr(settings, "future_booking_limit_horizon_days", None) or 30)
+        include_cancellations = bool(
+            getattr(settings, "future_booking_count_client_cancellations", False)
+        )
+        business_client = await unit_of_work.reservations.lock_client_for_booking(client_id)
+        if business_client is None:
+            raise BookingUnavailableError("Карточка клиента неактивна.")
+        current = await unit_of_work.appointments.count_for_future_booking_limit(
+            client_id=client_id,
+            now=now,
+            horizon_days=horizon_days,
+            include_client_cancellations=include_cancellations,
+        )
+        if current < maximum:
+            if override is not None:
+                raise BookingUnavailableError("Превышение лимита больше не требуется.")
+            return
+        if override is None:
+            raise FutureBookingLimitError(
+                "Достигнут лимит будущих записей на ближайшие 30 дней.",
+                current=current,
+                maximum=maximum,
+            )
+        await unit_of_work.audit.add(
+            actor_user_id=override.actor_user_id,
+            action="appointment.booking_limit_overridden",
+            entity_type="user",
+            entity_id=str(client_id),
+            changes={
+                "current": current,
+                "maximum": maximum,
+                "horizon_days": horizon_days,
+                "include_client_cancellations": include_cancellations,
+                "reason": override.reason,
+            },
+            correlation_id=correlation_id,
         )
 
     @staticmethod

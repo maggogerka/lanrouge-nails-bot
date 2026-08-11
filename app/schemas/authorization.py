@@ -51,6 +51,7 @@ class StaffPermission(StrEnum):
     VIEW_FEATURE_FLAGS = "view_feature_flags"
     MANAGE_FEATURE_FLAGS = "manage_feature_flags"
     HANDLE_DATA_DELETION = "handle_data_deletion"
+    OVERRIDE_BOOKING_LIMIT = "override_booking_limit"
     VIEW_VENDOR_SUPPORT = "view_vendor_support"
 
 
@@ -81,6 +82,7 @@ _MANAGER_PERMISSIONS = frozenset(
         StaffPermission.VIEW_ALL_STATISTICS,
         StaffPermission.VIEW_FEATURE_FLAGS,
         StaffPermission.HANDLE_DATA_DELETION,
+        StaffPermission.OVERRIDE_BOOKING_LIMIT,
         StaffPermission.VIEW_VENDOR_SUPPORT,
     }
 )
@@ -95,6 +97,7 @@ _MASTER_PERMISSIONS = frozenset(
         StaffPermission.VIEW_OWN_CLIENTS,
         StaffPermission.MANAGE_OWN_CLIENTS,
         StaffPermission.VIEW_OWN_STATISTICS,
+        StaffPermission.OVERRIDE_BOOKING_LIMIT,
         StaffPermission.VIEW_VENDOR_SUPPORT,
     }
 )

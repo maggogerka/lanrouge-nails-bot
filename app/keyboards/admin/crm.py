@@ -63,6 +63,23 @@ def client_card_keyboard(card: ClientCardView, *, page: int = 1) -> InlineKeyboa
     )
 
 
+def booking_limit_override_keyboard(client_id: int) -> InlineKeyboardMarkup:
+    """Require a distinct confirmation before an authorized quota override."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button(
+                    "Создать повторный сеанс сверх лимита",
+                    "manual_override_confirm",
+                    client_id=client_id,
+                )
+            ],
+            [_button("Назад к карточке", "view", client_id=client_id)],
+        ]
+    )
+
+
 def client_tags_keyboard(
     client_id: int,
     tags: list[ClientTagView],

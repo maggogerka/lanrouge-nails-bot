@@ -50,7 +50,31 @@ class BusinessSettingsView(BaseModel):
     external_portfolio_url: str | None = None
     external_portfolio_button_text: str = "Открыть портфолио"
     master_profile_enabled: bool = True
+    future_booking_limit_enabled: bool = True
+    future_booking_limit_max: int = 4
+    future_booking_limit_horizon_days: int = 30
+    future_booking_count_client_cancellations: bool = False
     version: int
+
+    @field_validator("future_booking_limit_enabled", mode="before")
+    @classmethod
+    def default_future_limit_enabled(cls, value: object) -> object:
+        return True if value is None else value
+
+    @field_validator("future_booking_limit_max", mode="before")
+    @classmethod
+    def default_future_limit_max(cls, value: object) -> object:
+        return 4 if value is None else value
+
+    @field_validator("future_booking_limit_horizon_days", mode="before")
+    @classmethod
+    def default_future_limit_horizon(cls, value: object) -> object:
+        return 30 if value is None else value
+
+    @field_validator("future_booking_count_client_cancellations", mode="before")
+    @classmethod
+    def default_future_cancellation_policy(cls, value: object) -> object:
+        return False if value is None else value
 
 
 class BusinessSettingsPatch(BaseModel):
@@ -88,6 +112,10 @@ class BusinessSettingsPatch(BaseModel):
         None
     )
     master_profile_enabled: bool | None = None
+    future_booking_limit_enabled: bool | None = None
+    future_booking_limit_max: Annotated[int, Field(ge=1, le=100)] | None = None
+    future_booking_limit_horizon_days: Annotated[int, Field(ge=1, le=365)] | None = None
+    future_booking_count_client_cancellations: bool | None = None
 
     @field_validator("availability_time_step_minutes")
     @classmethod

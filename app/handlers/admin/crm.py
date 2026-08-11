@@ -10,17 +10,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from pydantic import ValidationError
 
-from app.domain.errors import DomainError
+from app.domain.errors import DomainError, FutureBookingLimitError
 from app.handlers.admin.service_common import actor_from_telegram
 from app.keyboards.admin.crm import (
     CrmCallback,
     all_tags_keyboard,
+    booking_limit_override_keyboard,
     client_card_keyboard,
     client_list_keyboard,
     client_tags_keyboard,
     notes_keyboard,
 )
 from app.keyboards.admin.main import ADMIN_CLIENTS_TEXT
+from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.crm import ClientCardView, ClientNoteCreate, ClientTagCreate
 from app.schemas.pagination import PageRequest
 from app.schemas.service import AdminActor
@@ -438,6 +440,7 @@ async def create_manual_booking(
     message: Message,
     state: FSMContext,
     booking_service: BookingService,
+    staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
     if message.from_user is None:
@@ -453,11 +456,79 @@ async def create_manual_booking(
             window_id=window_id,
             correlation_id=correlation_id,
         )
+    except FutureBookingLimitError as exc:
+        if not staff_context.has_permission(StaffPermission.OVERRIDE_BOOKING_LIMIT):
+            await message.answer(str(exc))
+            return
+        await state.update_data(
+            service_id=service_id,
+            window_id=window_id,
+            client_id=int(data["client_id"]),
+        )
+        await state.set_state(AdminCrmFlow.manual_booking_override)
+        await message.answer(
+            f"У клиента уже {exc.current} будущих записей при лимите {exc.maximum}.",
+            reply_markup=booking_limit_override_keyboard(int(data["client_id"])),
+        )
+        return
     except (DomainError, KeyError, TypeError, ValueError) as exc:
         await message.answer(str(exc) or "Введите ровно два числовых ID через пробел.")
         return
     await state.clear()
     await message.answer(f"Запись №{receipt.appointment_id} создана.")
+
+
+@router.callback_query(
+    AdminCrmFlow.manual_booking_override,
+    CrmCallback.filter(F.action == "manual_override_confirm"),
+)
+async def confirm_manual_booking_override(
+    callback: CallbackQuery,
+    callback_data: CrmCallback,
+    state: FSMContext,
+    staff_context: StaffContext,
+) -> None:
+    data = await state.get_data()
+    if not staff_context.has_permission(
+        StaffPermission.OVERRIDE_BOOKING_LIMIT
+    ) or callback_data.client_id != data.get("client_id"):
+        await callback.answer("Недостаточно прав или действие устарело.", show_alert=True)
+        return
+    await state.set_state(AdminCrmFlow.manual_booking_override_reason)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Укажите причину превышения лимита или отправьте «-» для типа repeat_session."
+        )
+    await callback.answer()
+
+
+@router.message(AdminCrmFlow.manual_booking_override_reason)
+async def create_manual_booking_override(
+    message: Message,
+    state: FSMContext,
+    booking_service: BookingService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    if message.from_user is None:
+        return
+    data = await state.get_data()
+    try:
+        receipt = await booking_service.book_for_client(
+            actor_from_telegram(message.from_user),
+            client_id=int(data["client_id"]),
+            service_id=int(data["service_id"]),
+            window_id=int(data["window_id"]),
+            staff_context=staff_context,
+            quota_override_reason=(message.text or "").strip(),
+            quota_override_confirmed=True,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, KeyError, TypeError, ValueError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"Запись №{receipt.appointment_id} создана сверх лимита.")
 
 
 async def _send_client_list(

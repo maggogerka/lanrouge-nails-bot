@@ -53,6 +53,15 @@ class BookingLimitError(BookingUnavailableError):
     """The business-day appointment capacity has been exhausted."""
 
 
+class FutureBookingLimitError(BookingLimitError):
+    """The client reached the configured rolling future-booking quota."""
+
+    def __init__(self, message: str, *, current: int, maximum: int) -> None:
+        super().__init__(message)
+        self.current = current
+        self.maximum = maximum
+
+
 class PortfolioStateError(DomainError):
     """A portfolio work cannot perform the requested lifecycle transition."""
 

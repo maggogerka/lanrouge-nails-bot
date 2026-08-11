@@ -98,6 +98,14 @@ class BusinessSettings(TimestampMixin, Base):
             "OR booking_reference_retention_days BETWEEN 1 AND 3650",
             name="booking_reference_retention_valid",
         ),
+        CheckConstraint(
+            "future_booking_limit_max BETWEEN 1 AND 100",
+            name="future_booking_limit_max_valid",
+        ),
+        CheckConstraint(
+            "future_booking_limit_horizon_days BETWEEN 1 AND 365",
+            name="future_booking_limit_horizon_valid",
+        ),
         CheckConstraint("version > 0", name="version_positive"),
     )
 
@@ -176,6 +184,18 @@ class BusinessSettings(TimestampMixin, Base):
         Integer, nullable=False, default=36, server_default="36"
     )
     booking_reference_retention_days: Mapped[int | None] = mapped_column(Integer)
+    future_booking_limit_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    future_booking_limit_max: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=4, server_default="4"
+    )
+    future_booking_limit_horizon_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30"
+    )
+    future_booking_count_client_cancellations: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     portfolio_mode: Mapped[PortfolioDisplayMode] = mapped_column(
         database_enum(PortfolioDisplayMode, name="portfolio_display_mode"),
         nullable=False,

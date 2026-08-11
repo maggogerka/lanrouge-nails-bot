@@ -13,6 +13,7 @@ from app.database.models.commerce import BookingReservation
 from app.database.models.payment import PaymentWebhookEvent, Refund
 from app.domain.enums import PaymentMode, RefundStatus, ReservationStatus
 from app.domain.payments import WebhookProcessingStatus
+from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.payment_repository import PaymentRepository
 from app.repositories.reservation_repository import ReservationRepository
 
@@ -82,6 +83,48 @@ async def test_active_reservation_by_appointment_is_locked_and_tenant_scoped() -
     assert "booking_reservations.appointment_id" in compiled
     assert "booking_reservations.status" in compiled
     assert "FOR UPDATE" in compiled
+
+
+@pytest.mark.asyncio
+async def test_client_booking_lock_is_tenant_scoped_and_for_update() -> None:
+    session = MagicMock()
+    session.scalars = AsyncMock(return_value=ScalarRows())
+    repository = ReservationRepository(session, 7)
+
+    await repository.lock_client_for_booking(31)
+
+    compiled = sql(session.scalars.await_args.args[0])
+    assert "business_clients.business_id" in compiled
+    assert "business_clients.user_id" in compiled
+    assert "FOR UPDATE" in compiled
+
+
+@pytest.mark.asyncio
+async def test_future_quota_query_includes_cancellations_only_when_configured() -> None:
+    session = MagicMock()
+    session.scalar = AsyncMock(return_value=0)
+    repository = AppointmentRepository(session, 7)
+
+    await repository.count_for_future_booking_limit(
+        client_id=31,
+        now=NOW,
+        horizon_days=30,
+        include_client_cancellations=False,
+    )
+    without_cancellations = sql(session.scalar.await_args.args[0])
+    await repository.count_for_future_booking_limit(
+        client_id=31,
+        now=NOW,
+        horizon_days=30,
+        include_client_cancellations=True,
+    )
+    with_cancellations = sql(session.scalar.await_args.args[0])
+
+    assert "appointments.business_id" in without_cancellations
+    assert "appointments.client_id" in without_cancellations
+    assert "appointments.scheduled_start_at" in without_cancellations
+    assert "appointments.cancelled_at" not in without_cancellations
+    assert "appointments.cancelled_at" in with_cancellations
 
 
 @pytest.mark.asyncio

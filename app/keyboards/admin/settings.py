@@ -18,6 +18,8 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
         ("Длительность окна", "default_window_duration_minutes"),
         ("Интервал между окнами", "minimum_gap_minutes"),
         ("Напоминания", "reminder_offsets_minutes"),
+        ("Лимит будущих записей", "future_booking_limit_max"),
+        ("Горизонт антиспама", "future_booking_limit_horizon_days"),
     ]
     rows = [
         [
@@ -30,6 +32,26 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
     ]
     rows.extend(
         [
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "✅ Антиспам включён"
+                        if settings.future_booking_limit_enabled
+                        else "⛔ Антиспам выключен"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_future_limit").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "✅ Учитывать отмены клиента"
+                        if settings.future_booking_count_client_cancellations
+                        else "⛔ Не учитывать отмены клиента"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_future_cancellations").pack(),
+                )
+            ],
             [
                 InlineKeyboardButton(
                     text=(

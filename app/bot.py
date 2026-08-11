@@ -138,6 +138,7 @@ def create_dispatcher(
             str(settings.yookassa_return_url) if settings.yookassa_return_url is not None else None
         ),
         subscription_service=subscription_service,
+        authorization_service=authorization_service,
     )
     manual_prepayment_service = ManualPrepaymentService(
         lambda: SqlAlchemyUnitOfWork(database.sessions)

@@ -53,6 +53,8 @@ def test_reminder_offsets_must_be_unique_and_non_empty() -> None:
         ("client_page_size", 51),
         ("availability_date_picker_days", 63),
         ("booking_reference_max_media", 11),
+        ("future_booking_limit_max", 101),
+        ("future_booking_limit_horizon_days", 366),
     ],
 )
 def test_v020_settings_enforce_documented_bounds(field: str, value: int) -> None:

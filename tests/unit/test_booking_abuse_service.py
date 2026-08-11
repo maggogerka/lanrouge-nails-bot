@@ -55,7 +55,7 @@ async def test_authorization_enforces_redis_then_locks_client_and_counts_quotas(
 @pytest.mark.asyncio
 async def test_locked_future_quota_rejects_before_reservation_count() -> None:
     service, repository, _ = build_service()
-    repository.count_future_appointments.return_value = 3
+    repository.count_future_appointments.return_value = 4
 
     with pytest.raises(BookingAbuseError) as error:
         await service.authorize_new_reservation(

@@ -59,7 +59,7 @@ class BookingRateLimiter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BookingAbusePolicy:
-    max_future_appointments: int = 3
+    max_future_appointments: int = 4
     max_active_reservations: int = 2
     max_appointments_per_day: int = 2
     attempt_limit: int = 6

@@ -26,16 +26,26 @@ _PROMPTS = {
     "default_window_duration_minutes": "Введите длительность окна по умолчанию в минутах:",
     "minimum_gap_minutes": "Введите минимальный интервал в минутах (можно 0):",
     "reminder_offsets_minutes": "Введите offsets напоминаний в минутах через запятую:",
+    "future_booking_limit_max": "Введите максимум будущих записей одного клиента (1–100):",
+    "future_booking_limit_horizon_days": "Введите горизонт лимита в днях (1–365):",
 }
 
 
 def render_settings(settings: BusinessSettingsView) -> str:
+    cancellation_policy = (
+        "учитываются" if settings.future_booking_count_client_cancellations else "не учитываются"
+    )
     return (
         "<b>Основные настройки</b>\n"
         f"Часовой пояс: {settings.timezone}\n"
         f"Горизонт: {settings.booking_horizon_days} дн.\n"
         f"Дедлайн отмены/переноса: {settings.cancellation_deadline_hours} ч.\n"
         f"Лимит записей на день: {settings.max_appointments_per_day}\n"
+        "Антиспам будущих записей: "
+        f"{'включён' if settings.future_booking_limit_enabled else 'выключен'}\n"
+        f"Лимит клиента: {settings.future_booking_limit_max} "
+        f"за {settings.future_booking_limit_horizon_days} дн.\n"
+        f"Отмены клиента в лимите: {cancellation_policy}\n"
         f"Окно по умолчанию: {settings.default_window_duration_minutes} мин.\n"
         f"Минимальный интервал: {settings.minimum_gap_minutes} мин.\n"
         f"Суббота: {'разрешена' if settings.allow_saturday else 'закрыта'}\n"
@@ -199,3 +209,31 @@ async def toggle_reviews(
     await callback.answer(
         "Отзывы включены." if settings.reviews_enabled else "Отзывы полностью отключены."
     )
+
+
+@router.callback_query(
+    SettingsCallback.filter(F.action.in_({"toggle_future_limit", "toggle_future_cancellations"}))
+)
+async def toggle_future_booking_limit(
+    callback: CallbackQuery,
+    callback_data: SettingsCallback,
+    settings_service: SettingsService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    current = await settings_service.get(actor)
+    patch = (
+        BusinessSettingsPatch(future_booking_limit_enabled=not current.future_booking_limit_enabled)
+        if callback_data.action == "toggle_future_limit"
+        else BusinessSettingsPatch(
+            future_booking_count_client_cancellations=(
+                not current.future_booking_count_client_cancellations
+            )
+        )
+    )
+    settings = await settings_service.update(actor, patch, correlation_id=correlation_id)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            render_settings(settings), reply_markup=settings_keyboard(settings)
+        )
+    await callback.answer("Настройка антиспама обновлена.")
