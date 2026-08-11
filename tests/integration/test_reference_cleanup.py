@@ -32,6 +32,7 @@ async def seed_expired_reference(database: Database) -> int:
         session.add_all([administrator, client])
         await session.flush()
         catalog_service = Service(
+            business_id=1,
             name="Маникюр",
             price=Decimal("2500.00"),
             duration_min_minutes=120,
@@ -41,6 +42,8 @@ async def seed_expired_reference(database: Database) -> int:
         session.add(catalog_service)
         await session.flush()
         window = AvailabilityWindow(
+            business_id=1,
+            staff_member_id=1,
             start_at=NOW - timedelta(days=31, hours=3),
             end_at=NOW - timedelta(days=31),
             status=AvailabilityWindowStatus.CLOSED,
@@ -49,11 +52,16 @@ async def seed_expired_reference(database: Database) -> int:
         session.add(window)
         await session.flush()
         appointment = Appointment(
+            business_id=1,
+            staff_member_id=1,
             client_id=client.id,
             window_id=window.id,
             service_id=catalog_service.id,
             service_name_snapshot=catalog_service.name,
+            master_name_snapshot="Мастер",
             price_snapshot=catalog_service.price,
+            scheduled_start_at=window.start_at,
+            scheduled_end_at=window.end_at,
             duration_min_snapshot=120,
             duration_max_snapshot=180,
             status=AppointmentStatus.COMPLETED,
@@ -62,6 +70,7 @@ async def seed_expired_reference(database: Database) -> int:
         session.add(appointment)
         await session.flush()
         reference = AppointmentReferenceMedia(
+            business_id=1,
             appointment_id=appointment.id,
             telegram_file_id="telegram-file-id",
             telegram_file_unique_id="telegram-unique-id",

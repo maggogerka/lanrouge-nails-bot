@@ -216,7 +216,12 @@ def test_vendor_support_is_separate_and_https_only() -> None:
         make_settings(VENDOR_SUPPORT_URL="http://vendor.example.test/help")
 
 
-def test_runtime_secrets_can_be_loaded_from_bounded_files(tmp_path: Path) -> None:
+def test_runtime_secrets_can_be_loaded_from_bounded_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("BOT_TOKEN", "DATABASE_URL", "REDIS_URL"):
+        monkeypatch.delenv(variable, raising=False)
     token_file = tmp_path / "bot-token"
     database_file = tmp_path / "database-url"
     redis_file = tmp_path / "redis-url"

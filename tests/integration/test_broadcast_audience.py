@@ -60,6 +60,7 @@ async def test_only_live_subscribers_are_frozen_once(
         )
         await session.flush()
         campaign = Broadcast(
+            business_id=1,
             title="Campaign",
             text="Text",
             status=BroadcastStatus.SCHEDULED,

@@ -10,7 +10,13 @@ import pytest
 from sqlalchemy import func, select
 
 from app.database import Database
-from app.database.models import Appointment, AvailabilityWindow, Service, User
+from app.database.models import (
+    Appointment,
+    AvailabilityWindow,
+    Service,
+    StaffServiceAssignment,
+    User,
+)
 from app.domain.enums import AvailabilityWindowStatus, UserRole
 from app.domain.errors import BookingConflictError
 from app.repositories import SqlAlchemyUnitOfWork
@@ -39,6 +45,7 @@ async def seed_booking_case(database: Database) -> None:
         session.add_all([administrator, *clients])
         await session.flush()
         service = Service(
+            business_id=1,
             name="Маникюр",
             description=None,
             price=Decimal("2500.00"),
@@ -49,7 +56,18 @@ async def seed_booking_case(database: Database) -> None:
         session.add(service)
         await session.flush()
         session.add(
+            StaffServiceAssignment(
+                business_id=1,
+                staff_member_id=1,
+                service_id=service.id,
+                online_booking_enabled=True,
+                is_active=True,
+            )
+        )
+        session.add(
             AvailabilityWindow(
+                business_id=1,
+                staff_member_id=1,
                 start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
                 end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
                 status=AvailabilityWindowStatus.OPEN,

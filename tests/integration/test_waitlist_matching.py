@@ -41,6 +41,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         session.add_all([admin, *users])
         await session.flush()
         fitting = Service(
+            business_id=1,
             name="Маникюр",
             price=Decimal("2500"),
             duration_min_minutes=120,
@@ -48,6 +49,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
             is_active=True,
         )
         too_long = Service(
+            business_id=1,
             name="Длинная услуга",
             price=Decimal("3500"),
             duration_min_minutes=200,
@@ -66,6 +68,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         session.add_all(
             [
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[0].id,
                     service_id=fitting.id,
                     status=WaitlistStatus.ACTIVE,
@@ -74,6 +77,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
                     **common,
                 ),
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[1].id,
                     service_id=fitting.id,
                     status=WaitlistStatus.ACTIVE,
@@ -82,18 +86,21 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
                     **common,
                 ),
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[2].id,
                     service_id=too_long.id,
                     status=WaitlistStatus.ACTIVE,
                     **common,
                 ),
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[3].id,
                     service_id=fitting.id,
                     status=WaitlistStatus.CANCELLED,
                     **common,
                 ),
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[4].id,
                     service_id=fitting.id,
                     status=WaitlistStatus.EXPIRED,
@@ -103,6 +110,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
                     preferred_dates=[],
                 ),
                 WaitlistEntry(
+                    business_id=1,
                     client_id=users[5].id,
                     service_id=fitting.id,
                     status=WaitlistStatus.ACTIVE,
@@ -111,6 +119,8 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
             ]
         )
         window = AvailabilityWindow(
+            business_id=1,
+            staff_member_id=1,
             start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
             end_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
             status=AvailabilityWindowStatus.OPEN,
