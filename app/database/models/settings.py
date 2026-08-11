@@ -26,7 +26,7 @@ class BusinessSettings(TimestampMixin, Base):
 
     __tablename__ = "business_settings"
     __table_args__ = (
-        UniqueConstraint("business_id", name="business_settings_business"),
+        UniqueConstraint("business_id", name="uq_business_settings_business_id"),
         CheckConstraint("booking_horizon_days BETWEEN 1 AND 365", name="booking_horizon_valid"),
         CheckConstraint(
             "cancellation_deadline_hours > 0",

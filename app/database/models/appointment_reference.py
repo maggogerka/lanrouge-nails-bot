@@ -90,7 +90,7 @@ class ReferenceCleanupState(Base):
     __tablename__ = "reference_cleanup_state"
     __table_args__ = (
         CheckConstraint("consecutive_failures >= 0", name="failures_non_negative"),
-        UniqueConstraint("business_id", name="business"),
+        UniqueConstraint("business_id", name="uq_reference_cleanup_state_business"),
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)

@@ -24,7 +24,11 @@ class MasterProfile(TimestampMixin, Base):
     __tablename__ = "master_profiles"
     __table_args__ = (
         CheckConstraint("bio IS NULL OR char_length(bio) <= 4000", name="bio_length_valid"),
-        UniqueConstraint("business_id", "staff_member_id", name="business_staff"),
+        UniqueConstraint(
+            "business_id",
+            "staff_member_id",
+            name="uq_master_profiles_business_staff",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
