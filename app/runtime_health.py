@@ -22,9 +22,17 @@ logger = logging.getLogger(__name__)
 
 BOT_HEARTBEAT_INTERVAL_SECONDS = 20.0
 RESERVATION_EXPIRY_POLL_INTERVAL_SECONDS = 5.0
+PRIVACY_DELETION_POLL_INTERVAL_SECONDS = 60.0
 
 _COMPONENTS = frozenset(
-    {"bot", "reminders", "broadcasts", "reference_cleanup", "reservation_expiry"}
+    {
+        "bot",
+        "reminders",
+        "broadcasts",
+        "reference_cleanup",
+        "reservation_expiry",
+        "privacy_deletion",
+    }
 )
 
 
@@ -97,6 +105,8 @@ def component_policy(settings: Settings, component: str) -> ComponentPolicy:
         max_age_seconds = math.ceil(2 * settings.reminder_poll_interval_seconds + 30)
     elif component == "reference_cleanup":
         max_age_seconds = settings.reference_cleanup_interval_hours * 3600 + 1800
+    elif component == "privacy_deletion":
+        max_age_seconds = math.ceil(2 * PRIVACY_DELETION_POLL_INTERVAL_SECONDS + 30)
     else:
         max_age_seconds = math.ceil(2 * RESERVATION_EXPIRY_POLL_INTERVAL_SECONDS + 30)
     return ComponentPolicy(component, max_age_seconds)

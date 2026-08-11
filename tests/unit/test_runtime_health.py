@@ -92,6 +92,7 @@ def test_component_policies_follow_worker_intervals_at_max_cleanup_setting() -> 
     assert component_policy(configured, "broadcasts").max_age_seconds == 45
     assert component_policy(configured, "reference_cleanup").max_age_seconds == 606_600
     assert component_policy(configured, "reservation_expiry").max_age_seconds == 40
+    assert component_policy(configured, "privacy_deletion").max_age_seconds == 150
 
 
 @pytest.mark.asyncio

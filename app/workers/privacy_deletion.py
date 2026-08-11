@@ -12,14 +12,12 @@ from app.domain.enums import DataDeletionRequestStatus
 from app.logging import configure_logging, log_event
 from app.observability import ObservabilityConfigurationError, initialize_observability
 from app.repositories.uow import SqlAlchemyUnitOfWork
-from app.runtime_health import open_component_heartbeat
+from app.runtime_health import PRIVACY_DELETION_POLL_INTERVAL_SECONDS, open_component_heartbeat
 from app.schemas.service import AdminActor
 from app.services.authorization_service import AuthorizationService
 from app.services.privacy_service import PrivacyDeletionRuntimeService
 
 logger = logging.getLogger(__name__)
-
-_POLL_INTERVAL_SECONDS = 60
 
 
 async def run_deletion_cycle(
@@ -87,7 +85,7 @@ async def run_worker(settings: Settings) -> None:
                         stopped=stopped,
                     )
                     await heartbeat.beat()
-                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+                await asyncio.sleep(PRIVACY_DELETION_POLL_INTERVAL_SECONDS)
     finally:
         await database.close()
 
