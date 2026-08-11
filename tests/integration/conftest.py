@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -21,7 +22,9 @@ async def integration_database() -> AsyncIterator[Database]:
         pytest.skip("TEST_DATABASE_URL is not configured")
     password_file = os.getenv("TEST_DATABASE_PASSWORD_FILE")
     if password_file:
-        password = Path(password_file).read_text(encoding="utf-8").strip()
+        password = (
+            await asyncio.to_thread(Path(password_file).read_text, encoding="utf-8")
+        ).strip()
         parsed = urlsplit(database_url)
         if parsed.hostname is None or parsed.username is None:
             raise RuntimeError("TEST_DATABASE_URL must include a username and hostname")

@@ -164,6 +164,8 @@ class DataDeletionRequestStatus(StrEnum):
     REQUESTED = "requested"
     IN_REVIEW = "in_review"
     APPROVED = "approved"
+    PROCESSING = "processing"
+    FAILED = "failed"
     REJECTED = "rejected"
     COMPLETED = "completed"
     CANCELLED = "cancelled"

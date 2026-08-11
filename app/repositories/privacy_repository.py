@@ -10,11 +10,17 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models.appointment import Appointment
+from app.database.models.appointment import Appointment, AppointmentStatusHistory
 from app.database.models.appointment_reference import AppointmentReferenceMedia
 from app.database.models.broadcast import BroadcastRecipient
-from app.database.models.business import Business, BusinessClient, StaffMember
+from app.database.models.business import (
+    Business,
+    BusinessClient,
+    StaffInvitation,
+    StaffMember,
+)
 from app.database.models.crm import ClientNote, ConsentHistory, UserClientTag
+from app.database.models.master_profile import MasterProfile, MasterPublicLink
 from app.database.models.notification import NotificationJob
 from app.database.models.payment import Payment, Refund
 from app.database.models.privacy import (
@@ -41,6 +47,8 @@ _OPEN_DELETION_STATUSES = (
     DataDeletionRequestStatus.REQUESTED,
     DataDeletionRequestStatus.IN_REVIEW,
     DataDeletionRequestStatus.APPROVED,
+    DataDeletionRequestStatus.PROCESSING,
+    DataDeletionRequestStatus.FAILED,
 )
 
 
@@ -50,11 +58,17 @@ class AnonymizationBlockers:
 
     active_staff_memberships: int = 0
     other_active_business_memberships: int = 0
+    active_staff_roles: tuple[str, ...] = ()
+    bootstrap_owner: bool = False
 
     @property
     def error_codes(self) -> tuple[str, ...]:
         codes: list[str] = []
-        if self.active_staff_memberships:
+        if self.bootstrap_owner:
+            codes.append("bootstrap_owner")
+        elif self.active_staff_roles:
+            codes.extend(f"active_staff_role.{role}" for role in self.active_staff_roles)
+        elif self.active_staff_memberships:
             codes.append("active_staff_membership")
         if self.other_active_business_memberships:
             codes.append("other_active_business_membership")
@@ -297,11 +311,14 @@ class PrivacyRepository:
     async def anonymization_blockers(self, user_id: int) -> AnonymizationBlockers:
         """Detect identities whose global profile cannot safely be anonymized."""
 
-        active_staff = await self._session.scalar(
-            select(func.count())
-            .select_from(StaffMember)
-            .where(StaffMember.user_id == user_id, StaffMember.is_active.is_(True))
-        )
+        active_staff_rows = (
+            await self._session.execute(
+                select(StaffMember.role, StaffMember.is_bootstrap_owner).where(
+                    StaffMember.user_id == user_id,
+                    StaffMember.is_active.is_(True),
+                )
+            )
+        ).all()
         other_clients = await self._session.scalar(
             select(func.count())
             .select_from(BusinessClient)
@@ -312,8 +329,10 @@ class PrivacyRepository:
             )
         )
         return AnonymizationBlockers(
-            active_staff_memberships=int(active_staff or 0),
+            active_staff_memberships=len(active_staff_rows),
             other_active_business_memberships=int(other_clients or 0),
+            active_staff_roles=tuple(sorted({row.role.value for row in active_staff_rows})),
+            bootstrap_owner=any(row.is_bootstrap_owner for row in active_staff_rows),
         )
 
     async def anonymize_client_data(
@@ -407,6 +426,16 @@ class PrivacyRepository:
                 .values(client_comment=None, cancellation_reason=None)
             )
         )
+        appointment_history_comments = self._rowcount(
+            await self._session.execute(
+                update(AppointmentStatusHistory)
+                .where(
+                    AppointmentStatusHistory.appointment_id.in_(appointment_ids),
+                    AppointmentStatusHistory.reason.is_not(None),
+                )
+                .values(reason="[anonymized]")
+            )
+        )
         review_revisions = self._rowcount(
             await self._session.execute(
                 update(ReviewRevision)
@@ -447,6 +476,27 @@ class PrivacyRepository:
                         changed_at,
                     ),
                     last_deletion_error="privacy_subject_anonymized",
+                )
+            )
+        )
+        payment_receipts = self._rowcount(
+            await self._session.execute(
+                update(Payment)
+                .where(
+                    Payment.business_id == self.business_id,
+                    Payment.appointment_id.in_(appointment_ids),
+                    (Payment.receipt_file_id.is_not(None))
+                    | (Payment.receipt_file_unique_id.is_not(None))
+                    | (Payment.rejection_reason.is_not(None)),
+                )
+                .values(
+                    receipt_file_id=None,
+                    receipt_file_unique_id=None,
+                    receipt_media_type=None,
+                    receipt_file_size=None,
+                    receipt_received_at=None,
+                    receipt_expires_at=None,
+                    rejection_reason=None,
                 )
             )
         )
@@ -534,6 +584,65 @@ class PrivacyRepository:
             )
         )
 
+        inactive_staff_ids = select(StaffMember.id).where(
+            StaffMember.user_id == user_id,
+            StaffMember.is_active.is_(False),
+            StaffMember.is_bootstrap_owner.is_(False),
+        )
+        await self._session.execute(
+            delete(MasterPublicLink).where(
+                MasterPublicLink.business_id == self.business_id,
+                MasterPublicLink.profile_id.in_(
+                    select(MasterProfile.id).where(
+                        MasterProfile.business_id == self.business_id,
+                        MasterProfile.staff_member_id.in_(inactive_staff_ids),
+                    )
+                ),
+            )
+        )
+        await self._session.execute(
+            update(MasterProfile)
+            .where(
+                MasterProfile.business_id == self.business_id,
+                MasterProfile.staff_member_id.in_(inactive_staff_ids),
+            )
+            .values(
+                display_name="[anonymized]",
+                bio=None,
+                telegram_photo_file_id=None,
+                telegram_photo_file_unique_id=None,
+                telegram_url=None,
+                is_published=False,
+                updated_by_user_id=None,
+            )
+        )
+        await self._session.execute(
+            update(StaffInvitation)
+            .where(
+                StaffInvitation.business_id == self.business_id,
+                StaffInvitation.accepted_by_user_id == user_id,
+            )
+            .values(display_name="[anonymized]", accepted_by_user_id=None)
+        )
+        await self._session.execute(
+            update(StaffMember)
+            .where(
+                StaffMember.user_id == user_id,
+                StaffMember.is_active.is_(False),
+                StaffMember.is_bootstrap_owner.is_(False),
+            )
+            .values(
+                user_id=None,
+                display_name="[anonymized]",
+                bio=None,
+                specialization=None,
+                telegram_photo_file_id=None,
+                telegram_photo_file_unique_id=None,
+                settings={},
+                permission_grants=[],
+            )
+        )
+
         client.is_active = False
         client.anonymized_at = changed_at
         user.telegram_id = -(1 << 62) + user.id
@@ -556,9 +665,9 @@ class PrivacyRepository:
         return AnonymizationMutationCounts(
             identities_anonymized=2,
             notes_anonymized=notes,
-            comments_anonymized=appointment_comments,
+            comments_anonymized=appointment_comments + appointment_history_comments,
             reviews_anonymized=reviews + review_revisions,
-            reference_links_removed=references,
+            reference_links_removed=references + payment_receipts,
             deliveries_cancelled=(reminder_deliveries + broadcast_deliveries + waitlist_deliveries),
             appointment_snapshots_retained=appointments_retained,
             financial_snapshots_retained=payments_retained + refunds_retained,

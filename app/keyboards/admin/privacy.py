@@ -39,60 +39,31 @@ def deletion_requests_keyboard(
 def deletion_request_actions(request: DeletionRequestView) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if request.status is DataDeletionRequestStatus.REQUESTED:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="Взять в работу",
-                    callback_data=AdminDeletionCallback(
-                        action="review_prompt", request_id=request.id
-                    ).pack(),
-                )
-            ]
-        )
+        rows.append([_button("Взять в работу", "review_prompt", request.id)])
     elif request.status is DataDeletionRequestStatus.IN_REVIEW:
         rows.append(
             [
-                InlineKeyboardButton(
-                    text="Одобрить",
-                    callback_data=AdminDeletionCallback(
-                        action="approve_prompt", request_id=request.id
-                    ).pack(),
-                ),
-                InlineKeyboardButton(
-                    text="Отклонить",
-                    callback_data=AdminDeletionCallback(
-                        action="reject_prompt", request_id=request.id
-                    ).pack(),
-                ),
+                _button("Одобрить", "approve_prompt", request.id),
+                _button("Отклонить", "reject_prompt", request.id),
             ]
         )
     elif request.status is DataDeletionRequestStatus.APPROVED:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="Выполнить обезличивание",
-                    callback_data=AdminDeletionCallback(
-                        action="execute_prompt", request_id=request.id
-                    ).pack(),
-                )
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="← К списку",
-                callback_data=AdminDeletionCallback(action="list").pack(),
-            )
-        ]
-    )
+        rows.append([_button("Выполнить обезличивание", "execute_prompt", request.id)])
+    elif request.status is DataDeletionRequestStatus.FAILED:
+        rows.append([_button("Безопасно повторить", "retry_prompt", request.id)])
+    rows.append([_button("← К списку", "list", 0)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _button(text: str, action: str, request_id: int) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=AdminDeletionCallback(action=action, request_id=request_id).pack(),
+    )
+
+
 def deletion_confirmation_keyboard(
-    *,
-    action: str,
-    request_id: int,
-    reason_code: str = "none",
+    *, action: str, request_id: int, reason_code: str = "none"
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -106,14 +77,7 @@ def deletion_confirmation_keyboard(
                     ).pack(),
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    text="Нет",
-                    callback_data=AdminDeletionCallback(
-                        action="view", request_id=request_id
-                    ).pack(),
-                )
-            ],
+            [_button("Нет", "view", request_id)],
         ]
     )
 
@@ -140,14 +104,5 @@ def deletion_rejection_reasons_keyboard(request_id: int) -> InlineKeyboardMarkup
             ]
             for label, code in reasons
         ]
-        + [
-            [
-                InlineKeyboardButton(
-                    text="Назад",
-                    callback_data=AdminDeletionCallback(
-                        action="view", request_id=request_id
-                    ).pack(),
-                )
-            ]
-        ]
+        + [[_button("Назад", "view", request_id)]]
     )

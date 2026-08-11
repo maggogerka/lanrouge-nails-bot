@@ -55,7 +55,12 @@ def actor() -> AdminActor:
     return AdminActor(telegram_id=700)
 
 
-def staff_context(*, role: StaffRole = StaffRole.OWNER, telegram_id: int = 700) -> StaffContext:
+def staff_context(
+    *,
+    role: StaffRole = StaffRole.OWNER,
+    telegram_id: int = 700,
+    is_bootstrap_owner: bool = False,
+) -> StaffContext:
     return StaffContext(
         business_id=1,
         staff_member_id=8,
@@ -64,6 +69,7 @@ def staff_context(*, role: StaffRole = StaffRole.OWNER, telegram_id: int = 700) 
         display_name="Owner",
         role=role,
         is_bookable=False,
+        is_bootstrap_owner=is_bootstrap_owner,
     )
 
 
@@ -93,6 +99,8 @@ def request(status: DataDeletionRequestStatus) -> DataDeletionRequest:
         requested_at=NOW,
         anonymization_plan={},
         anonymization_result={},
+        attempt_count=0,
+        max_attempts=3,
     )
 
 
@@ -219,7 +227,91 @@ async def test_completion_retains_financial_and_appointment_snapshots() -> None:
     assert deletion_request.anonymization_result["comments_anonymized"] == 3
     assert deletion_request.anonymization_result["deliveries_cancelled"] == 6
     assert deletion_request.retention_reason == "legal_accounting_and_service_history"
-    unit_of_work.commit.assert_awaited_once()
+    assert unit_of_work.commit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fresh_processing_lease_prevents_parallel_anonymization() -> None:
+    unit_of_work = FakeUnitOfWork()
+    deletion_request = request(DataDeletionRequestStatus.PROCESSING)
+    deletion_request.locked_at = NOW
+    deletion_request.locked_by = "other-worker"
+    deletion_request.attempt_count = 1
+    unit_of_work.privacy.get_deletion_request = AsyncMock(return_value=deletion_request)
+    unit_of_work.privacy.anonymize_client_data = AsyncMock()
+
+    outcome = await runtime(unit_of_work, authorization_mock()).execute_anonymization(
+        actor(), 23, confirmed=True, now=NOW
+    )
+
+    assert not outcome.completed
+    assert outcome.error_codes == ("anonymization_in_progress",)
+    unit_of_work.privacy.anonymize_client_data.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execution_failure_is_bounded_and_safely_retryable() -> None:
+    unit_of_work = FakeUnitOfWork()
+    deletion_request = request(DataDeletionRequestStatus.APPROVED)
+    deletion_request.attempt_count = 2
+    unit_of_work.privacy.get_deletion_request = AsyncMock(return_value=deletion_request)
+    unit_of_work.privacy.get_client = AsyncMock(
+        return_value=BusinessClient(id=5, business_id=1, user_id=11)
+    )
+    unit_of_work.privacy.get_user = AsyncMock(return_value=User(id=11, telegram_id=111))
+    unit_of_work.privacy.anonymization_blockers = AsyncMock(return_value=AnonymizationBlockers())
+    unit_of_work.privacy.latest_consent = AsyncMock(return_value=None)
+    unit_of_work.privacy.anonymize_client_data = AsyncMock(
+        side_effect=RuntimeError("sensitive provider detail must not be persisted")
+    )
+    unit_of_work.privacy.add_deletion_event = AsyncMock()
+    unit_of_work.privacy.flush = AsyncMock()
+    authorization = authorization_mock()
+    service = runtime(unit_of_work, authorization)
+
+    outcome = await service.execute_anonymization(actor(), 23, confirmed=True, now=NOW)
+
+    assert not outcome.completed
+    assert deletion_request.status is DataDeletionRequestStatus.FAILED
+    assert deletion_request.attempt_count == deletion_request.max_attempts == 3
+    assert deletion_request.last_error_code == "anonymization_execution_failed"
+    assert "sensitive" not in str(deletion_request.anonymization_result)
+
+    with pytest.raises(PrivacyStateError, match="bootstrap owner"):
+        await service.retry_failed(actor(), 23, confirmed=True, now=NOW)
+
+    authorization.authorize.return_value = staff_context(is_bootstrap_owner=True)
+    retried = await service.retry_failed(actor(), 23, confirmed=True, now=NOW)
+    assert retried.status is DataDeletionRequestStatus.APPROVED
+    assert retried.attempt_count == 0
+    assert retried.last_error_code is None
+
+
+@pytest.mark.asyncio
+async def test_completed_request_is_idempotent_and_does_not_anonymize_twice() -> None:
+    unit_of_work = FakeUnitOfWork()
+    deletion_request = request(DataDeletionRequestStatus.COMPLETED)
+    deletion_request.result_code = "completed_with_legal_retention"
+    unit_of_work.privacy.get_deletion_request = AsyncMock(return_value=deletion_request)
+    unit_of_work.privacy.anonymize_client_data = AsyncMock()
+
+    outcome = await runtime(unit_of_work, authorization_mock()).execute_anonymization(
+        actor(), 23, confirmed=True, now=NOW
+    )
+
+    assert outcome.completed
+    unit_of_work.privacy.anonymize_client_data.assert_not_awaited()
+    unit_of_work.commit.assert_not_awaited()
+
+
+def test_blocker_reports_exact_staff_role_and_bootstrap_owner() -> None:
+    assert AnonymizationBlockers(active_staff_roles=("master",)).error_codes == (
+        "active_staff_role.master",
+    )
+    assert AnonymizationBlockers(
+        active_staff_roles=("owner",), bootstrap_owner=True
+    ).error_codes == ("bootstrap_owner",)
 
 
 @pytest.mark.asyncio

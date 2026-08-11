@@ -19,17 +19,42 @@ from app.services.privacy_service import DeletionRequestView, PrivacyDeletionRun
 
 router = Router(name="admin.privacy")
 
+_STATUS_LABELS = {
+    "requested": "новый",
+    "in_review": "на проверке",
+    "approved": "готов к обезличиванию",
+    "processing": "обрабатывается",
+    "failed": "ошибка — требуется безопасный повтор",
+    "rejected": "отклонён",
+    "completed": "завершён",
+    "cancelled": "отменён",
+}
+_BLOCKER_LABELS = {
+    "bootstrap_owner": "bootstrap-владелец не может быть обезличен",
+    "active_staff_role.owner": "сначала отзовите активную роль владельца",
+    "active_staff_role.manager": "сначала отзовите активную роль управляющего",
+    "active_staff_role.master": "сначала отзовите активную роль мастера",
+    "active_staff_role.receptionist": "сначала отзовите активную роль администратора",
+    "active_staff_membership": "сначала отзовите активную роль сотрудника",
+    "other_active_business_membership": "есть активный профиль в другом бизнесе",
+    "anonymization_in_progress": "обезличивание уже выполняется",
+    "anonymization_execution_failed": "безопасная попытка завершилась ошибкой",
+    "anonymization_attempts_exhausted": "лимит автоматических попыток исчерпан",
+}
+
 
 def _render(request: DeletionRequestView) -> str:
     lines = [
         f"Запрос #{request.id}",
-        f"Статус: {request.status.value}",
+        f"Статус: {_STATUS_LABELS.get(request.status.value, request.status.value)}",
         f"Создан: {request.requested_at:%d.%m.%Y %H:%M UTC}",
+        f"Попытки: {request.attempt_count}/{request.max_attempts}",
     ]
     if request.result_code is not None:
         lines.append(f"Результат: {request.result_code}")
-    if request.retention_reason_code is not None:
-        lines.append(f"Причина хранения/отказа: {request.retention_reason_code}")
+    code = request.last_error_code or request.retention_reason_code
+    if code is not None:
+        lines.append(f"Причина: {_BLOCKER_LABELS.get(code, code)}")
     return "\n".join(lines)
 
 
@@ -37,14 +62,15 @@ async def _show_list(message: Message, service: PrivacyDeletionRuntimeService) -
     if message.from_user is None:
         return
     requests = await service.list_requests(actor_from_telegram(message.from_user))
-    text = f"Запросы на удаление данных: {len(requests)}"
-    await message.answer(text, reply_markup=deletion_requests_keyboard(requests))
+    await message.answer(
+        f"Запросы на удаление данных: {len(requests)}",
+        reply_markup=deletion_requests_keyboard(requests),
+    )
 
 
 @router.message(F.text == ADMIN_PRIVACY_TEXT)
 async def show_deletion_requests(
-    message: Message,
-    privacy_deletion_service: PrivacyDeletionRuntimeService,
+    message: Message, privacy_deletion_service: PrivacyDeletionRuntimeService
 ) -> None:
     try:
         await _show_list(message, privacy_deletion_service)
@@ -54,8 +80,7 @@ async def show_deletion_requests(
 
 @router.callback_query(AdminDeletionCallback.filter(F.action == "list"))
 async def show_deletion_requests_callback(
-    callback: CallbackQuery,
-    privacy_deletion_service: PrivacyDeletionRuntimeService,
+    callback: CallbackQuery, privacy_deletion_service: PrivacyDeletionRuntimeService
 ) -> None:
     if isinstance(callback.message, Message):
         try:
@@ -74,48 +99,46 @@ async def view_deletion_request(
 ) -> None:
     try:
         request = await privacy_deletion_service.get_request(
-            actor_from_telegram(callback.from_user),
-            callback_data.request_id,
+            actor_from_telegram(callback.from_user), callback_data.request_id
         )
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            _render(request),
-            reply_markup=deletion_request_actions(request),
+            _render(request), reply_markup=deletion_request_actions(request)
         )
     await callback.answer()
 
 
 @router.callback_query(
     AdminDeletionCallback.filter(
-        F.action.in_({"review_prompt", "approve_prompt", "execute_prompt"})
+        F.action.in_({"review_prompt", "approve_prompt", "execute_prompt", "retry_prompt"})
     )
 )
 async def prompt_deletion_transition(
-    callback: CallbackQuery,
-    callback_data: AdminDeletionCallback,
+    callback: CallbackQuery, callback_data: AdminDeletionCallback
 ) -> None:
     prompts = {
-        "review_prompt": "Подтвердить перевод запроса в работу?",
-        "approve_prompt": "Подтвердить одобрение запроса? Данные ещё не изменятся.",
+        "review_prompt": "Перевести запрос в работу?",
+        "approve_prompt": "Одобрить запрос? Данные пока не изменятся.",
         "execute_prompt": (
-            "Подтвердить необратимое обезличивание? История услуг и финансовые "
-            "документы будут сохранены без прямых данных клиента."
+            "Запустить необратимое обезличивание? Юридическая история услуг и финансов "
+            "останется без прямых данных клиента."
         ),
+        "retry_prompt": "Повторить обезличивание после проверки причины сбоя?",
     }
     actions = {
         "review_prompt": "review_confirm",
         "approve_prompt": "approve_confirm",
         "execute_prompt": "execute_confirm",
+        "retry_prompt": "retry_confirm",
     }
     if isinstance(callback.message, Message):
         await callback.message.answer(
             prompts[callback_data.action],
             reply_markup=deletion_confirmation_keyboard(
-                action=actions[callback_data.action],
-                request_id=callback_data.request_id,
+                action=actions[callback_data.action], request_id=callback_data.request_id
             ),
         )
     await callback.answer()
@@ -123,8 +146,7 @@ async def prompt_deletion_transition(
 
 @router.callback_query(AdminDeletionCallback.filter(F.action == "reject_prompt"))
 async def choose_rejection_reason(
-    callback: CallbackQuery,
-    callback_data: AdminDeletionCallback,
+    callback: CallbackQuery, callback_data: AdminDeletionCallback
 ) -> None:
     if isinstance(callback.message, Message):
         await callback.message.answer(
@@ -136,8 +158,7 @@ async def choose_rejection_reason(
 
 @router.callback_query(AdminDeletionCallback.filter(F.action == "reject_reason"))
 async def confirm_rejection_reason(
-    callback: CallbackQuery,
-    callback_data: AdminDeletionCallback,
+    callback: CallbackQuery, callback_data: AdminDeletionCallback
 ) -> None:
     if isinstance(callback.message, Message):
         await callback.message.answer(
@@ -166,17 +187,11 @@ async def apply_deletion_transition(
     try:
         if callback_data.action == "review_confirm":
             request = await privacy_deletion_service.start_review(
-                actor,
-                callback_data.request_id,
-                confirmed=True,
-                correlation_id=correlation_id,
+                actor, callback_data.request_id, confirmed=True, correlation_id=correlation_id
             )
         elif callback_data.action == "approve_confirm":
             request = await privacy_deletion_service.approve(
-                actor,
-                callback_data.request_id,
-                confirmed=True,
-                correlation_id=correlation_id,
+                actor, callback_data.request_id, confirmed=True, correlation_id=correlation_id
             )
         else:
             request = await privacy_deletion_service.reject(
@@ -191,10 +206,33 @@ async def apply_deletion_transition(
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            _render(request),
-            reply_markup=deletion_request_actions(request),
+            _render(request), reply_markup=deletion_request_actions(request)
         )
     await callback.answer("Статус обновлён.")
+
+
+@router.callback_query(AdminDeletionCallback.filter(F.action == "retry_confirm"))
+async def retry_deletion_request(
+    callback: CallbackQuery,
+    callback_data: AdminDeletionCallback,
+    privacy_deletion_service: PrivacyDeletionRuntimeService,
+    correlation_id: str,
+) -> None:
+    try:
+        request = await privacy_deletion_service.retry_failed(
+            actor_from_telegram(callback.from_user),
+            callback_data.request_id,
+            confirmed=True,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            _render(request), reply_markup=deletion_request_actions(request)
+        )
+    await callback.answer("Повтор разрешён.")
 
 
 @router.callback_query(AdminDeletionCallback.filter(F.action == "execute_confirm"))
@@ -216,14 +254,12 @@ async def execute_deletion_request(
         return
     if isinstance(callback.message, Message):
         if outcome.completed:
-            text = "Обезличивание завершено. Финансовые и сервисные снимки сохранены."
+            text = "Обезличивание завершено. Финансовая и сервисная история сохранена."
         else:
-            text = (
-                "Выполнение безопасно остановлено; запрос возвращён на проверку. "
-                f"Коды: {', '.join(outcome.error_codes)}"
-            )
+            reasons = ", ".join(_BLOCKER_LABELS.get(code, code) for code in outcome.error_codes)
+            text = f"Обезличивание не выполнено: {reasons}."
         await callback.message.answer(
             f"{text}\n\n{_render(outcome.request)}",
             reply_markup=deletion_request_actions(outcome.request),
         )
-    await callback.answer("Операция завершена." if outcome.completed else "Операция остановлена.")
+    await callback.answer("Готово." if outcome.completed else "Операция остановлена безопасно.")

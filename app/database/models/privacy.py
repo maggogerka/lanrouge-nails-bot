@@ -35,7 +35,9 @@ class DataDeletionRequest(TimestampMixin, Base):
             "business_id",
             "business_client_id",
             unique=True,
-            postgresql_where=text("status IN ('requested', 'in_review', 'approved')"),
+            postgresql_where=text(
+                "status IN ('requested', 'in_review', 'approved', 'processing', 'failed')"
+            ),
         ),
         Index(
             "ix_data_deletion_requests_business_status_requested",
@@ -46,6 +48,15 @@ class DataDeletionRequest(TimestampMixin, Base):
         CheckConstraint(
             "correlation_id IS NULL OR char_length(correlation_id) BETWEEN 1 AND 64",
             name="correlation_id_length_valid",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0 AND max_attempts BETWEEN 1 AND 10 "
+            "AND attempt_count <= max_attempts",
+            name="deletion_attempts_valid",
+        ),
+        CheckConstraint(
+            "(status = 'processing') = (locked_at IS NOT NULL AND locked_by IS NOT NULL)",
+            name="deletion_processing_lock_valid",
         ),
     )
 
@@ -76,6 +87,15 @@ class DataDeletionRequest(TimestampMixin, Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retention_reason: Mapped[str | None] = mapped_column(Text)
     result_code: Mapped[str | None] = mapped_column(String(100))
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(64))
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
     anonymization_plan: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )

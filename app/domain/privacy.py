@@ -128,8 +128,21 @@ _DELETION_TRANSITIONS: dict[DataDeletionRequestStatus, frozenset[DataDeletionReq
         }
     ),
     DataDeletionRequestStatus.APPROVED: frozenset(
-        {DataDeletionRequestStatus.IN_REVIEW, DataDeletionRequestStatus.COMPLETED}
+        {
+            DataDeletionRequestStatus.IN_REVIEW,
+            DataDeletionRequestStatus.PROCESSING,
+            DataDeletionRequestStatus.FAILED,
+            DataDeletionRequestStatus.COMPLETED,
+        }
     ),
+    DataDeletionRequestStatus.PROCESSING: frozenset(
+        {
+            DataDeletionRequestStatus.APPROVED,
+            DataDeletionRequestStatus.COMPLETED,
+            DataDeletionRequestStatus.FAILED,
+        }
+    ),
+    DataDeletionRequestStatus.FAILED: frozenset({DataDeletionRequestStatus.APPROVED}),
     DataDeletionRequestStatus.REJECTED: frozenset(),
     DataDeletionRequestStatus.COMPLETED: frozenset(),
     DataDeletionRequestStatus.CANCELLED: frozenset(),

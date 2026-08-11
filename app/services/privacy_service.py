@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
+from uuid import uuid4
 
 from app.database.models.crm import ConsentHistory
 from app.database.models.privacy import DataDeletionRequest, DataDeletionRequestEvent
@@ -35,6 +36,8 @@ from app.services.authorization_service import AuthorizationService
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
 _LEGAL_RETENTION_REASON = "legal_accounting_and_service_history"
+_ANONYMIZATION_LEASE = timedelta(minutes=15)
+_ANONYMIZATION_ERROR = "anonymization_execution_failed"
 _REJECTION_REASON_CODES = frozenset(
     {
         "active_staff_membership",
@@ -144,6 +147,9 @@ class DeletionRequestView:
     requested_at: datetime
     result_code: str | None
     retention_reason_code: str | None
+    attempt_count: int
+    max_attempts: int
+    last_error_code: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +316,8 @@ class DataDeletionService:
         actor_user_id: int | None = None,
         retention_reason: str | None = None,
         result: AnonymizationResult | None = None,
+        lock_id: str | None = None,
+        error_code: str | None = None,
         now: datetime | None = None,
     ) -> DataDeletionRequest:
         changed_at = now or _utc_now()
@@ -324,11 +332,27 @@ class DataDeletionService:
             actor_user_id=actor_user_id,
             retention_reason=retention_reason,
             result=result,
+            lock_id=lock_id,
+            error_code=error_code,
         )
 
         request.status = target
         request.processed_by_staff_id = actor_staff_id
         request.retention_reason = retention_reason
+        if target is DataDeletionRequestStatus.PROCESSING:
+            request.attempt_count += 1
+            request.locked_at = changed_at
+            request.locked_by = lock_id
+            request.last_error_code = None
+            request.result_code = "processing"
+        elif target in {
+            DataDeletionRequestStatus.APPROVED,
+            DataDeletionRequestStatus.FAILED,
+            DataDeletionRequestStatus.COMPLETED,
+        }:
+            request.locked_at = None
+            request.locked_by = None
+            request.last_error_code = error_code
         if target in {
             DataDeletionRequestStatus.REJECTED,
             DataDeletionRequestStatus.COMPLETED,
@@ -345,6 +369,10 @@ class DataDeletionService:
             details["error_count"] = len(result.error_codes)
         if retention_reason is not None:
             details["retention_reason_present"] = True
+        if error_code is not None:
+            details["error_code"] = error_code
+        if target is DataDeletionRequestStatus.PROCESSING:
+            details["attempt"] = request.attempt_count
         await self._repository.add_deletion_event(
             DataDeletionRequestEvent(
                 business_id=self._repository.business_id,
@@ -394,12 +422,16 @@ class DataDeletionService:
         actor_user_id: int | None,
         retention_reason: str | None,
         result: AnonymizationResult | None,
+        lock_id: str | None,
+        error_code: str | None,
     ) -> None:
         staff_states = {
             DataDeletionRequestStatus.IN_REVIEW,
             DataDeletionRequestStatus.APPROVED,
             DataDeletionRequestStatus.REJECTED,
             DataDeletionRequestStatus.COMPLETED,
+            DataDeletionRequestStatus.PROCESSING,
+            DataDeletionRequestStatus.FAILED,
         }
         if target in staff_states and actor_staff_id is None:
             raise PrivacyStateError("this transition requires a staff actor")
@@ -417,6 +449,14 @@ class DataDeletionService:
                 raise PrivacyStateError("retained snapshots require a legal retention reason")
         elif result is not None:
             raise PrivacyStateError("anonymization result is only valid on completion")
+        if target is DataDeletionRequestStatus.PROCESSING and not lock_id:
+            raise PrivacyStateError("processing requires a worker lock")
+        if target is not DataDeletionRequestStatus.PROCESSING and lock_id is not None:
+            raise PrivacyStateError("worker lock is only valid while processing")
+        if target is DataDeletionRequestStatus.FAILED and not error_code:
+            raise PrivacyStateError("failure requires a safe error code")
+        if target is not DataDeletionRequestStatus.FAILED and error_code is not None:
+            raise PrivacyStateError("error code is only valid on failure")
 
 
 class PrivacyDeletionRuntimeService:
@@ -534,6 +574,51 @@ class PrivacyDeletionRuntimeService:
         self._require_confirmation(confirmed)
         live_actor = await self._authorize(actor)
         changed_at = now or _utc_now()
+        lock_id = f"privacy-{uuid4().hex}"
+
+        claim = await self._claim_anonymization(
+            live_actor,
+            request_id,
+            lock_id=lock_id,
+            correlation_id=correlation_id,
+            now=changed_at,
+        )
+        if claim is not None:
+            return claim
+
+        try:
+            return await self._run_claimed_anonymization(
+                live_actor,
+                request_id,
+                lock_id=lock_id,
+                correlation_id=correlation_id,
+                now=changed_at,
+            )
+        except Exception:
+            return await self._record_execution_failure(
+                live_actor,
+                request_id,
+                lock_id=lock_id,
+                correlation_id=correlation_id,
+                now=changed_at,
+            )
+
+    async def retry_failed(
+        self,
+        actor: TelegramStaffActor,
+        request_id: int,
+        *,
+        confirmed: bool,
+        correlation_id: str | None = None,
+        now: datetime | None = None,
+    ) -> DeletionRequestView:
+        """Allow only the immutable bootstrap owner to schedule one bounded retry."""
+
+        self._require_confirmation(confirmed)
+        live_actor = await self._authorize(actor)
+        if not live_actor.is_bootstrap_owner:
+            raise PrivacyStateError("only the bootstrap owner can retry a failed request")
+        changed_at = now or _utc_now()
         async with self._unit_of_work_factory() as unit_of_work:
             self._require_uow_scope(unit_of_work)
             request = await unit_of_work.privacy.get_deletion_request(
@@ -542,6 +627,84 @@ class PrivacyDeletionRuntimeService:
             )
             if request is None:
                 raise EntityNotFoundError("deletion request not found")
+            if request.status is DataDeletionRequestStatus.COMPLETED:
+                return self._view(request)
+            if request.status is not DataDeletionRequestStatus.FAILED:
+                raise PrivacyStateError("only a failed request can be retried")
+            request.attempt_count = 0
+            request.last_error_code = None
+            request.result_code = "retry_approved"
+            request = await DataDeletionService(unit_of_work.privacy).transition(
+                request_id=request.id,
+                target=DataDeletionRequestStatus.APPROVED,
+                actor_staff_id=live_actor.staff_member_id,
+                now=changed_at,
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="privacy.deletion_retry_approved",
+                entity_type="data_deletion_request",
+                entity_id=str(request.id),
+                changes={"attempt_count_reset": True},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._view(request)
+
+    async def _claim_anonymization(
+        self,
+        live_actor: StaffContext,
+        request_id: int,
+        *,
+        lock_id: str,
+        correlation_id: str | None,
+        now: datetime,
+    ) -> AnonymizationExecutionOutcome | None:
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_uow_scope(unit_of_work)
+            request = await unit_of_work.privacy.get_deletion_request(request_id, for_update=True)
+            if request is None:
+                raise EntityNotFoundError("deletion request not found")
+            request.attempt_count = request.attempt_count or 0
+            request.max_attempts = request.max_attempts or 3
+            if request.status is DataDeletionRequestStatus.COMPLETED:
+                return AnonymizationExecutionOutcome(request=self._view(request), completed=True)
+            if request.status is DataDeletionRequestStatus.PROCESSING:
+                lease_is_fresh = (
+                    request.locked_at is not None and request.locked_at > now - _ANONYMIZATION_LEASE
+                )
+                if lease_is_fresh:
+                    return AnonymizationExecutionOutcome(
+                        request=self._view(request),
+                        completed=False,
+                        error_codes=("anonymization_in_progress",),
+                    )
+                await DataDeletionService(unit_of_work.privacy).transition(
+                    request_id=request.id,
+                    target=DataDeletionRequestStatus.FAILED,
+                    actor_staff_id=live_actor.staff_member_id,
+                    error_code="anonymization_lease_expired",
+                    now=now,
+                )
+                if request.attempt_count >= request.max_attempts:
+                    await unit_of_work.commit()
+                    return AnonymizationExecutionOutcome(
+                        request=self._view(request),
+                        completed=False,
+                        error_codes=("anonymization_attempts_exhausted",),
+                    )
+                await DataDeletionService(unit_of_work.privacy).transition(
+                    request_id=request.id,
+                    target=DataDeletionRequestStatus.APPROVED,
+                    actor_staff_id=live_actor.staff_member_id,
+                    now=now,
+                )
+            if request.status is DataDeletionRequestStatus.FAILED:
+                return AnonymizationExecutionOutcome(
+                    request=self._view(request),
+                    completed=False,
+                    error_codes=(request.last_error_code or _ANONYMIZATION_ERROR,),
+                )
             if request.status is not DataDeletionRequestStatus.APPROVED:
                 raise PrivacyStateError("only an approved request can be executed")
             client = await unit_of_work.privacy.get_client(
@@ -562,7 +725,7 @@ class PrivacyDeletionRuntimeService:
                     target=DataDeletionRequestStatus.IN_REVIEW,
                     actor_staff_id=live_actor.staff_member_id,
                     retention_reason=blocked_reason,
-                    now=changed_at,
+                    now=now,
                 )
                 await unit_of_work.audit.add(
                     actor_user_id=live_actor.user_id,
@@ -579,15 +742,78 @@ class PrivacyDeletionRuntimeService:
                     error_codes=blockers.error_codes,
                 )
 
+            if request.attempt_count >= request.max_attempts:
+                request = await DataDeletionService(unit_of_work.privacy).transition(
+                    request_id=request.id,
+                    target=DataDeletionRequestStatus.FAILED,
+                    actor_staff_id=live_actor.staff_member_id,
+                    error_code="anonymization_attempts_exhausted",
+                    now=now,
+                )
+                await unit_of_work.commit()
+                return AnonymizationExecutionOutcome(
+                    request=self._view(request),
+                    completed=False,
+                    error_codes=("anonymization_attempts_exhausted",),
+                )
+            request = await DataDeletionService(unit_of_work.privacy).transition(
+                request_id=request.id,
+                target=DataDeletionRequestStatus.PROCESSING,
+                actor_staff_id=live_actor.staff_member_id,
+                lock_id=lock_id,
+                now=now,
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="privacy.deletion_processing",
+                entity_type="data_deletion_request",
+                entity_id=str(request.id),
+                changes={"attempt": request.attempt_count},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return None
+
+    async def _run_claimed_anonymization(
+        self,
+        live_actor: StaffContext,
+        request_id: int,
+        *,
+        lock_id: str,
+        correlation_id: str | None,
+        now: datetime,
+    ) -> AnonymizationExecutionOutcome:
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_uow_scope(unit_of_work)
+            request = await unit_of_work.privacy.get_deletion_request(request_id, for_update=True)
+            if request is None:
+                raise EntityNotFoundError("deletion request not found")
+            if request.status is DataDeletionRequestStatus.COMPLETED:
+                return AnonymizationExecutionOutcome(request=self._view(request), completed=True)
+            if (
+                request.status is not DataDeletionRequestStatus.PROCESSING
+                or request.locked_by != lock_id
+            ):
+                raise PrivacyStateError("anonymization claim is no longer owned")
+            client = await unit_of_work.privacy.get_client(
+                request.business_client_id,
+                for_update=True,
+            )
+            if client is None:
+                raise EntityNotFoundError("business client not found")
+            user = await unit_of_work.privacy.get_user(client.user_id, for_update=True)
+            if user is None:
+                raise EntityNotFoundError("privacy subject not found")
+
             deletion = DataDeletionService(unit_of_work.privacy)
             consents_revoked = await deletion.revoke_active_consents(
                 user_id=user.id,
-                now=changed_at,
+                now=now,
             )
             counts = await unit_of_work.privacy.anonymize_client_data(
                 business_client_id=client.id,
                 user_id=user.id,
-                changed_at=changed_at,
+                changed_at=now,
             )
             result = AnonymizationResult(
                 result_code="completed_with_legal_retention",
@@ -607,7 +833,7 @@ class PrivacyDeletionRuntimeService:
                 actor_staff_id=live_actor.staff_member_id,
                 retention_reason=_LEGAL_RETENTION_REASON,
                 result=result,
-                now=changed_at,
+                now=now,
             )
             await unit_of_work.audit.add(
                 actor_user_id=live_actor.user_id,
@@ -621,6 +847,59 @@ class PrivacyDeletionRuntimeService:
             return AnonymizationExecutionOutcome(
                 request=self._view(request),
                 completed=True,
+            )
+
+    async def _record_execution_failure(
+        self,
+        live_actor: StaffContext,
+        request_id: int,
+        *,
+        lock_id: str,
+        correlation_id: str | None,
+        now: datetime,
+    ) -> AnonymizationExecutionOutcome:
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_uow_scope(unit_of_work)
+            request = await unit_of_work.privacy.get_deletion_request(request_id, for_update=True)
+            if request is None:
+                raise EntityNotFoundError("deletion request not found")
+            if request.status is DataDeletionRequestStatus.COMPLETED:
+                return AnonymizationExecutionOutcome(request=self._view(request), completed=True)
+            if (
+                request.status is DataDeletionRequestStatus.PROCESSING
+                and request.locked_by == lock_id
+            ):
+                exhausted = request.attempt_count >= request.max_attempts
+                request = await DataDeletionService(unit_of_work.privacy).transition(
+                    request_id=request.id,
+                    target=(
+                        DataDeletionRequestStatus.FAILED
+                        if exhausted
+                        else DataDeletionRequestStatus.APPROVED
+                    ),
+                    actor_staff_id=live_actor.staff_member_id,
+                    error_code=_ANONYMIZATION_ERROR if exhausted else None,
+                    now=now,
+                )
+                request.last_error_code = _ANONYMIZATION_ERROR
+                request.result_code = "failed" if exhausted else "retry_scheduled"
+                await unit_of_work.audit.add(
+                    actor_user_id=live_actor.user_id,
+                    action="privacy.deletion_failed",
+                    entity_type="data_deletion_request",
+                    entity_id=str(request.id),
+                    changes={
+                        "error_code": _ANONYMIZATION_ERROR,
+                        "attempt": request.attempt_count,
+                        "attempts_exhausted": exhausted,
+                    },
+                    correlation_id=correlation_id,
+                )
+                await unit_of_work.commit()
+            return AnonymizationExecutionOutcome(
+                request=self._view(request),
+                completed=False,
+                error_codes=(request.last_error_code or _ANONYMIZATION_ERROR,),
             )
 
     async def _transition(
@@ -681,4 +960,7 @@ class PrivacyDeletionRuntimeService:
             requested_at=request.requested_at,
             result_code=request.result_code,
             retention_reason_code=request.retention_reason,
+            attempt_count=request.attempt_count or 0,
+            max_attempts=request.max_attempts or 3,
+            last_error_code=request.last_error_code,
         )

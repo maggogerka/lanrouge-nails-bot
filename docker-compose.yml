@@ -155,6 +155,15 @@ services:
     restart: unless-stopped
     depends_on: *app-dependencies
 
+  privacy-deletion-worker:
+    <<: *app-runtime
+    command: ["python", "-m", "app.workers.privacy_deletion"]
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: privacy_deletion
+    restart: unless-stopped
+    depends_on: *app-dependencies
+
 volumes:
   postgres-data:
   redis-data:
