@@ -32,6 +32,7 @@ SCHEDULE_OCCUPYING_STATUSES: Final[frozenset[AppointmentStatus]] = frozenset(
 ALLOWED_APPOINTMENT_TRANSITIONS: Final[dict[AppointmentStatus, frozenset[AppointmentStatus]]] = {
     AppointmentStatus.PENDING_PAYMENT: frozenset(
         {
+            AppointmentStatus.PENDING_MANUAL_CONFIRMATION,
             AppointmentStatus.CONFIRMED,
             AppointmentStatus.PAYMENT_EXPIRED,
             AppointmentStatus.CANCELLED_BY_CLIENT,

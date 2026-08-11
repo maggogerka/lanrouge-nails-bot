@@ -7,7 +7,14 @@ from datetime import UTC, datetime, timedelta
 
 from app.database.models import NotificationJob
 from app.domain.appointments import ACTIVE_APPOINTMENT_STATUSES
-from app.domain.enums import AppointmentStatus, NotificationJobStatus, NotificationType
+from app.domain.enums import (
+    AppointmentStatus,
+    ManualPaymentStatus,
+    NotificationJobStatus,
+    NotificationType,
+    PaymentMode,
+    PaymentStatus,
+)
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.features import FeatureName
 from app.schemas.notification import NotificationDelivery
@@ -74,7 +81,39 @@ class NotificationService:
                 await self._fail_job(unit_of_work, job, "delivery_context_missing")
                 await unit_of_work.commit()
                 return None
-            if job.notification_type is NotificationType.REVIEW_REQUEST:
+            payment = None
+            if job.notification_type in {
+                NotificationType.PAYMENT_DUE_CLIENT,
+                NotificationType.PAYMENT_REVIEW_STAFF,
+            }:
+                payment = await unit_of_work.payments.get_latest_for_appointment(job.appointment_id)
+                client_due = (
+                    job.notification_type is NotificationType.PAYMENT_DUE_CLIENT
+                    and appointment.status is AppointmentStatus.PENDING_PAYMENT
+                    and payment is not None
+                    and payment.provider is PaymentMode.MANUAL
+                    and payment.status is PaymentStatus.PENDING
+                    and payment.manual_status is ManualPaymentStatus.AWAITING_PAYMENT
+                    and payment.expires_at is not None
+                    and payment.expires_at > current_time
+                )
+                staff_review = (
+                    job.notification_type is NotificationType.PAYMENT_REVIEW_STAFF
+                    and appointment.status is AppointmentStatus.PENDING_MANUAL_CONFIRMATION
+                    and payment is not None
+                    and payment.provider is PaymentMode.MANUAL
+                    and payment.status is PaymentStatus.PENDING
+                    and payment.manual_status
+                    in {
+                        ManualPaymentStatus.CLIENT_REPORTED,
+                        ManualPaymentStatus.REVIEW_PENDING,
+                    }
+                )
+                if not client_due and not staff_review:
+                    await self._cancel_job(unit_of_work, job, "payment_not_actionable")
+                    await unit_of_work.commit()
+                    return None
+            elif job.notification_type is NotificationType.REVIEW_REQUEST:
                 settings = await unit_of_work.settings.get()
                 if (
                     appointment.status is not AppointmentStatus.COMPLETED
@@ -142,6 +181,7 @@ class NotificationService:
                 master_telegram_url=settings.master_telegram_url,
                 client_name=client.first_name or "—",
                 client_phone=client.phone,
+                payment_id=payment.id if payment is not None else None,
             )
 
     async def mark_sent(
@@ -267,6 +307,11 @@ class NotificationService:
             return FeatureName.REVIEWS
         if notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
             return FeatureName.REPEAT_BOOKING
+        if notification_type in {
+            NotificationType.PAYMENT_DUE_CLIENT,
+            NotificationType.PAYMENT_REVIEW_STAFF,
+        }:
+            return FeatureName.PREPAYMENT
         return FeatureName.REMINDERS
 
     @staticmethod

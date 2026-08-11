@@ -14,6 +14,7 @@ from app.database.models.commerce import BookingReservation
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
 from app.domain.enums import (
     AppointmentStatus,
+    ManualPaymentStatus,
     PaymentMode,
     PaymentStatus,
     RefundStatus,
@@ -106,7 +107,7 @@ def payment(
     status: PaymentStatus = PaymentStatus.PENDING,
     currency: str = "RUB",
 ) -> Payment:
-    return Payment(
+    result = Payment(
         id=31,
         business_id=7,
         appointment_id=11,
@@ -121,6 +122,9 @@ def payment(
         safe_metadata={"business_id": "7", "appointment_id": "11"},
         attempts=0,
     )
+    if provider is PaymentMode.MANUAL:
+        result.manual_status = ManualPaymentStatus.REVIEW_PENDING
+    return result
 
 
 def reservation() -> BookingReservation:
@@ -419,7 +423,7 @@ async def test_manual_approval_reauthorizes_locks_audits_and_consumes() -> None:
     auth.authorize.assert_awaited_once_with(
         business_id=7,
         telegram_id=actor.telegram_id,
-        permission=StaffPermission.MANAGE_PAYMENTS,
+        permission=StaffPermission.APPROVE_PREPAYMENTS,
     )
     approval_uow.payments.get.assert_awaited_once_with(31, for_update=True)
     approval_uow.audit.add.assert_awaited_once()

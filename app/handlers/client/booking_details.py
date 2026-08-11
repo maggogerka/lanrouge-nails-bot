@@ -14,7 +14,7 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message, ReplyKeyboard
 from pydantic import ValidationError
 
 from app.domain.booking import normalize_phone
-from app.domain.enums import AppointmentStatus
+from app.domain.enums import AppointmentStatus, PaymentMode
 from app.domain.errors import BookingConflictError, DomainError
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.handlers.client.booking_common import (
@@ -412,6 +412,9 @@ async def confirm_booking(
                 receipt.map_url,
                 receipt.master_telegram_url,
                 payment_url=receipt.payment_confirmation_url,
+                manual_payment_id=(
+                    receipt.payment_id if receipt.payment_mode is PaymentMode.MANUAL else None
+                ),
             ),
         )
         await callback.message.answer(

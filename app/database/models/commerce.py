@@ -59,8 +59,20 @@ class BusinessPaymentSettings(TimestampMixin, Base):
     )
     provider_account_ref: Mapped[str | None] = mapped_column(String(128))
     manual_payment_instructions: Mapped[str | None] = mapped_column(Text)
+    client_payment_reminder_minutes: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, default=lambda: [5, 10], server_default=text("'[5, 10]'::jsonb")
+    )
+    staff_review_reminder_minutes: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, default=lambda: [30, 120], server_default=text("'[30, 120]'::jsonb")
+    )
+    client_payment_reminders_enabled: Mapped[bool] = mapped_column(
+        nullable=False, default=True, server_default="true"
+    )
+    staff_payment_notifications_enabled: Mapped[bool] = mapped_column(
+        nullable=False, default=True, server_default="true"
+    )
     reservation_ttl_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=20, server_default="20"
+        Integer, nullable=False, default=15, server_default="15"
     )
     cancellation_refund_deadline_hours: Mapped[int] = mapped_column(
         Integer, nullable=False, default=24, server_default="24"
@@ -83,7 +95,7 @@ class BookingReservation(TimestampMixin, Base):
             "business_id",
             "window_id",
             unique=True,
-            postgresql_where=text("status = 'active'"),
+            postgresql_where=text("status IN ('active', 'awaiting_review')"),
         ),
         Index(
             "uq_booking_reservations_business_idempotency",

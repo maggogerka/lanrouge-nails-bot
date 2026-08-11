@@ -26,6 +26,8 @@ from app.domain.booking import validate_bookable_date, validate_service_fits_win
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
+    ManualPaymentStatus,
+    NotificationType,
     PaymentMode,
     PaymentStatus,
     PortfolioStatus,
@@ -523,6 +525,8 @@ class BookingService:
                         payment_values,
                         expires_at=reservation.expires_at,
                     )
+                    if payment_mode is PaymentMode.MANUAL:
+                        payment.manual_status = ManualPaymentStatus.AWAITING_PAYMENT
                     payment.provider_account_ref = payment_settings.provider_account_ref
                     await unit_of_work.payments.add(payment)
                 await unit_of_work.appointments.add_history(
@@ -546,20 +550,47 @@ class BookingService:
                     client_user_id=client.id,
                     admin_user_ids=[user.id for _, user in staff_rows if not user.is_blocked],
                 )
-                await unit_of_work.notifications.add_all(
-                    [
+                notification_jobs = [
+                    NotificationJob(
+                        business_id=unit_of_work.business_id,
+                        appointment_id=appointment.id,
+                        recipient_user_id=schedule.recipient_user_id,
+                        notification_type=schedule.notification_type,
+                        offset_minutes=schedule.offset_minutes,
+                        scheduled_at=schedule.scheduled_at,
+                        available_at=schedule.scheduled_at,
+                    )
+                    for schedule in schedules
+                ]
+                if (
+                    payment_mode is PaymentMode.MANUAL
+                    and payment_settings is not None
+                    and getattr(payment_settings, "client_payment_reminders_enabled", True)
+                ):
+                    raw_offsets = getattr(
+                        payment_settings, "client_payment_reminder_minutes", None
+                    ) or [5, 10]
+                    offsets = sorted(
+                        {
+                            int(offset)
+                            for offset in raw_offsets
+                            if isinstance(offset, int)
+                            and 0 < offset < payment_settings.reservation_ttl_minutes
+                        }
+                    )
+                    notification_jobs.extend(
                         NotificationJob(
                             business_id=unit_of_work.business_id,
                             appointment_id=appointment.id,
-                            recipient_user_id=schedule.recipient_user_id,
-                            notification_type=schedule.notification_type,
-                            offset_minutes=schedule.offset_minutes,
-                            scheduled_at=schedule.scheduled_at,
-                            available_at=schedule.scheduled_at,
+                            recipient_user_id=client.id,
+                            notification_type=NotificationType.PAYMENT_DUE_CLIENT,
+                            offset_minutes=offset,
+                            scheduled_at=current_time + timedelta(minutes=offset),
+                            available_at=current_time + timedelta(minutes=offset),
                         )
-                        for schedule in schedules
-                    ]
-                )
+                        for offset in offsets
+                    )
+                await unit_of_work.notifications.add_all(notification_jobs)
                 await unit_of_work.audit.add(
                     actor_user_id=client.id,
                     action="appointment.created",
@@ -889,9 +920,7 @@ class BookingService:
 
     @staticmethod
     def _initial_appointment_status(mode: PaymentMode) -> AppointmentStatus:
-        if mode is PaymentMode.MANUAL:
-            return AppointmentStatus.PENDING_MANUAL_CONFIRMATION
-        if mode is PaymentMode.YOOKASSA:
+        if mode in {PaymentMode.MANUAL, PaymentMode.YOOKASSA}:
             return AppointmentStatus.PENDING_PAYMENT
         return AppointmentStatus.CONFIRMED
 

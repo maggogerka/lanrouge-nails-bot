@@ -93,6 +93,7 @@ class ReservationStatus(StrEnum):
     """Short-lived slot hold while a client finishes checkout."""
 
     ACTIVE = "active"
+    AWAITING_REVIEW = "awaiting_review"
     CONSUMED = "consumed"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
@@ -117,6 +118,18 @@ class PaymentStatus(StrEnum):
     REFUND_PENDING = "refund_pending"
     PARTIALLY_REFUNDED = "partially_refunded"
     REFUNDED = "refunded"
+
+
+class ManualPaymentStatus(StrEnum):
+    """Human-reviewed manual prepayment lifecycle."""
+
+    AWAITING_PAYMENT = "awaiting_payment"
+    CLIENT_REPORTED = "client_reported"
+    REVIEW_PENDING = "review_pending"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class RefundStatus(StrEnum):
@@ -173,6 +186,8 @@ class NotificationType(StrEnum):
     ADMIN_REMINDER = "admin_reminder"
     REVIEW_REQUEST = "review_request"
     REPEAT_BOOKING_REMINDER = "repeat_booking_reminder"
+    PAYMENT_DUE_CLIENT = "payment_due_client"
+    PAYMENT_REVIEW_STAFF = "payment_review_staff"
 
 
 class PortfolioStatus(StrEnum):

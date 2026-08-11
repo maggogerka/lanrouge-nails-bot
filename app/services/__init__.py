@@ -13,6 +13,7 @@ from app.services.client_payment_service import ClientPaymentService
 from app.services.consent_service import ConsentService
 from app.services.crm_service import CrmService
 from app.services.feature_flag_service import FeatureFlagService, FeaturePrerequisites
+from app.services.manual_prepayment_service import ManualPrepaymentService
 from app.services.marketing_event_service import MarketingEventService
 from app.services.master_profile_service import MasterProfileService
 from app.services.master_workspace_service import MasterWorkspaceService
@@ -53,6 +54,7 @@ __all__ = [
     "DeletionRequestNotificationService",
     "FeatureFlagService",
     "FeaturePrerequisites",
+    "ManualPrepaymentService",
     "MarketingEventService",
     "MasterProfileService",
     "MasterWorkspaceService",

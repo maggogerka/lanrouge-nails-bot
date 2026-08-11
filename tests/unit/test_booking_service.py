@@ -23,6 +23,7 @@ from app.database.models.commerce import BusinessPaymentSettings
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
+    ManualPaymentStatus,
     PaymentMode,
     PaymentStatus,
     PortfolioStatus,
@@ -300,9 +301,10 @@ async def test_manual_payment_creates_pending_reservation_and_safe_instructions(
 
     appointment = captured["appointment"]
     payment = captured["payment"]
-    assert appointment.status is AppointmentStatus.PENDING_MANUAL_CONFIRMATION  # type: ignore[attr-defined]
+    assert appointment.status is AppointmentStatus.PENDING_PAYMENT  # type: ignore[attr-defined]
     assert payment.status is PaymentStatus.PENDING  # type: ignore[attr-defined]
-    assert receipt.appointment_status is AppointmentStatus.PENDING_MANUAL_CONFIRMATION
+    assert payment.manual_status is ManualPaymentStatus.AWAITING_PAYMENT  # type: ignore[attr-defined]
+    assert receipt.appointment_status is AppointmentStatus.PENDING_PAYMENT
     assert receipt.payment_mode is PaymentMode.MANUAL
     assert receipt.payment_status is PaymentStatus.PENDING
     assert receipt.payment_id == 31

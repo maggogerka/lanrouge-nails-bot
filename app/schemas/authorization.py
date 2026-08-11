@@ -39,6 +39,12 @@ class StaffPermission(StrEnum):
     VIEW_PAYMENTS = "view_payments"
     MANAGE_PAYMENTS = "manage_payments"
     REFUND_PAYMENTS = "refund_payments"
+    VIEW_PREPAYMENTS = "view_prepayments"
+    APPROVE_PREPAYMENTS = "approve_prepayments"
+    REJECT_PREPAYMENTS = "reject_prepayments"
+    EDIT_PAYMENT_INSTRUCTIONS = "edit_payment_instructions"
+    EDIT_PAYMENT_TIMERS = "edit_payment_timers"
+    CHANGE_PAYMENT_SETTINGS = "change_payment_settings"
     MANAGE_BROADCASTS = "manage_broadcasts"
     VIEW_ALL_STATISTICS = "view_all_statistics"
     VIEW_OWN_STATISTICS = "view_own_statistics"
@@ -65,6 +71,12 @@ _MANAGER_PERMISSIONS = frozenset(
         StaffPermission.MANAGE_ALL_CLIENTS,
         StaffPermission.VIEW_PAYMENTS,
         StaffPermission.MANAGE_PAYMENTS,
+        StaffPermission.VIEW_PREPAYMENTS,
+        StaffPermission.APPROVE_PREPAYMENTS,
+        StaffPermission.REJECT_PREPAYMENTS,
+        StaffPermission.EDIT_PAYMENT_INSTRUCTIONS,
+        StaffPermission.EDIT_PAYMENT_TIMERS,
+        StaffPermission.CHANGE_PAYMENT_SETTINGS,
         StaffPermission.MANAGE_BROADCASTS,
         StaffPermission.VIEW_ALL_STATISTICS,
         StaffPermission.VIEW_FEATURE_FLAGS,
@@ -97,6 +109,9 @@ _RECEPTIONIST_PERMISSIONS = frozenset(
         StaffPermission.VIEW_ALL_CLIENTS,
         StaffPermission.MANAGE_ALL_CLIENTS,
         StaffPermission.VIEW_PAYMENTS,
+        StaffPermission.VIEW_PREPAYMENTS,
+        StaffPermission.APPROVE_PREPAYMENTS,
+        StaffPermission.REJECT_PREPAYMENTS,
     }
 )
 

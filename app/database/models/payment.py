@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -23,7 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base
 from app.database.models.mixins import TimestampMixin
 from app.database.types import database_enum
-from app.domain.enums import PaymentMode, PaymentStatus, RefundStatus
+from app.domain.enums import ManualPaymentStatus, PaymentMode, PaymentStatus, RefundStatus
 from app.domain.payments import PaymentType, WebhookProcessingStatus
 
 
@@ -38,6 +39,19 @@ class Payment(TimestampMixin, Base):
         CheckConstraint("refunded_amount <= amount", name="refunded_amount_within_payment"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_valid"),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+        CheckConstraint(
+            "(provider = 'manual' AND manual_status IS NOT NULL) OR "
+            "(provider <> 'manual' AND manual_status IS NULL)",
+            name="manual_status_provider_consistent",
+        ),
+        CheckConstraint(
+            "receipt_file_size IS NULL OR receipt_file_size > 0",
+            name="receipt_file_size_positive",
+        ),
+        CheckConstraint(
+            "receipt_media_type IS NULL OR receipt_media_type IN ('photo', 'document')",
+            name="receipt_media_type_valid",
+        ),
         UniqueConstraint(
             "business_id",
             "provider",
@@ -51,6 +65,14 @@ class Payment(TimestampMixin, Base):
         ),
         Index("ix_payments_appointment_status", "appointment_id", "status"),
         Index("ix_payments_business_status", "business_id", "status"),
+        Index("ix_payments_manual_status", "business_id", "manual_status"),
+        Index(
+            "uq_payments_manual_appointment",
+            "business_id",
+            "appointment_id",
+            unique=True,
+            postgresql_where=text("provider = 'manual'"),
+        ),
         Index("ix_payments_expiry", "expires_at", postgresql_where=text("expires_at IS NOT NULL")),
     )
 
@@ -92,6 +114,26 @@ class Payment(TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error_code: Mapped[str | None] = mapped_column(String(100))
     correlation_id: Mapped[str | None] = mapped_column(String(64))
+    manual_status: Mapped[ManualPaymentStatus | None] = mapped_column(
+        database_enum(ManualPaymentStatus, name="manual_payment_status")
+    )
+    client_reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    receipt_file_id: Mapped[str | None] = mapped_column(Text)
+    receipt_file_unique_id: Mapped[str | None] = mapped_column(String(255))
+    receipt_media_type: Mapped[str | None] = mapped_column(String(16))
+    receipt_file_size: Mapped[int | None] = mapped_column(BigInteger)
+    receipt_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    receipt_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def has_receipt(self) -> bool:
+        return self.receipt_file_id is not None
 
 
 class Refund(TimestampMixin, Base):

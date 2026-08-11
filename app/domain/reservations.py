@@ -47,7 +47,15 @@ class ReservationToken:
 
 _TRANSITIONS: Final[dict[ReservationStatus, frozenset[ReservationStatus]]] = {
     ReservationStatus.ACTIVE: frozenset(
-        {ReservationStatus.CONSUMED, ReservationStatus.EXPIRED, ReservationStatus.CANCELLED}
+        {
+            ReservationStatus.AWAITING_REVIEW,
+            ReservationStatus.CONSUMED,
+            ReservationStatus.EXPIRED,
+            ReservationStatus.CANCELLED,
+        }
+    ),
+    ReservationStatus.AWAITING_REVIEW: frozenset(
+        {ReservationStatus.CONSUMED, ReservationStatus.CANCELLED}
     ),
     ReservationStatus.CONSUMED: frozenset(),
     ReservationStatus.EXPIRED: frozenset(),

@@ -1,6 +1,9 @@
 """Payment list and confirmed human boundary for manual receipts."""
 
-from aiogram import F, Router
+from html import escape
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -11,7 +14,9 @@ from app.keyboards.admin.main import ADMIN_PAYMENTS_TEXT
 from app.keyboards.admin.payments import (
     PaymentAdminCallback,
     manual_approval_confirmation,
+    manual_instruction_preview_keyboard,
     manual_refund_confirmation,
+    manual_rejection_reason_keyboard,
     payment_mode_confirmation,
     payments_keyboard,
     refund_confirmation,
@@ -26,12 +31,18 @@ router = Router(name="admin.payments")
 
 
 def _render(payment: PaymentView) -> str:
+    manual_line = (
+        f"Ручной статус: {payment.manual_status.value}\n"
+        if payment.manual_status is not None
+        else ""
+    )
     return (
         f"<b>Платёж #{payment.id}</b>\n"
         f"Запись: #{payment.appointment_id}\n"
         f"Режим: {payment.provider.value}\n"
         f"Сумма: {payment.amount:.2f} {payment.currency}\n"
         f"Статус: {payment.status.value}\n"
+        f"{manual_line}"
         f"Возвращено: {payment.refunded_amount:.2f} {payment.currency}"
     )
 
@@ -48,12 +59,15 @@ async def _show(
         f"Резерв: {settings.reservation_ttl_minutes} мин.\n"
         f"Инструкция ручной оплаты: "
         f"{'настроена' if settings.manual_payment_instructions else 'не настроена'}\n"
-        f"Последние операции: {len(payments)}",
+        + (f"Последние операции: {len(payments)}" if payments else "Предоплат пока нет."),
         reply_markup=payments_keyboard(
             payments,
-            can_manage=actor.has_permission(StaffPermission.MANAGE_PAYMENTS),
+            can_manage=actor.has_permission(StaffPermission.APPROVE_PREPAYMENTS),
+            can_reject=actor.has_permission(StaffPermission.REJECT_PREPAYMENTS),
             can_refund=actor.has_permission(StaffPermission.REFUND_PAYMENTS),
-            can_configure=actor.has_permission(StaffPermission.MANAGE_PRIVATE_SETTINGS),
+            can_edit_instructions=actor.has_permission(StaffPermission.EDIT_PAYMENT_INSTRUCTIONS),
+            can_edit_timers=actor.has_permission(StaffPermission.EDIT_PAYMENT_TIMERS),
+            can_change_settings=actor.has_permission(StaffPermission.CHANGE_PAYMENT_SETTINGS),
         ),
     )
 
@@ -73,9 +87,11 @@ async def show_payments(
 @router.callback_query(PaymentAdminCallback.filter(F.action == "list"))
 async def refresh_payments(
     callback: CallbackQuery,
+    state: FSMContext,
     payment_admin_service: PaymentAdministrationService,
     staff_context: StaffContext,
 ) -> None:
+    await state.clear()
     if isinstance(callback.message, Message):
         await _show(callback.message, payment_admin_service, staff_context)
     await callback.answer()
@@ -95,6 +111,14 @@ async def view_payment(
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(_render(payment))
+        receipt = await payment_admin_service.get_manual_receipt(
+            staff_context, callback_data.payment_id
+        )
+        if receipt is not None:
+            if receipt.media_type == "photo":
+                await callback.message.answer_photo(receipt.telegram_file_id)
+            else:
+                await callback.message.answer_document(receipt.telegram_file_id)
     await callback.answer()
 
 
@@ -132,6 +156,76 @@ async def approve_manual_payment(
     if isinstance(callback.message, Message):
         await callback.message.answer(_render(payment))
     await callback.answer("Ручная оплата подтверждена, запись активирована.")
+
+
+@router.callback_query(PaymentAdminCallback.filter(F.action == "reject_prompt"))
+async def prompt_manual_rejection(
+    callback: CallbackQuery,
+    callback_data: PaymentAdminCallback,
+    state: FSMContext,
+) -> None:
+    await state.set_state(PaymentSettingsForm.rejection_reason)
+    await state.update_data(reject_manual_payment_id=callback_data.payment_id)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Укажите причину отклонения до 500 символов или выберите «Без комментария». "
+            "Для совместимости можно отправить символ «-».",
+            reply_markup=manual_rejection_reason_keyboard(callback_data.payment_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(PaymentAdminCallback.filter(F.action == "reject_no_reason"))
+async def reject_manual_without_reason(
+    callback: CallbackQuery,
+    callback_data: PaymentAdminCallback,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+    bot: Bot,
+    correlation_id: str,
+) -> None:
+    await _reject_manual_payment(
+        callback,
+        payment_id=callback_data.payment_id,
+        reason=None,
+        service=payment_admin_service,
+        actor=staff_context,
+        bot=bot,
+        correlation_id=correlation_id,
+    )
+    await state.clear()
+
+
+@router.message(PaymentSettingsForm.rejection_reason)
+async def reject_manual_with_reason(
+    message: Message,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+    bot: Bot,
+    correlation_id: str,
+) -> None:
+    data = await state.get_data()
+    payment_id = data.get("reject_manual_payment_id")
+    if not isinstance(payment_id, int) or payment_id <= 0:
+        await state.clear()
+        await message.answer("Черновик отклонения устарел.")
+        return
+    try:
+        decision = await payment_admin_service.reject_manual(
+            staff_context,
+            payment_id,
+            reason=message.text,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer("Предоплата отклонена, запись отменена, окно снова доступно.")
+    if decision.changed:
+        await _notify_rejection(bot, decision.client_telegram_id, decision.payment.rejection_reason)
 
 
 @router.callback_query(PaymentAdminCallback.filter(F.action == "refund_prompt"))
@@ -220,25 +314,103 @@ async def begin_manual_instructions(
 
 
 @router.message(PaymentSettingsForm.manual_instructions)
+async def preview_manual_instructions(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    instructions = (message.text or "").strip()
+    forbidden = ("cvv", "cvc", "sms-код", "смс-код", "срок действия карты")
+    if not 1 <= len(instructions) <= 2000 or any(
+        marker in instructions.casefold() for marker in forbidden
+    ):
+        await message.answer(
+            "Инструкция должна содержать 1–2000 символов и не запрашивать "
+            "CVV/CVC, SMS-коды или срок действия карты."
+        )
+        return
+    await state.update_data(manual_instructions_preview=instructions)
+    await state.set_state(PaymentSettingsForm.manual_instructions_preview)
+    await message.answer(
+        f"<b>Предварительный просмотр инструкции</b>\n\n{escape(instructions)}",
+        reply_markup=manual_instruction_preview_keyboard(),
+    )
+
+
+@router.callback_query(
+    PaymentSettingsForm.manual_instructions_preview,
+    PaymentAdminCallback.filter(F.action == "instructions_save"),
+)
 async def save_manual_instructions(
+    callback: CallbackQuery,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    data = await state.get_data()
+    instructions = data.get("manual_instructions_preview")
+    if not isinstance(instructions, str):
+        await state.clear()
+        await callback.answer("Предварительный просмотр устарел.", show_alert=True)
+        return
+    try:
+        await payment_admin_service.set_manual_instructions(
+            staff_context,
+            instructions,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.answer("Инструкция ручной оплаты сохранена.")
+        await _show(callback.message, payment_admin_service, staff_context)
+    await callback.answer("Сохранено.")
+
+
+@router.callback_query(PaymentAdminCallback.filter(F.action == "edit_payment_timer"))
+async def begin_payment_timer_edit(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.set_state(PaymentSettingsForm.reservation_ttl)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Введите время для оплаты от 5 до 60 минут. "
+            "Для значения 15 напоминания отправляются через 5 и 10 минут.",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(PaymentSettingsForm.reservation_ttl)
+async def save_payment_timer(
     message: Message,
     state: FSMContext,
     payment_admin_service: PaymentAdministrationService,
     staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
+    raw = (message.text or "").strip()
+    if not raw.isdecimal():
+        await message.answer("Введите целое число минут от 5 до 60.")
+        return
     try:
-        await payment_admin_service.set_manual_instructions(
+        settings = await payment_admin_service.set_reservation_ttl(
             staff_context,
-            message.text or "",
+            int(raw),
             correlation_id=correlation_id,
         )
     except (DomainError, PaymentStateError) as exc:
         await message.answer(str(exc))
         return
     await state.clear()
-    await message.answer("Инструкция ручной оплаты сохранена.")
-    await _show(message, payment_admin_service, staff_context)
+    reminders = ", ".join(str(value) for value in settings.client_payment_reminder_minutes)
+    await message.answer(
+        f"Таймер оплаты: {settings.reservation_ttl_minutes} мин. "
+        f"Напоминания клиенту: {reminders or 'отключены'}."
+    )
 
 
 @router.callback_query(PaymentAdminCallback.filter(F.action == "mode_prompt"))
@@ -282,3 +454,49 @@ async def change_payment_mode(
     await callback.answer("Режим оплаты изменён.")
     if isinstance(callback.message, Message):
         await _show(callback.message, payment_admin_service, staff_context)
+
+
+async def _reject_manual_payment(
+    callback: CallbackQuery,
+    *,
+    payment_id: int,
+    reason: str | None,
+    service: PaymentAdministrationService,
+    actor: StaffContext,
+    bot: Bot,
+    correlation_id: str,
+) -> None:
+    try:
+        decision = await service.reject_manual(
+            actor,
+            payment_id,
+            reason=reason,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer("Предоплата отклонена, запись отменена, окно снова доступно.")
+    if decision.changed:
+        await _notify_rejection(
+            bot,
+            decision.client_telegram_id,
+            decision.payment.rejection_reason,
+        )
+    await callback.answer("Предоплата отклонена.")
+
+
+async def _notify_rejection(
+    bot: Bot,
+    telegram_id: int,
+    reason: str | None,
+) -> None:
+    reason_line = f"\nПричина: {escape(reason)}" if reason else ""
+    try:
+        await bot.send_message(
+            telegram_id,
+            f"Предоплата не подтверждена. Запись отменена, резерв времени освобождён.{reason_line}",
+        )
+    except TelegramAPIError:
+        return

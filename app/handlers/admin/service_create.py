@@ -87,6 +87,27 @@ async def capture_service_duration_min(message: Message, state: FSMContext) -> N
 
 
 @router.message(AdminServiceCreate.duration_max)
+async def capture_service_duration_max(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    maximum = parse_positive_minutes(message.text)
+    if maximum is None:
+        await message.answer("Введите целое число минут от 1 до 1440.")
+        return
+    data = await state.get_data()
+    minimum = data.get("duration_min_minutes")
+    if not isinstance(minimum, int) or minimum > maximum:
+        await message.answer("Максимальная длительность не может быть меньше минимальной.")
+        return
+    await state.update_data(duration_max_minutes=maximum)
+    await state.set_state(AdminServiceCreate.prepayment)
+    await message.answer(
+        "Введите фиксированную предоплату в рублях. Отправьте 0, чтобы отключить предоплату:"
+    )
+
+
+@router.message(AdminServiceCreate.prepayment)
 async def finish_service_creation(
     message: Message,
     state: FSMContext,
@@ -95,9 +116,9 @@ async def finish_service_creation(
 ) -> None:
     if message.from_user is None:
         return
-    maximum = parse_positive_minutes(message.text)
-    if maximum is None:
-        await message.answer("Введите целое число минут от 1 до 1440.")
+    prepayment = parse_price(message.text)
+    if prepayment is None:
+        await message.answer("Введите сумму, например 500, или 0 для отключения.")
         return
     data = await state.get_data()
     try:
@@ -106,10 +127,13 @@ async def finish_service_creation(
             description=data.get("description"),
             price=data["price"],
             duration_min_minutes=data["duration_min_minutes"],
-            duration_max_minutes=maximum,
+            duration_max_minutes=data["duration_max_minutes"],
+            prepayment_amount=prepayment,
         )
     except (ValidationError, KeyError):
-        await message.answer("Проверьте цену и диапазон длительности.")
+        await message.answer(
+            "Предоплата должна быть положительной либо равна нулю и не превышать цену услуги."
+        )
         return
     service = await service_catalog.create_service(
         actor_from_telegram(message.from_user),

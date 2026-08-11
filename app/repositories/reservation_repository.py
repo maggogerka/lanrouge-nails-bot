@@ -67,7 +67,9 @@ class ReservationRepository(TenantScopedRepository):
         statement = select(BookingReservation).where(
             BookingReservation.business_id == self.business_id,
             BookingReservation.window_id == window_id,
-            BookingReservation.status == ReservationStatus.ACTIVE,
+            BookingReservation.status.in_(
+                {ReservationStatus.ACTIVE, ReservationStatus.AWAITING_REVIEW}
+            ),
         )
         if for_update:
             statement = statement.with_for_update()
@@ -79,7 +81,9 @@ class ReservationRepository(TenantScopedRepository):
         statement = select(BookingReservation).where(
             BookingReservation.business_id == self.business_id,
             BookingReservation.appointment_id == appointment_id,
-            BookingReservation.status == ReservationStatus.ACTIVE,
+            BookingReservation.status.in_(
+                {ReservationStatus.ACTIVE, ReservationStatus.AWAITING_REVIEW}
+            ),
         )
         if for_update:
             statement = statement.with_for_update()
@@ -197,8 +201,11 @@ class ReservationRepository(TenantScopedRepository):
                 select(func.count(BookingReservation.id)).where(
                     BookingReservation.business_id == self.business_id,
                     BookingReservation.client_id == client_id,
-                    BookingReservation.status == ReservationStatus.ACTIVE,
-                    BookingReservation.expires_at > now,
+                    (
+                        (BookingReservation.status == ReservationStatus.ACTIVE)
+                        & (BookingReservation.expires_at > now)
+                    )
+                    | (BookingReservation.status == ReservationStatus.AWAITING_REVIEW),
                 )
             )
             or 0

@@ -56,6 +56,7 @@ class ServiceCatalog:
                     price=values.price,
                     duration_min_minutes=values.duration_min_minutes,
                     duration_max_minutes=values.duration_max_minutes,
+                    prepayment_amount=values.prepayment_amount,
                     is_active=True,
                 )
             )
@@ -121,12 +122,19 @@ class ServiceCatalog:
                     and patch.duration_max_minutes is not None
                     else service.duration_max_minutes
                 ),
+                prepayment_amount=(
+                    patch.prepayment_amount
+                    if "prepayment_amount" in patch.model_fields_set
+                    and patch.prepayment_amount is not None
+                    else service.prepayment_amount
+                ),
             )
             service.name = merged.name
             service.description = merged.description
             service.price = merged.price
             service.duration_min_minutes = merged.duration_min_minutes
             service.duration_max_minutes = merged.duration_max_minutes
+            service.prepayment_amount = merged.prepayment_amount
             await unit_of_work.session.flush()
 
             await unit_of_work.audit.add(
@@ -215,5 +223,6 @@ class ServiceCatalog:
             "price": str(Decimal(service.price)),
             "duration_min_minutes": service.duration_min_minutes,
             "duration_max_minutes": service.duration_max_minutes,
+            "prepayment_amount": str(Decimal(service.prepayment_amount)),
             "is_active": service.is_active,
         }

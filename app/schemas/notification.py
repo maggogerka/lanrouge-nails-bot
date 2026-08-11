@@ -23,3 +23,4 @@ class NotificationDelivery(BaseModel):
     master_telegram_url: str
     client_name: str
     client_phone: str | None
+    payment_id: int | None = None

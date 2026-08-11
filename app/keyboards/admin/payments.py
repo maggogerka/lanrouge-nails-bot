@@ -3,7 +3,7 @@
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.domain.enums import PaymentMode, PaymentStatus
+from app.domain.enums import ManualPaymentStatus, PaymentMode, PaymentStatus
 from app.schemas.payment import PaymentView, RefundView
 
 
@@ -17,8 +17,11 @@ def payments_keyboard(
     payments: tuple[PaymentView, ...],
     *,
     can_manage: bool,
+    can_reject: bool = False,
     can_refund: bool = False,
-    can_configure: bool = False,
+    can_edit_instructions: bool = False,
+    can_edit_timers: bool = False,
+    can_change_settings: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for payment in payments:
@@ -40,6 +43,8 @@ def payments_keyboard(
             can_manage
             and payment.provider is PaymentMode.MANUAL
             and payment.status is PaymentStatus.PENDING
+            and payment.manual_status
+            in {ManualPaymentStatus.CLIENT_REPORTED, ManualPaymentStatus.REVIEW_PENDING}
         ):
             rows.append(
                 [
@@ -48,6 +53,23 @@ def payments_keyboard(
                         callback_data=PaymentAdminCallback(
                             action="approve_prompt",
                             payment_id=payment.id,
+                        ).pack(),
+                    )
+                ]
+            )
+        if (
+            can_reject
+            and payment.provider is PaymentMode.MANUAL
+            and payment.status is PaymentStatus.PENDING
+            and payment.manual_status
+            in {ManualPaymentStatus.CLIENT_REPORTED, ManualPaymentStatus.REVIEW_PENDING}
+        ):
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"Отклонить ручную оплату #{payment.id}",
+                        callback_data=PaymentAdminCallback(
+                            action="reject_prompt", payment_id=payment.id
                         ).pack(),
                     )
                 ]
@@ -67,17 +89,27 @@ def payments_keyboard(
                     )
                 ]
             )
-    if can_configure:
+    if can_edit_instructions:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Настроить инструкцию ручной оплаты",
+                    callback_data=PaymentAdminCallback(action="edit_manual_instructions").pack(),
+                )
+            ]
+        )
+    if can_edit_timers:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Настроить таймер оплаты",
+                    callback_data=PaymentAdminCallback(action="edit_payment_timer").pack(),
+                )
+            ]
+        )
+    if can_change_settings:
         rows.extend(
             [
-                [
-                    InlineKeyboardButton(
-                        text="Настроить инструкцию ручной оплаты",
-                        callback_data=PaymentAdminCallback(
-                            action="edit_manual_instructions"
-                        ).pack(),
-                    )
-                ],
                 [
                     InlineKeyboardButton(
                         text="Режим: без предоплаты",
@@ -131,6 +163,52 @@ def manual_approval_confirmation(payment_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="Нет",
+                    callback_data=PaymentAdminCallback(action="list").pack(),
+                )
+            ],
+        ]
+    )
+
+
+def manual_rejection_reason_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Без комментария",
+                    callback_data=PaymentAdminCallback(
+                        action="reject_no_reason", payment_id=payment_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data=PaymentAdminCallback(action="list").pack(),
+                )
+            ],
+        ]
+    )
+
+
+def manual_instruction_preview_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Сохранить инструкцию",
+                    callback_data=PaymentAdminCallback(action="instructions_save").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Изменить текст",
+                    callback_data=PaymentAdminCallback(action="edit_manual_instructions").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
                     callback_data=PaymentAdminCallback(action="list").pack(),
                 )
             ],

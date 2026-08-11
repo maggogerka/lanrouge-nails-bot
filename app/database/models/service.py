@@ -36,6 +36,7 @@ class Service(TimestampMixin, Base):
             name="duration_range_valid",
         ),
         CheckConstraint("prepayment_amount >= 0", name="prepayment_non_negative"),
+        CheckConstraint("prepayment_amount <= price", name="prepayment_within_price"),
         Index("ix_services_business_active_order", "business_id", "is_active", "sort_order"),
     )
 

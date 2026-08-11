@@ -35,7 +35,9 @@ def render_service(service: ServiceView) -> str:
         f"Описание: {description}\n"
         f"Стоимость: {service.price:.2f} ₽\n"
         "Продолжительность: "
-        f"{service.duration_min_minutes}–{service.duration_max_minutes} мин."
+        f"{service.duration_min_minutes}–{service.duration_max_minutes} мин.\n"
+        "Предоплата: "
+        + (f"{service.prepayment_amount:.2f} ₽" if service.prepayment_amount > 0 else "отключена")
     )
 
 

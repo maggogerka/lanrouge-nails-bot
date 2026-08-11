@@ -76,6 +76,15 @@ def service_details_keyboard(service: ServiceView) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="💳 Предоплата",
+                    callback_data=ServiceCallback(
+                        action="edit_prepayment",
+                        service_id=service.id,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="💵 Цена",
                     callback_data=ServiceCallback(
                         action="edit_price",

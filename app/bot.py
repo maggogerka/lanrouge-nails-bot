@@ -45,6 +45,7 @@ from app.services import (
     DeletionRequestNotificationService,
     FeatureFlagService,
     FeaturePrerequisites,
+    ManualPrepaymentService,
     MarketingEventService,
     MasterProfileService,
     MasterWorkspaceService,
@@ -137,6 +138,9 @@ def create_dispatcher(
             str(settings.yookassa_return_url) if settings.yookassa_return_url is not None else None
         ),
         subscription_service=subscription_service,
+    )
+    manual_prepayment_service = ManualPrepaymentService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions)
     )
     manual_payment_service = configured_payment_services[PaymentMode.MANUAL]
     payment_admin_service = PaymentAdministrationService(
@@ -237,6 +241,7 @@ def create_dispatcher(
         privacy_deletion_service=privacy_deletion_service,
         deletion_request_notification_service=deletion_request_notification_service,
         booking_service=booking_service,
+        manual_prepayment_service=manual_prepayment_service,
         business_service=business_service,
         subscription_service=subscription_service,
         payment_admin_service=payment_admin_service,

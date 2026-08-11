@@ -99,6 +99,21 @@ async def begin_edit_duration(
     )
 
 
+@router.callback_query(ServiceCallback.filter(F.action == "edit_prepayment"))
+async def begin_edit_prepayment(
+    callback: CallbackQuery,
+    callback_data: ServiceCallback,
+    state: FSMContext,
+) -> None:
+    await begin_edit(
+        callback,
+        state,
+        callback_data.service_id,
+        AdminServiceEdit.prepayment,
+        "Введите фиксированную предоплату или 0, чтобы отключить:",
+    )
+
+
 async def finish_edit(
     message: Message,
     state: FSMContext,
@@ -203,3 +218,23 @@ async def finish_edit_duration(
         await message.answer("Минимум не должен превышать максимум; допустимо 1–1440 минут.")
         return
     await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)
+
+
+@router.message(AdminServiceEdit.prepayment)
+async def finish_edit_prepayment(
+    message: Message,
+    state: FSMContext,
+    service_catalog: ServiceCatalog,
+    correlation_id: str,
+    menu_service: MenuService,
+) -> None:
+    amount = parse_price(message.text)
+    try:
+        patch = ServicePatch(prepayment_amount=amount)
+    except ValidationError:
+        await message.answer("Введите неотрицательную сумму максимум с двумя знаками.")
+        return
+    try:
+        await finish_edit(message, state, service_catalog, patch, correlation_id, menu_service)
+    except ValidationError:
+        await message.answer("Предоплата не может превышать стоимость услуги.")

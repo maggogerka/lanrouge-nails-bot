@@ -11,6 +11,7 @@ from app.domain.appointments import ensure_appointment_transition
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
+    ManualPaymentStatus,
     PaymentStatus,
     ReservationStatus,
 )
@@ -144,7 +145,7 @@ class ReservationService:
                 return reservation
             raise ReservationStateError("Резерв уже связан с другой записью.")
         ensure_reservation_transition(reservation.status, ReservationStatus.CONSUMED)
-        if reservation.expires_at <= current:
+        if reservation.status is ReservationStatus.ACTIVE and reservation.expires_at <= current:
             raise ReservationStateError("Срок резерва уже истёк.")
 
         appointment = await self._required_appointment(appointment_id)
@@ -242,6 +243,14 @@ class ReservationService:
                 reason="reservation_expired",
             )
             appointment.reservation_expires_at = None
+            payment = await self._payments.get_latest_for_appointment(
+                appointment.id, for_update=True
+            )
+            if payment is not None and payment.status is PaymentStatus.PENDING:
+                payment.status = PaymentStatus.CANCELLED
+                payment.cancelled_at = current
+                if payment.manual_status is ManualPaymentStatus.AWAITING_PAYMENT:
+                    payment.manual_status = ManualPaymentStatus.EXPIRED
 
         ensure_reservation_transition(reservation.status, ReservationStatus.EXPIRED)
         reservation.status = ReservationStatus.EXPIRED

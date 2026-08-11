@@ -28,6 +28,7 @@ class ServiceCreate(BaseModel):
     price: Money
     duration_min_minutes: PositiveMinutes
     duration_max_minutes: PositiveMinutes
+    prepayment_amount: Money = Decimal("0.00")
 
     @field_validator("name", mode="before")
     @classmethod
@@ -46,6 +47,8 @@ class ServiceCreate(BaseModel):
     def validate_duration_range(self) -> Self:
         if self.duration_min_minutes > self.duration_max_minutes:
             raise ValueError("minimum duration must not exceed maximum duration")
+        if self.prepayment_amount > self.price:
+            raise ValueError("prepayment must not exceed service price")
         return self
 
 
@@ -57,6 +60,7 @@ class ServicePatch(BaseModel):
     price: Money | None = None
     duration_min_minutes: PositiveMinutes | None = None
     duration_max_minutes: PositiveMinutes | None = None
+    prepayment_amount: Money | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -80,6 +84,7 @@ class ServicePatch(BaseModel):
             "price",
             "duration_min_minutes",
             "duration_max_minutes",
+            "prepayment_amount",
         )
         if any(
             field in self.model_fields_set and getattr(self, field) is None
@@ -100,4 +105,11 @@ class ServiceView(BaseModel):
     price: Decimal
     duration_min_minutes: int
     duration_max_minutes: int
+    prepayment_amount: Decimal = Decimal("0.00")
     is_active: bool
+
+    @field_validator("prepayment_amount", mode="before")
+    @classmethod
+    def normalize_legacy_prepayment(cls, value: object) -> object:
+        """Treat pre-migration/in-memory services as having no prepayment."""
+        return Decimal("0.00") if value is None else value

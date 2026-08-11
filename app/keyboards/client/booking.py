@@ -13,6 +13,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.keyboards.client.payments import manual_payment_report_button
 from app.schemas.booking import BookableMasterView, BookingWindowView
 from app.schemas.service import ServiceView
 
@@ -201,10 +202,13 @@ def appointment_links_keyboard(
     master_url: str,
     *,
     payment_url: str | None = None,
+    manual_payment_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if payment_url is not None:
         rows.append([InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)])
+    if manual_payment_id is not None:
+        rows.append([manual_payment_report_button(manual_payment_id)])
     rows.extend(
         [
             [InlineKeyboardButton(text="📍 Открыть на карте", url=map_url)],

@@ -12,7 +12,13 @@ from typing import Never, Protocol, Self
 from app.database.models.appointment import Appointment, AppointmentStatusHistory
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
 from app.domain.appointments import ensure_appointment_transition
-from app.domain.enums import AppointmentStatus, PaymentMode, PaymentStatus, RefundStatus
+from app.domain.enums import (
+    AppointmentStatus,
+    ManualPaymentStatus,
+    PaymentMode,
+    PaymentStatus,
+    RefundStatus,
+)
 from app.domain.errors import DomainError, EntityNotFoundError
 from app.domain.payments import PaymentStateError, WebhookProcessingStatus, aware_utc
 from app.payments.providers.base import PaymentProviderError, ProviderWebhookEvent
@@ -327,7 +333,7 @@ class ManualPaymentApprovalCoordinator:
         live_actor = await _authorize_actor(
             self._authorization,
             actor,
-            StaffPermission.MANAGE_PAYMENTS,
+            StaffPermission.APPROVE_PREPAYMENTS,
         )
         transitioned = False
         async with self._uow_factory() as uow:
@@ -337,8 +343,19 @@ class ManualPaymentApprovalCoordinator:
                 raise EntityNotFoundError("payment not found")
             if payment.provider is not PaymentMode.MANUAL:
                 raise PaymentStateError("manual approval requires a manual payment")
+            if payment.manual_status is ManualPaymentStatus.CONFIRMED:
+                if payment.status is not PaymentStatus.SUCCEEDED:
+                    raise PaymentStateError("manual payment state is inconsistent")
+            elif payment.manual_status not in {
+                ManualPaymentStatus.CLIENT_REPORTED,
+                ManualPaymentStatus.REVIEW_PENDING,
+            }:
+                raise PaymentStateError("Клиент ещё не сообщил об оплате.")
             if payment.status is not PaymentStatus.SUCCEEDED:
                 self._payment_service.confirm_manual_payment(payment, now=current)
+                payment.manual_status = ManualPaymentStatus.CONFIRMED
+                payment.reviewed_at = current
+                payment.reviewed_by_user_id = live_actor.user_id
                 transitioned = True
                 await uow.audit.add(
                     actor_user_id=live_actor.user_id,

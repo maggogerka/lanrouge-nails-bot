@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.enums import PaymentMode, PaymentStatus, RefundStatus
+from app.domain.enums import ManualPaymentStatus, PaymentMode, PaymentStatus, RefundStatus
 from app.domain.payments import PaymentType, validate_money, validate_safe_metadata
 
 _IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
@@ -131,6 +131,29 @@ class PaymentView(BaseModel):
     paid_at: datetime | None
     cancelled_at: datetime | None
     refunded_at: datetime | None
+    manual_status: ManualPaymentStatus | None = None
+    client_reported_at: datetime | None = None
+    review_started_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    rejection_reason: str | None = None
+    has_receipt: bool = False
+
+
+class ManualReceiptDraft(BaseModel):
+    """One bounded Telegram receipt reference; the file itself is never downloaded."""
+
+    telegram_file_id: Annotated[str, Field(min_length=1, max_length=512)] = Field(repr=False)
+    telegram_file_unique_id: Annotated[str, Field(min_length=1, max_length=255)]
+    media_type: str
+    file_size: Annotated[int, Field(gt=0, le=20 * 1024 * 1024)]
+
+    @field_validator("media_type")
+    @classmethod
+    def supported_media_type(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if normalized not in {"photo", "document"}:
+            raise ValueError("receipt must be a photo or supported document")
+        return normalized
 
 
 class PaymentSettingsView(BaseModel):
@@ -142,6 +165,10 @@ class PaymentSettingsView(BaseModel):
     mode: PaymentMode
     manual_payment_instructions: str | None
     reservation_ttl_minutes: int
+    client_payment_reminder_minutes: list[int] = Field(default_factory=lambda: [5, 10])
+    staff_review_reminder_minutes: list[int] = Field(default_factory=lambda: [30, 120])
+    client_payment_reminders_enabled: bool = True
+    staff_payment_notifications_enabled: bool = True
     cancellation_refund_deadline_hours: int
     late_cancellation_refund_percent: int
     version: int
