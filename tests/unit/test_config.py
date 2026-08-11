@@ -244,6 +244,33 @@ def test_runtime_secrets_can_be_loaded_from_bounded_files(
     assert "file-password" not in repr(settings)
 
 
+def test_connection_password_files_replace_url_passwords(tmp_path: Path) -> None:
+    database_password = tmp_path / "database-password"
+    redis_password = tmp_path / "redis-password"
+    database_password.write_text("db/new+secret", encoding="utf-8")
+    redis_password.write_text("redis_new-secret", encoding="utf-8")
+
+    settings = make_settings(
+        DATABASE_URL="postgresql+asyncpg://user:stale@postgres:5432/app",
+        DATABASE_PASSWORD_FILE=str(database_password),
+        REDIS_URL="redis://:stale@redis:6379/0",
+        REDIS_PASSWORD_FILE=str(redis_password),
+    )
+
+    assert (
+        settings.database_url.get_secret_value()
+        == "postgresql+asyncpg://user:db%2Fnew%2Bsecret@postgres:5432/app"
+    )
+    assert settings.redis_url.get_secret_value() == "redis://:redis_new-secret@redis:6379/0"
+    assert "db/new+secret" not in repr(settings)
+
+
+def test_empty_yookassa_return_url_is_unset() -> None:
+    settings = make_settings(YOOKASSA_RETURN_URL="")
+
+    assert settings.yookassa_return_url is None
+
+
 def test_direct_secret_and_file_are_mutually_exclusive(tmp_path: Path) -> None:
     token_file = tmp_path / "bot-token"
     token_file.write_text("123456:file-token", encoding="utf-8")

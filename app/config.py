@@ -10,7 +10,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Self
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
@@ -79,10 +79,22 @@ class Settings(BaseSettings):
         repr=False,
         exclude=True,
     )
+    database_password_file: Path | None = Field(
+        default=None,
+        validation_alias="DATABASE_PASSWORD_FILE",
+        repr=False,
+        exclude=True,
+    )
     redis_url: SecretStr = Field(default=SecretStr(""), validation_alias="REDIS_URL")
     redis_url_file: Path | None = Field(
         default=None,
         validation_alias="REDIS_URL_FILE",
+        repr=False,
+        exclude=True,
+    )
+    redis_password_file: Path | None = Field(
+        default=None,
+        validation_alias="REDIS_PASSWORD_FILE",
         repr=False,
         exclude=True,
     )
@@ -279,6 +291,7 @@ class Settings(BaseSettings):
         "vendor_support_url",
         "vendor_support_hours",
         "vendor_support_instructions",
+        "yookassa_return_url",
         mode="before",
     )
     @classmethod
@@ -307,7 +320,9 @@ class Settings(BaseSettings):
     @field_validator(
         "bot_token_file",
         "database_url_file",
+        "database_password_file",
         "redis_url_file",
+        "redis_password_file",
         "sentry_dsn_file",
         "api_rate_limit_subject_key_file",
         "api_session_signing_key_file",
@@ -453,6 +468,29 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def resolve_connection_password_files(self) -> Self:
+        """Inject mounted passwords into connection URLs without duplicating secrets."""
+
+        pairs = (
+            ("database_url", "database_password_file", "DATABASE_PASSWORD_FILE"),
+            ("redis_url", "redis_password_file", "REDIS_PASSWORD_FILE"),
+        )
+        for url_field, file_field, variable_name in pairs:
+            file_path = getattr(self, file_field)
+            if file_path is None:
+                continue
+            configured_url = getattr(self, url_field).get_secret_value()
+            if not configured_url:
+                raise ValueError(f"{variable_name} requires its connection URL")
+            password = self._read_secret_file(file_path, variable_name)
+            setattr(
+                self,
+                url_field,
+                SecretStr(self._replace_url_password(configured_url, password, variable_name)),
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_connection_schemes(self) -> Self:
         """Fail early on synchronous or unsupported connection URLs."""
 
@@ -510,6 +548,18 @@ class Settings(BaseSettings):
         if value != value.strip():
             raise ValueError(f"{variable_name} must not contain surrounding whitespace")
         return value
+
+    @staticmethod
+    def _replace_url_password(url: str, password: str, variable_name: str) -> str:
+        parsed = urlsplit(url)
+        if "@" not in parsed.netloc:
+            raise ValueError(f"{variable_name} requires a URL with a username")
+        user_info, host_info = parsed.netloc.rsplit("@", maxsplit=1)
+        username = user_info.split(":", maxsplit=1)[0]
+        if not username and parsed.scheme != "redis":
+            raise ValueError(f"{variable_name} requires a URL with a username")
+        netloc = f"{username}:{quote(password, safe='')}@{host_info}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
     @property
     def admin_telegram_ids(self) -> frozenset[int]:

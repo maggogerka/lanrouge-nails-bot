@@ -29,11 +29,14 @@ mode-0600 configuration file in its tmpfs, and restic consumes
 `RESTIC_PASSWORD_FILE`. A production secret-manager integration may enforce an
 equivalent UID/GID-specific policy instead.
 
-The deployment environment file selected through `ENV_FILE` must provide either
-`DATABASE_URL` and an authenticated `REDIS_URL`, or the matching application
-`*_FILE` settings through a deployment-specific secret mount. In the URL form,
-the passwords must match the PostgreSQL and Redis secret files and be URL-encoded
-where necessary. The file must also contain the normal runtime values such as
+The deployment environment file selected through `ENV_FILE` must provide
+`DATABASE_URL` and `REDIS_URL` with their normal username, host, port and database
+components. Compose mounts the PostgreSQL and Redis password files into every
+application container; `Settings` safely replaces the password components at
+runtime, including URL-encoding. This makes the password files authoritative and
+avoids duplicated credentials. A non-Compose deployment may instead provide full
+URLs directly or use the matching application `*_FILE` settings. The environment
+file must also contain the normal runtime values such as
 `BOT_TOKEN`, `ADMIN_TELEGRAM_IDS`, `PRIVACY_POLICY_URL`, and optional
 `SENTRY_DSN`. Do not put that file in the image or repository.
 
