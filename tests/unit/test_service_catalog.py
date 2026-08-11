@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import Service
+from app.database.models import Service, ServiceAddon
 from app.domain.errors import AuthorizationError, ServiceInUseError
-from app.schemas.service import AdminActor, ServiceCreate
+from app.schemas.service import AdminActor, ServiceAddonCreate, ServiceCreate
 from app.services.service_catalog import ServiceCatalog
 
 
@@ -27,8 +27,10 @@ def build_uow() -> MagicMock:
     unit_of_work.services.list_all = AsyncMock(return_value=[])
     unit_of_work.services.get = AsyncMock(return_value=None)
     unit_of_work.services.has_appointments = AsyncMock(return_value=False)
+    unit_of_work.services.has_addons = AsyncMock(return_value=False)
     unit_of_work.services.delete = AsyncMock()
     unit_of_work.service_assignments.add_assignment = AsyncMock()
+    unit_of_work.service_addons.list_all = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -75,6 +77,45 @@ async def test_create_service_audits_and_commits() -> None:
     audit_call = unit_of_work.audit.add.await_args.kwargs
     assert audit_call["action"] == "service.created"
     assert audit_call["correlation_id"] == "request-1"
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_addon_is_scoped_audited_and_committed() -> None:
+    unit_of_work = build_uow()
+    base = Service(
+        id=7,
+        business_id=1,
+        name="Услуга",
+        price=Decimal("2500.00"),
+        duration_min_minutes=60,
+        duration_max_minutes=90,
+        is_active=True,
+    )
+    unit_of_work.services.get = AsyncMock(return_value=base)
+
+    async def add_addon(value: ServiceAddon) -> ServiceAddon:
+        value.id = 8
+        return value
+
+    unit_of_work.service_addons.add = AsyncMock(side_effect=add_addon)
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
+
+    created = await catalog.create_addon(
+        actor(),
+        ServiceAddonCreate(
+            service_id=7,
+            name="Дополнение",
+            price=Decimal("500.00"),
+            duration_min_minutes=30,
+            duration_max_minutes=30,
+        ),
+        correlation_id="addon-create",
+    )
+
+    assert created.id == 8
+    assert created.service_id == 7
+    assert unit_of_work.audit.add.await_args.kwargs["action"] == "service_addon.created"
     unit_of_work.commit.assert_awaited_once()
 
 

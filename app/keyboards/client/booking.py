@@ -15,7 +15,7 @@ from aiogram.types import (
 
 from app.keyboards.client.payments import manual_payment_report_button
 from app.schemas.booking import BookableMasterView, BookingWindowView
-from app.schemas.service import ServiceView
+from app.schemas.service import ServiceAddonView, ServiceView
 
 BOOKING_BACK_TEXT = "⬅️ Назад"
 BOOKING_CANCEL_TEXT = "❌ Отменить оформление"
@@ -32,6 +32,13 @@ class BookingReferenceCallback(CallbackData, prefix="bref"):
     """Actions for the optional bounded reference-photo draft."""
 
     action: str
+
+
+class BookingAddonCallback(CallbackData, prefix="badd"):
+    """Toggle/continue actions for additions scoped by FSM service state."""
+
+    action: str
+    addon_id: int = 0
 
 
 def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
@@ -55,7 +62,64 @@ def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def masters_keyboard(masters: list[BookableMasterView]) -> InlineKeyboardMarkup:
+def service_card_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Выбрать услугу",
+                    callback_data=BookingCallback(action="service", object_id=service_id).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BOOKING_CANCEL_TEXT,
+                    callback_data=BookingCallback(action="cancel", object_id=0).pack(),
+                )
+            ],
+        ]
+    )
+
+
+def addons_keyboard(addons: list[ServiceAddonView], selected_ids: set[int]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if addon.id in selected_ids else "➕ ")
+                + f"{addon.name} — {addon.price:.2f} ₽",
+                callback_data=BookingAddonCallback(action="toggle", addon_id=addon.id).pack(),
+            )
+        ]
+        for addon in addons
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="Продолжить" if selected_ids else "Пропустить",
+                    callback_data=BookingAddonCallback(action="continue", addon_id=0).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BOOKING_BACK_TEXT,
+                    callback_data=BookingCallback(action="back_services", object_id=0).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BOOKING_CANCEL_TEXT,
+                    callback_data=BookingCallback(action="cancel", object_id=0).pack(),
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def masters_keyboard(
+    masters: list[BookableMasterView], *, back_action: str = "back_services"
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -76,7 +140,7 @@ def masters_keyboard(masters: list[BookableMasterView]) -> InlineKeyboardMarkup:
             for master in masters
         ],
     ]
-    rows.extend(_inline_navigation("back_services"))
+    rows.extend(_inline_navigation(back_action))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

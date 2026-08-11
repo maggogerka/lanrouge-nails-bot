@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.domain.enums import AppointmentStatus, PaymentMode
 from app.schemas.booking import BookingReceipt, BookingWindowView, BusinessInfo
-from app.schemas.service import ServiceView
+from app.schemas.service import ServiceAddonView, ServiceView
 
 
 def format_duration_range(minimum: int, maximum: int) -> str:
@@ -33,6 +33,7 @@ def render_booking_confirmation(
     window: BookingWindowView,
     info: BusinessInfo,
     *,
+    addons: list[ServiceAddonView] | None = None,
     client_name: str,
     design_title: str | None = None,
     reference_media_count: int = 0,
@@ -45,7 +46,18 @@ def render_booking_confirmation(
     reference_line = (
         f"Фотографии-референсы: {reference_media_count}\n" if reference_media_count else ""
     )
-    price = window.price if window.price is not None else service.price
+    selected_addons = addons or []
+    base_price = window.base_price if window.base_price is not None else service.price
+    addons_price = sum((addon.price for addon in selected_addons), Decimal("0.00"))
+    price = window.price if window.price is not None else base_price + addons_price
+    addon_lines = "".join(
+        f"  • {escape(addon.name)}: {addon.price:.2f} ₽\n" for addon in selected_addons
+    )
+    addons_block = (
+        f"Дополнительные услуги:\n{addon_lines}Сумма дополнений: {addons_price:.2f} ₽\n"
+        if selected_addons
+        else "Дополнительные услуги: нет\n"
+    )
     duration_min = window.duration_min_minutes or service.duration_min_minutes
     duration_max = window.duration_max_minutes or service.duration_max_minutes
     prepayment_line = (
@@ -61,7 +73,9 @@ def render_booking_confirmation(
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{format_duration_range(duration_min, duration_max)}\n"
-        f"Стоимость: {price:.2f} ₽\n"
+        f"Основная услуга: {base_price:.2f} ₽\n"
+        f"{addons_block}"
+        f"Итоговая стоимость: {price:.2f} ₽\n"
         f"{prepayment_line}"
         f"{design_line}"
         f"{reference_line}"
@@ -97,6 +111,17 @@ def render_booking_receipt(receipt: BookingReceipt) -> str:
     if receipt.reservation_expires_at is not None:
         expiry = receipt.reservation_expires_at.astimezone(ZoneInfo(receipt.timezone))
         expiry_line = f"Резерв действует до {expiry:%d.%m.%Y %H:%M}.\n"
+    base_price = receipt.base_price if receipt.base_price is not None else receipt.price
+    addon_lines = "".join(
+        f"  • {escape(addon.name_snapshot)}: {addon.price_snapshot:.2f} ₽\n"
+        for addon in receipt.addons
+    )
+    addons_price = sum((addon.price_snapshot for addon in receipt.addons), Decimal("0.00"))
+    addons_block = (
+        f"Дополнительные услуги:\n{addon_lines}Сумма дополнений: {addons_price:.2f} ₽\n"
+        if receipt.addons
+        else ""
+    )
     return (
         f"{heading}\n\n"
         f"Услуга: {escape(receipt.service_name)}\n"
@@ -105,7 +130,9 @@ def render_booking_receipt(receipt: BookingReceipt) -> str:
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{format_duration_range(receipt.duration_min_minutes, receipt.duration_max_minutes)}\n"
-        f"Стоимость: {receipt.price:.2f} ₽\n"
+        f"Основная услуга: {base_price:.2f} ₽\n"
+        f"{addons_block}"
+        f"Итоговая стоимость: {receipt.price:.2f} ₽\n"
         f"{payment_block}"
         f"{expiry_line}"
         f"{design_line}"
@@ -125,10 +152,16 @@ def render_admin_new_booking(receipt: BookingReceipt) -> str:
         if receipt.payment_id is not None and receipt.payment_status is not None
         else ""
     )
+    addons_line = (
+        "Дополнения: " + ", ".join(escape(addon.name_snapshot) for addon in receipt.addons) + "\n"
+        if receipt.addons
+        else ""
+    )
     return (
         "<b>Новая запись</b>\n"
         f"Запись №{receipt.appointment_id}\n"
         f"Услуга: {escape(receipt.service_name)}\n"
+        f"{addons_line}"
         f"{master_line}"
         f"{design_line}"
         f"{status_line}"

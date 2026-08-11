@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database.models import (
     Appointment,
+    AppointmentAddonSnapshot,
     AppointmentStatusHistory,
     AvailabilityWindow,
     BusinessSettings,
@@ -35,7 +36,7 @@ from app.domain.reference_retention import ReferenceRetentionPolicy
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import RescheduleAvailability
 from app.schemas.booking import BookingReceipt, BookingWindowView, ClientActor
-from app.schemas.service import AdminActor
+from app.schemas.service import AdminActor, AppointmentAddonView
 from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import appointment_view, ensure_admin, ensure_owner
 from app.services.waitlist_matching import enqueue_waitlist_matches
@@ -276,6 +277,7 @@ class RescheduleService:
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
 
+                addon_snapshots = await unit_of_work.service_addons.list_snapshots(appointment.id)
                 new_appointment = await unit_of_work.appointments.add(
                     Appointment(
                         business_id=unit_of_work.business_id,
@@ -300,6 +302,22 @@ class RescheduleService:
                         client_comment=appointment.client_comment,
                     )
                 )
+                new_addon_snapshots = [
+                    AppointmentAddonSnapshot(
+                        business_id=unit_of_work.business_id,
+                        appointment_id=new_appointment.id,
+                        service_addon_id=row.service_addon_id,
+                        name_snapshot=row.name_snapshot,
+                        description_snapshot=row.description_snapshot,
+                        price_snapshot=row.price_snapshot,
+                        duration_min_snapshot=row.duration_min_snapshot,
+                        duration_max_snapshot=row.duration_max_snapshot,
+                        position=row.position,
+                    )
+                    for row in addon_snapshots
+                ]
+                if new_addon_snapshots:
+                    await unit_of_work.service_addons.add_snapshots(new_addon_snapshots)
                 previous_status = appointment.status
                 ensure_appointment_transition(previous_status, AppointmentStatus.RESCHEDULED)
                 appointment.status = AppointmentStatus.RESCHEDULED
@@ -371,6 +389,7 @@ class RescheduleService:
                         "old_window_id": old_window.id,
                         "new_window_id": new_window.id,
                         "moved_reference_count": moved_reference_count,
+                        "addon_snapshot_count": len(new_addon_snapshots),
                     },
                     correlation_id=correlation_id,
                 )
@@ -385,6 +404,11 @@ class RescheduleService:
                 return BookingReceipt(
                     appointment_id=new_appointment.id,
                     service_name=new_appointment.service_name_snapshot,
+                    base_price=new_appointment.price_snapshot
+                    - sum((row.price_snapshot for row in new_addon_snapshots), 0),
+                    addons=[
+                        AppointmentAddonView.model_validate(row) for row in new_addon_snapshots
+                    ],
                     price=new_appointment.price_snapshot,
                     duration_min_minutes=new_appointment.duration_min_snapshot,
                     duration_max_minutes=new_appointment.duration_max_snapshot,

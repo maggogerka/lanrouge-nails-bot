@@ -10,7 +10,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.schemas.service import ServiceView
+from app.schemas.service import ServiceAddonView, ServiceView
 
 CANCEL_TEXT = "Отмена"
 
@@ -20,6 +20,12 @@ class ServiceCallback(CallbackData, prefix="svc"):
 
     action: str
     service_id: int
+
+
+class ServiceAddonAdminCallback(CallbackData, prefix="svca"):
+    action: str
+    service_id: int
+    addon_id: int = 0
 
 
 def service_list_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
@@ -38,7 +44,7 @@ def service_list_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
                         service_id=service.id,
                     ).pack(),
                 )
-            ]
+            ],
         )
     rows.append(
         [
@@ -51,6 +57,183 @@ def service_list_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def service_photo_keyboard(service: ServiceView) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Добавить" if not service.telegram_photo_file_id else "Заменить",
+                callback_data=ServiceCallback(action="photo_set", service_id=service.id).pack(),
+            )
+        ]
+    ]
+    if service.telegram_photo_file_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Удалить фотографию",
+                    callback_data=ServiceCallback(
+                        action="photo_delete", service_id=service.id
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад к услуге",
+                callback_data=ServiceCallback(action="view", service_id=service.id).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def addon_list_keyboard(service_id: int, addons: list[ServiceAddonView]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if addon.is_active else "⏸ ") + addon.name,
+                callback_data=ServiceAddonAdminCallback(
+                    action="view", service_id=service_id, addon_id=addon.id
+                ).pack(),
+            )
+        ]
+        for addon in addons
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="Добавить допуслугу",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="add", service_id=service_id
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Назад к услуге",
+                    callback_data=ServiceCallback(action="view", service_id=service_id).pack(),
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def addon_details_keyboard(addon: ServiceAddonView) -> InlineKeyboardMarkup:
+    lifecycle_action = "archive" if addon.is_active else "activate"
+    lifecycle_text = "Скрыть" if addon.is_active else "Активировать"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Название",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="edit_name",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Описание",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="edit_description",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Цена",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="edit_price",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Длительность",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="edit_duration",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Фотография",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="photo_preview",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=lifecycle_text,
+                    callback_data=ServiceAddonAdminCallback(
+                        action=lifecycle_action,
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="К списку допуслуг",
+                    callback_data=ServiceCallback(
+                        action="addons", service_id=addon.service_id
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+
+
+def addon_photo_keyboard(addon: ServiceAddonView) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Добавить" if not addon.telegram_photo_file_id else "Заменить",
+                callback_data=ServiceAddonAdminCallback(
+                    action="photo_set",
+                    service_id=addon.service_id,
+                    addon_id=addon.id,
+                ).pack(),
+            )
+        ]
+    ]
+    if addon.telegram_photo_file_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Удалить фотографию",
+                    callback_data=ServiceAddonAdminCallback(
+                        action="photo_delete",
+                        service_id=addon.service_id,
+                        addon_id=addon.id,
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=ServiceAddonAdminCallback(
+                    action="view",
+                    service_id=addon.service_id,
+                    addon_id=addon.id,
+                ).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def service_details_keyboard(service: ServiceView) -> InlineKeyboardMarkup:
     """Return field edits and lifecycle actions for one service."""
 
@@ -58,6 +241,18 @@ def service_details_keyboard(service: ServiceView) -> InlineKeyboardMarkup:
     lifecycle_text = "⏸ Скрыть" if service.is_active else "▶️ Активировать"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📷 Фотография",
+                    callback_data=ServiceCallback(
+                        action="photo_preview", service_id=service.id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="➕ Допуслуги",
+                    callback_data=ServiceCallback(action="addons", service_id=service.id).pack(),
+                ),
+            ],
             [
                 InlineKeyboardButton(
                     text="✏️ Название",

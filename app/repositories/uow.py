@@ -22,6 +22,7 @@ from app.repositories.reference_media_repository import ReferenceMediaRepository
 from app.repositories.reservation_repository import ReservationRepository
 from app.repositories.review_repository import ReviewRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.repositories.service_addon_repository import ServiceAddonRepository
 from app.repositories.service_assignment_repository import ServiceAssignmentRepository
 from app.repositories.service_repository import ServiceRepository
 from app.repositories.settings_repository import SettingsRepository
@@ -47,6 +48,7 @@ class SqlAlchemyUnitOfWork:
         self.appointments = AppointmentRepository(self.session, business_id)
         self.notifications = NotificationRepository(self.session, business_id)
         self.services = ServiceRepository(self.session, business_id)
+        self.service_addons = ServiceAddonRepository(self.session, business_id)
         self.service_assignments = ServiceAssignmentRepository(self.session)
         self.schedules = ScheduleRepository(self.session)
         self.windows = WindowRepository(self.session, business_id)

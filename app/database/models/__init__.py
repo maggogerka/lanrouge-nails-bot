@@ -44,6 +44,7 @@ from app.database.models.privacy import (
 from app.database.models.review import Review, ReviewRevision
 from app.database.models.schedule import StaffScheduleException, StaffWeeklyInterval
 from app.database.models.service import Service
+from app.database.models.service_addon import AppointmentAddonSnapshot, ServiceAddon
 from app.database.models.service_assignment import ServiceCategory, StaffServiceAssignment
 from app.database.models.settings import BusinessSettings
 from app.database.models.user import User
@@ -52,6 +53,7 @@ from app.database.models.waitlist import WaitlistEntry, WaitlistNotification
 __all__ = [
     "AcquisitionSource",
     "Appointment",
+    "AppointmentAddonSnapshot",
     "AppointmentReferenceMedia",
     "AppointmentStatusHistory",
     "AuditLog",
@@ -87,6 +89,7 @@ __all__ = [
     "Review",
     "ReviewRevision",
     "Service",
+    "ServiceAddon",
     "ServiceCategory",
     "StaffInvitation",
     "StaffMember",

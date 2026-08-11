@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -12,12 +12,14 @@ from sqlalchemy.exc import IntegrityError
 
 from app.database.models import (
     Appointment,
+    AppointmentAddonSnapshot,
     AppointmentReferenceMedia,
     AppointmentStatusHistory,
     BusinessSettings,
     NotificationJob,
     Payment,
     Service,
+    ServiceAddon,
     User,
 )
 from app.database.models.commerce import BusinessPaymentSettings
@@ -68,7 +70,7 @@ from app.schemas.booking import (
 from app.schemas.features import FeatureName
 from app.schemas.payment import PaymentCreate, PaymentView
 from app.schemas.reservation import ReservationCreate
-from app.schemas.service import AdminActor, ServiceView
+from app.schemas.service import AdminActor, AppointmentAddonView, ServiceAddonView, ServiceView
 from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import ensure_admin
 from app.services.feature_guard import require_feature
@@ -156,6 +158,18 @@ class BookingService:
                 masters=masters,
             )
 
+    async def list_service_addons(
+        self, actor: ClientActor, service_id: int
+    ) -> list[ServiceAddonView]:
+        """Return only currently active additions for the selected base service."""
+
+        async with self._unit_of_work_factory() as unit_of_work:
+            await require_feature(unit_of_work, FeatureName.ONLINE_BOOKING)
+            await self._consented_client(unit_of_work, actor.telegram_id)
+            self._active_service(await unit_of_work.services.get(service_id))
+            rows = await unit_of_work.service_addons.list_active(service_id)
+            return [ServiceAddonView.model_validate(row) for row in rows]
+
     async def get_business_info(self, actor: ClientActor) -> BusinessInfo:
         async with self._unit_of_work_factory() as unit_of_work:
             await self._consented_client(unit_of_work, actor.telegram_id)
@@ -182,6 +196,7 @@ class BookingService:
         actor: ClientActor,
         service_id: int,
         *,
+        addon_ids: Sequence[int] = (),
         staff_member_id: int | None = None,
         local_date: date | None = None,
         now: datetime | None = None,
@@ -192,6 +207,12 @@ class BookingService:
             await self._consented_client(unit_of_work, actor.telegram_id)
             settings = await self._settings(unit_of_work)
             service = self._active_service(await unit_of_work.services.get(service_id))
+            addons = await self._selected_addons(
+                unit_of_work,
+                service.id,
+                addon_ids,
+                for_update=False,
+            )
             assignment_rows = await unit_of_work.service_assignments.list_bookable_assignments(
                 unit_of_work.business_id,
                 service.id,
@@ -233,9 +254,12 @@ class BookingService:
                     continue
                 if candidate_date.weekday() == 6 and not settings.allow_sunday:
                     continue
-                terms = self._effective_terms(
-                    service,
-                    eligible_assignments[window.staff_member_id],
+                terms = self._terms_with_addons(
+                    self._effective_terms(
+                        service,
+                        eligible_assignments[window.staff_member_id],
+                    ),
+                    addons,
                 )
                 if (
                     terms.duration_max_minutes * 60
@@ -256,10 +280,10 @@ class BookingService:
                         staff_member_id=window.staff_member_id,
                     )
                 if counts[capacity_key] < settings.max_appointments_per_day:
-                    terms = self._effective_terms(
-                        service,
-                        eligible_assignments[window.staff_member_id],
+                    base_terms = self._effective_terms(
+                        service, eligible_assignments[window.staff_member_id]
                     )
+                    terms = self._terms_with_addons(base_terms, addons)
                     available.append(
                         BookingWindowView(
                             id=window.id,
@@ -272,11 +296,14 @@ class BookingService:
                             duration_min_minutes=terms.duration_min_minutes,
                             duration_max_minutes=terms.duration_max_minutes,
                             prepayment_amount=self._prepayment_amount(terms),
+                            base_price=base_terms.price,
+                            addons_price=sum((addon.price for addon in addons), Decimal("0.00")),
                         )
                     )
 
             return BookingAvailability(
                 service=ServiceView.model_validate(service),
+                selected_addons=[ServiceAddonView.model_validate(addon) for addon in addons],
                 timezone=settings.timezone,
                 windows=available,
             )
@@ -360,7 +387,14 @@ class BookingService:
                     and window.start_at < master.schedule_paused_until
                 ):
                     raise BookingUnavailableError("Selected master is temporarily unavailable")
-                terms = self._effective_terms(service, assignment)
+                addons = await self._selected_addons(
+                    unit_of_work,
+                    service.id,
+                    values.addon_ids,
+                    for_update=True,
+                )
+                base_terms = self._effective_terms(service, assignment)
+                terms = self._terms_with_addons(base_terms, addons)
                 if not terms.online_booking_enabled:
                     raise BookingUnavailableError("Selected service is not available")
                 design = None
@@ -452,6 +486,22 @@ class BookingService:
                         client_comment=values.client_comment,
                     )
                 )
+                addon_snapshot_rows = [
+                    AppointmentAddonSnapshot(
+                        business_id=unit_of_work.business_id,
+                        appointment_id=appointment.id,
+                        service_addon_id=addon.id,
+                        name_snapshot=addon.name,
+                        description_snapshot=addon.description,
+                        price_snapshot=addon.price,
+                        duration_min_snapshot=addon.duration_min_minutes,
+                        duration_max_snapshot=addon.duration_max_minutes,
+                        position=position,
+                    )
+                    for position, addon in enumerate(addons)
+                ]
+                if addon_snapshot_rows:
+                    await unit_of_work.service_addons.add_snapshots(addon_snapshot_rows)
                 reference_rows = [
                     AppointmentReferenceMedia(
                         business_id=unit_of_work.business_id,
@@ -603,6 +653,7 @@ class BookingService:
                         "has_client_comment": values.client_comment is not None,
                         "design_reference_id": design.id if design is not None else None,
                         "reference_media_count": len(reference_rows),
+                        "addon_count": len(addon_snapshot_rows),
                     },
                     correlation_id=correlation_id,
                 )
@@ -626,6 +677,10 @@ class BookingService:
                     receipt=BookingReceipt(
                         appointment_id=appointment.id,
                         service_name=appointment.service_name_snapshot,
+                        base_price=base_terms.price,
+                        addons=[
+                            AppointmentAddonView.model_validate(row) for row in addon_snapshot_rows
+                        ],
                         master_name=appointment.master_name_snapshot,
                         price=appointment.price_snapshot,
                         duration_min_minutes=appointment.duration_min_snapshot,
@@ -715,6 +770,9 @@ class BookingService:
             ):
                 raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
             references = await unit_of_work.reference_media.list_active(appointment.id)
+            addon_snapshots = await unit_of_work.service_addons.list_snapshots(appointment.id)
+            if sorted(values.addon_ids) != sorted(row.service_addon_id for row in addon_snapshots):
+                raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
             safe_metadata = {
                 key: value
                 for key, value in payment.safe_metadata.items()
@@ -739,6 +797,12 @@ class BookingService:
                 receipt=BookingReceipt(
                     appointment_id=appointment.id,
                     service_name=appointment.service_name_snapshot,
+                    base_price=appointment.price_snapshot
+                    - sum(
+                        (row.price_snapshot for row in addon_snapshots),
+                        Decimal("0.00"),
+                    ),
+                    addons=[AppointmentAddonView.model_validate(row) for row in addon_snapshots],
                     master_name=appointment.master_name_snapshot,
                     price=appointment.price_snapshot,
                     duration_min_minutes=appointment.duration_min_snapshot,
@@ -963,6 +1027,48 @@ class BookingService:
                 is_active=bool(getattr(assignment, "is_active", False)),
             ),
         )
+
+    @staticmethod
+    def _terms_with_addons(
+        terms: EffectiveServiceTerms,
+        addons: Sequence[ServiceAddon],
+    ) -> EffectiveServiceTerms:
+        return EffectiveServiceTerms(
+            price=terms.price + sum((addon.price for addon in addons), Decimal("0.00")),
+            duration_min_minutes=terms.duration_min_minutes
+            + sum(addon.duration_min_minutes for addon in addons),
+            duration_max_minutes=terms.duration_max_minutes
+            + sum(addon.duration_max_minutes for addon in addons),
+            prepayment_amount=terms.prepayment_amount,
+            prepayment_percent=terms.prepayment_percent,
+            online_booking_enabled=terms.online_booking_enabled,
+        )
+
+    @staticmethod
+    async def _selected_addons(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        service_id: int,
+        addon_ids: Sequence[int],
+        *,
+        for_update: bool,
+    ) -> list[ServiceAddon]:
+        requested = list(addon_ids)
+        if len(requested) != len(set(requested)) or len(requested) > 20:
+            raise BookingUnavailableError("Выбран некорректный набор дополнительных услуг.")
+        if not requested:
+            return []
+        if for_update:
+            rows = await unit_of_work.service_addons.get_selected_for_update(service_id, requested)
+        else:
+            active = await unit_of_work.service_addons.list_active(service_id)
+            requested_set = set(requested)
+            rows = [row for row in active if row.id in requested_set]
+        if {row.id for row in rows} != set(requested):
+            raise BookingUnavailableError(
+                "Одна из дополнительных услуг больше недоступна. Выберите дополнения заново."
+            )
+        by_id = {row.id: row for row in rows}
+        return [by_id[addon_id] for addon_id in requested]
 
     def _required_payment_service(self, mode: PaymentMode) -> PaymentService:
         service = self._payment_services.get(mode)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Appointment, Service
+from app.database.models import Appointment, Service, ServiceAddon
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.repositories.scoped import TenantScopedRepository
 
@@ -52,6 +52,15 @@ class ServiceRepository(TenantScopedRepository):
             exists().where(
                 Appointment.service_id == service_id,
                 Appointment.business_id == self.business_id,
+            )
+        )
+        return bool(await self._session.scalar(statement))
+
+    async def has_addons(self, service_id: int) -> bool:
+        statement = select(
+            exists().where(
+                ServiceAddon.service_id == service_id,
+                ServiceAddon.business_id == self.business_id,
             )
         )
         return bool(await self._session.scalar(statement))

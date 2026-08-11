@@ -10,7 +10,7 @@ from aiogram.types import User as TelegramUser
 
 from app.schemas.service import AdminActor, ServiceView
 
-DURATION_RANGE = re.compile(r"^\s*(\d{1,4})\s*[-–—]\s*(\d{1,4})\s*$")
+DURATION_RANGE = re.compile(r"^\s*(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?\s*$")
 
 
 def actor_from_telegram(user: TelegramUser) -> AdminActor:
@@ -60,3 +60,16 @@ def parse_positive_minutes(raw: str | None) -> int | None:
         return None
     value = int(raw.strip())
     return value if 0 < value <= 24 * 60 else None
+
+
+def parse_duration(raw: str | None) -> tuple[int, int] | None:
+    """Accept either one exact duration or an inclusive minute range."""
+
+    match = DURATION_RANGE.fullmatch(raw or "")
+    if match is None:
+        return None
+    minimum = int(match.group(1))
+    maximum = int(match.group(2) or match.group(1))
+    if not 0 < minimum <= maximum <= 24 * 60:
+        return None
+    return minimum, maximum

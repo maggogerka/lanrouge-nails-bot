@@ -41,6 +41,7 @@ from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, Portfo
 EXPECTED_TABLES = {
     "acquisition_sources",
     "appointment_reference_media",
+    "appointment_addon_snapshots",
     "appointment_status_history",
     "appointments",
     "audit_logs",
@@ -76,6 +77,7 @@ EXPECTED_TABLES = {
     "review_revisions",
     "reviews",
     "service_categories",
+    "service_addons",
     "services",
     "staff_invitations",
     "staff_members",

@@ -9,8 +9,8 @@ from aiogram.types import CallbackQuery, Message
 from pydantic import ValidationError
 
 from app.handlers.admin.service_common import (
-    DURATION_RANGE,
     actor_from_telegram,
+    parse_duration,
     parse_price,
     render_service,
 )
@@ -95,7 +95,7 @@ async def begin_edit_duration(
         state,
         callback_data.service_id,
         AdminServiceEdit.duration,
-        "Введите диапазон минут через дефис, например 120-180:",
+        "Введите точную длительность или диапазон минут, например 60 или 60-90:",
     )
 
 
@@ -198,11 +198,11 @@ async def finish_edit_duration(
     correlation_id: str,
     menu_service: MenuService,
 ) -> None:
-    match = DURATION_RANGE.fullmatch(message.text or "")
-    if match is None:
-        await message.answer("Используйте формат 120-180.")
+    duration = parse_duration(message.text)
+    if duration is None:
+        await message.answer("Используйте формат 60 или 60-90.")
         return
-    minimum, maximum = (int(value) for value in match.groups())
+    minimum, maximum = duration
     try:
         patch = ServicePatch(
             duration_min_minutes=minimum,

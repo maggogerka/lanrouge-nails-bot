@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from app.domain.booking import normalize_phone
 from app.domain.enums import AppointmentStatus, MediaType, PaymentMode, PaymentStatus
-from app.schemas.service import ServiceView
+from app.schemas.service import AppointmentAddonView, ServiceAddonView, ServiceView
 
 
 class ClientActor(BaseModel):
@@ -63,6 +63,8 @@ class BookingWindowView(BaseModel):
     duration_min_minutes: int | None = None
     duration_max_minutes: int | None = None
     prepayment_amount: Decimal | None = None
+    base_price: Decimal | None = None
+    addons_price: Decimal = Decimal("0.00")
 
 
 class BookableMasterView(BaseModel):
@@ -87,6 +89,7 @@ class BookingAvailability(BaseModel):
     """One service and all currently selectable matching windows."""
 
     service: ServiceView
+    selected_addons: list[ServiceAddonView] = Field(default_factory=list)
     timezone: str
     windows: list[BookingWindowView]
 
@@ -113,6 +116,9 @@ class BookingRequest(BaseModel):
     """Final client-entered values submitted for transactional revalidation."""
 
     service_id: Annotated[int, Field(gt=0)]
+    addon_ids: Annotated[list[Annotated[int, Field(gt=0)]], Field(max_length=20)] = Field(
+        default_factory=list
+    )
     window_id: Annotated[int, Field(gt=0)]
     staff_member_id: Annotated[int, Field(gt=0)] | None = None
     client_name: Annotated[str, Field(min_length=1, max_length=255)]
@@ -160,12 +166,21 @@ class BookingRequest(BaseModel):
             raise ValueError("checkout idempotency key contains unsupported characters")
         return value
 
+    @field_validator("addon_ids")
+    @classmethod
+    def addon_ids_are_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("add-on ids must be unique")
+        return value
+
 
 class BookingReceipt(BaseModel):
     """Committed booking details safe to render to the client or administrator."""
 
     appointment_id: int
     service_name: str
+    base_price: Decimal | None = None
+    addons: list[AppointmentAddonView] = Field(default_factory=list)
     master_name: str | None = None
     price: Decimal
     duration_min_minutes: int

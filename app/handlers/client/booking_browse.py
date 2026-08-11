@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -13,10 +14,13 @@ from app.domain.errors import DomainError
 from app.handlers.client.booking_common import available_dates
 from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.booking import (
+    BookingAddonCallback,
     BookingCallback,
+    addons_keyboard,
     booking_navigation_keyboard,
     dates_keyboard,
     masters_keyboard,
+    service_card_keyboard,
     services_keyboard,
     windows_keyboard,
 )
@@ -63,7 +67,29 @@ async def start_booking(
         await message.answer("Сейчас нет активных услуг для записи.")
         return
     await state.set_state(BookingFlow.service)
-    await message.answer("Выберите услугу:", reply_markup=services_keyboard(services))
+    await message.answer("Выберите услугу:")
+    for service in services:
+        description = escape(service.description or "Описание не добавлено.")
+        duration = (
+            f"{service.duration_min_minutes} мин."
+            if service.duration_min_minutes == service.duration_max_minutes
+            else f"{service.duration_min_minutes}–{service.duration_max_minutes} мин."
+        )
+        text = (
+            f"<b>{escape(service.name)}</b>\n"
+            f"{description}\n"
+            f"Стоимость: {service.price:.2f} ₽\n"
+            f"Длительность: {duration}"
+        )
+        keyboard = service_card_keyboard(service.id)
+        if service.telegram_photo_file_id:
+            await message.answer_photo(
+                service.telegram_photo_file_id,
+                caption=text[:1024],
+                reply_markup=keyboard,
+            )
+        else:
+            await message.answer(text[:4096], reply_markup=keyboard)
 
 
 @router.message(F.text == CLIENT_BOOK_TEXT)
@@ -104,9 +130,88 @@ async def select_service(
     presentation_service: PresentationService,
 ) -> None:
     try:
+        addons = await booking_service.list_service_addons(
+            actor_from_telegram(callback.from_user), callback_data.object_id
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.update_data(
+        service_id=callback_data.object_id,
+        addon_ids=[],
+        addons_shown=bool(addons),
+    )
+    if addons:
+        await state.set_state(BookingFlow.addons)
+        if isinstance(callback.message, Message):
+            await callback.message.answer(
+                "Выберите дополнительные услуги или нажмите «Пропустить»:",
+                reply_markup=addons_keyboard(addons, set()),
+            )
+        await callback.answer()
+        return
+    await _continue_after_addons(
+        callback,
+        state,
+        booking_service,
+        presentation_service,
+        callback_data.object_id,
+    )
+
+
+@router.callback_query(BookingFlow.addons, BookingAddonCallback.filter())
+async def select_addons(
+    callback: CallbackQuery,
+    callback_data: BookingAddonCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+    presentation_service: PresentationService,
+) -> None:
+    data = await state.get_data()
+    try:
+        service_id = int(str(data["service_id"]))
+        addons = await booking_service.list_service_addons(
+            actor_from_telegram(callback.from_user), service_id
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    valid_ids = {addon.id for addon in addons}
+    selected = {
+        value
+        for value in data.get("addon_ids", [])
+        if isinstance(value, int) and value in valid_ids
+    }
+    if callback_data.action == "toggle":
+        if callback_data.addon_id not in valid_ids:
+            await callback.answer("Дополнительная услуга больше недоступна.", show_alert=True)
+            return
+        if callback_data.addon_id in selected:
+            selected.remove(callback_data.addon_id)
+        else:
+            selected.add(callback_data.addon_id)
+        await state.update_data(addon_ids=[addon.id for addon in addons if addon.id in selected])
+        if isinstance(callback.message, Message):
+            await callback.message.edit_reply_markup(reply_markup=addons_keyboard(addons, selected))
+        await callback.answer("Выбор обновлён.")
+        return
+    if callback_data.action != "continue":
+        await callback.answer("Эта кнопка устарела.", show_alert=True)
+        return
+    await state.update_data(addon_ids=[addon.id for addon in addons if addon.id in selected])
+    await _continue_after_addons(callback, state, booking_service, presentation_service, service_id)
+
+
+async def _continue_after_addons(
+    callback: CallbackQuery,
+    state: FSMContext,
+    booking_service: BookingService,
+    presentation_service: PresentationService,
+    service_id: int,
+) -> None:
+    try:
         options = await booking_service.list_bookable_masters(
-            actor_from_telegram(callback.from_user),
-            callback_data.object_id,
+            actor_from_telegram(callback.from_user), service_id
         )
         business = await presentation_service.get_business()
     except DomainError as exc:
@@ -116,16 +221,17 @@ async def select_service(
         await callback.answer("Для этой услуги пока нет доступных мастеров.", show_alert=True)
         return
     show_selection = should_show_master_selection(business.business_type, options)
-    await state.update_data(
-        service_id=callback_data.object_id,
-        master_selection_shown=show_selection,
-    )
+    await state.update_data(master_selection_shown=show_selection)
     if show_selection:
         await state.set_state(BookingFlow.master)
         if isinstance(callback.message, Message):
-            await callback.message.edit_text(
+            data = await state.get_data()
+            await callback.message.answer(
                 "Выберите мастера или доверьте выбор нам:",
-                reply_markup=masters_keyboard(options.masters),
+                reply_markup=masters_keyboard(
+                    options.masters,
+                    back_action=("back_addons" if data.get("addons_shown") else "back_services"),
+                ),
             )
         await callback.answer()
         return
@@ -135,11 +241,45 @@ async def select_service(
         callback,
         state,
         booking_service,
-        callback_data.object_id,
+        service_id,
         selected_staff_id,
     )
     if should_answer:
         await callback.answer()
+
+
+@router.callback_query(BookingCallback.filter(F.action == "back_addons"))
+async def return_to_addons(
+    callback: CallbackQuery,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    data = await state.get_data()
+    try:
+        service_id = int(str(data["service_id"]))
+        addons = await booking_service.list_service_addons(
+            actor_from_telegram(callback.from_user), service_id
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not addons:
+        await callback.answer("Дополнительные услуги больше недоступны.", show_alert=True)
+        return
+    valid_ids = {addon.id for addon in addons}
+    selected = {
+        value
+        for value in data.get("addon_ids", [])
+        if isinstance(value, int) and value in valid_ids
+    }
+    await state.update_data(addon_ids=[addon.id for addon in addons if addon.id in selected])
+    await state.set_state(BookingFlow.addons)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Выберите дополнительные услуги:",
+            reply_markup=addons_keyboard(addons, selected),
+        )
+    await callback.answer()
 
 
 @router.callback_query(
@@ -195,6 +335,7 @@ async def _show_dates(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(await state.get_data()),
             staff_member_id=staff_member_id,
         )
     except DomainError as exc:
@@ -209,13 +350,14 @@ async def _show_dates(
             )
         return True
     data = await state.get_data()
-    back_action = "back_masters" if data.get("master_selection_shown") else "back_services"
+    back_action = _selection_back_action(data)
     await state.set_state(BookingFlow.date)
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "Выберите дату:",
-            reply_markup=dates_keyboard(dates, back_action=back_action),
-        )
+        keyboard = dates_keyboard(dates, back_action=back_action)
+        if callback.message.photo:
+            await callback.message.answer("Выберите дату:", reply_markup=keyboard)
+        else:
+            await callback.message.edit_text("Выберите дату:", reply_markup=keyboard)
     return True
 
 
@@ -244,7 +386,10 @@ async def return_to_masters(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             "Выберите мастера или доверьте выбор нам:",
-            reply_markup=masters_keyboard(options.masters),
+            reply_markup=masters_keyboard(
+                options.masters,
+                back_action=("back_addons" if data.get("addons_shown") else "back_services"),
+            ),
         )
     await callback.answer()
 
@@ -269,6 +414,7 @@ async def select_date(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(data),
             staff_member_id=staff_member_id,
             local_date=local_date,
         )
@@ -303,6 +449,7 @@ async def return_to_dates(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(data),
             staff_member_id=staff_member_id,
         )
     except (DomainError, KeyError, ValueError) as exc:
@@ -310,7 +457,7 @@ async def return_to_dates(
         return
     await state.set_state(BookingFlow.date)
     if isinstance(callback.message, Message):
-        back_action = "back_masters" if data.get("master_selection_shown") else "back_services"
+        back_action = _selection_back_action(data)
         await callback.message.edit_text(
             "Выберите дату:",
             reply_markup=dates_keyboard(
@@ -341,6 +488,7 @@ async def select_window(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(data),
             staff_member_id=staff_member_id,
             local_date=local_date,
         )
@@ -359,3 +507,18 @@ async def select_window(
             reply_markup=booking_navigation_keyboard(),
         )
     await callback.answer()
+
+
+def _addon_ids(data: dict[str, object]) -> list[int]:
+    raw = data.get("addon_ids", [])
+    if not isinstance(raw, list):
+        return []
+    return [value for value in raw if isinstance(value, int) and value > 0]
+
+
+def _selection_back_action(data: dict[str, object]) -> str:
+    if data.get("master_selection_shown"):
+        return "back_masters"
+    if data.get("addons_shown"):
+        return "back_addons"
+    return "back_services"

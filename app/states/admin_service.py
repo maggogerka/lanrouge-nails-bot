@@ -22,3 +22,20 @@ class AdminServiceEdit(StatesGroup):
     price = State()
     duration = State()
     prepayment = State()
+    photo = State()
+
+
+class AdminAddonCreate(StatesGroup):
+    name = State()
+    description = State()
+    price = State()
+    duration = State()
+    photo = State()
+
+
+class AdminAddonEdit(StatesGroup):
+    name = State()
+    description = State()
+    price = State()
+    duration = State()
+    photo = State()

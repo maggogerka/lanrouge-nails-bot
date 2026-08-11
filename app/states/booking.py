@@ -7,6 +7,7 @@ PENDING_MARKETING_BOOKING_KEY = "pending_marketing_booking"
 
 class BookingFlow(StatesGroup):
     service = State()
+    addons = State()
     master = State()
     date = State()
     window = State()

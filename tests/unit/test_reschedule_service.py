@@ -11,6 +11,7 @@ import pytest
 
 from app.database.models import (
     Appointment,
+    AppointmentAddonSnapshot,
     AvailabilityWindow,
     BusinessSettings,
     StaffMember,
@@ -151,6 +152,8 @@ def build_uow(
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()
     unit_of_work.reference_media.move_active = AsyncMock(return_value=2)
+    unit_of_work.service_addons.list_snapshots = AsyncMock(return_value=[])
+    unit_of_work.service_addons.add_snapshots = AsyncMock(return_value=[])
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
@@ -169,6 +172,19 @@ async def test_client_reschedule_inside_deadline_is_blocked() -> None:
 @pytest.mark.asyncio
 async def test_reschedule_atomically_switches_windows_and_preserves_snapshot() -> None:
     unit_of_work, old, old_window, new_window = build_uow()
+    addon_snapshot = AppointmentAddonSnapshot(
+        id=20,
+        business_id=1,
+        appointment_id=old.id,
+        service_addon_id=30,
+        name_snapshot="Историческое дополнение",
+        description_snapshot=None,
+        price_snapshot=Decimal("500.00"),
+        duration_min_snapshot=30,
+        duration_max_snapshot=45,
+        position=0,
+    )
+    unit_of_work.service_addons.list_snapshots = AsyncMock(return_value=[addon_snapshot])
     service = RescheduleService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
 
     receipt = await service.reschedule_my(
@@ -180,12 +196,16 @@ async def test_reschedule_atomically_switches_windows_and_preserves_snapshot() -
     )
 
     assert receipt.appointment_id == 12
+    assert receipt.addons[0].name_snapshot == "Историческое дополнение"
     assert old.status is AppointmentStatus.RESCHEDULED
     assert old_window.status is AvailabilityWindowStatus.OPEN
     assert new_window.status is AvailabilityWindowStatus.BOOKED
     created = unit_of_work.appointments.add.await_args.args[0]
     assert created.rescheduled_from_id == 11
     assert created.price_snapshot == Decimal("2500.00")
+    cloned = unit_of_work.service_addons.add_snapshots.await_args.args[0]
+    assert cloned[0].appointment_id == 12
+    assert cloned[0].price_snapshot == Decimal("500.00")
     assert unit_of_work.appointments.add_history.await_count == 2
     unit_of_work.notifications.cancel_unsent.assert_awaited_once_with(11)
     assert unit_of_work.notifications.add_all.await_args.args[0]

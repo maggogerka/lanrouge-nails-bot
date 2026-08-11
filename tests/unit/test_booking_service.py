@@ -15,6 +15,7 @@ from app.database.models import (
     BusinessSettings,
     PortfolioItem,
     Service,
+    ServiceAddon,
     StaffMember,
     StaffServiceAssignment,
     User,
@@ -122,6 +123,21 @@ def request() -> BookingRequest:
     )
 
 
+def addon(*, addon_id: int = 41, service_id: int = 3, duration: int = 30) -> ServiceAddon:
+    return ServiceAddon(
+        id=addon_id,
+        business_id=1,
+        service_id=service_id,
+        name="Укрепление",
+        description="Дополнительный этап",
+        price=Decimal("500.00"),
+        duration_min_minutes=duration,
+        duration_max_minutes=duration,
+        sort_order=0,
+        is_active=True,
+    )
+
+
 def build_uow(
     *,
     target_window: AvailabilityWindow | None = None,
@@ -181,6 +197,10 @@ def build_uow(
     )
     unit_of_work.services.get = AsyncMock(return_value=target_service)
     unit_of_work.services.list_active = AsyncMock(return_value=[target_service])
+    unit_of_work.service_addons.list_active = AsyncMock(return_value=[])
+    unit_of_work.service_addons.get_selected_for_update = AsyncMock(return_value=[])
+    unit_of_work.service_addons.add_snapshots = AsyncMock(return_value=[])
+    unit_of_work.service_addons.list_snapshots = AsyncMock(return_value=[])
     unit_of_work.portfolio.get = AsyncMock(return_value=None)
     unit_of_work.appointments.count_capacity_between = AsyncMock(return_value=0)
     unit_of_work.windows.list_open_between = AsyncMock(return_value=[target_window])
@@ -209,6 +229,56 @@ def build_uow(
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
+
+
+@pytest.mark.asyncio
+async def test_selected_addons_are_summed_and_snapshotted() -> None:
+    unit_of_work = build_uow()
+    selected = addon()
+    unit_of_work.service_addons.list_active = AsyncMock(return_value=[selected])
+    unit_of_work.service_addons.get_selected_for_update = AsyncMock(return_value=[selected])
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    availability = await booking.list_availability(actor(), 3, addon_ids=[selected.id], now=NOW)
+    receipt = await booking.book(
+        actor(), request().model_copy(update={"addon_ids": [selected.id]}), now=NOW
+    )
+
+    assert availability.windows[0].price == Decimal("3000.00")
+    assert availability.windows[0].duration_min_minutes == 150
+    assert availability.windows[0].duration_max_minutes == 210
+    assert receipt.base_price == Decimal("2500.00")
+    assert receipt.price == Decimal("3000.00")
+    assert receipt.duration_min_minutes == 150
+    assert receipt.duration_max_minutes == 210
+    assert [item.service_addon_id for item in receipt.addons] == [selected.id]
+    snapshots = unit_of_work.service_addons.add_snapshots.await_args.args[0]
+    assert snapshots[0].name_snapshot == "Укрепление"
+    assert snapshots[0].price_snapshot == Decimal("500.00")
+
+
+@pytest.mark.asyncio
+async def test_foreign_or_archived_addon_callback_is_rejected_server_side() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.service_addons.list_active = AsyncMock(return_value=[])
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(BookingUnavailableError, match="больше недоступна"):
+        await booking.list_availability(actor(), 3, addon_ids=[999], now=NOW)
+
+    unit_of_work.appointments.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_addon_maximum_duration_must_fit_window() -> None:
+    unit_of_work = build_uow()
+    selected = addon(duration=31)
+    unit_of_work.service_addons.list_active = AsyncMock(return_value=[selected])
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    availability = await booking.list_availability(actor(), 3, addon_ids=[selected.id], now=NOW)
+
+    assert availability.windows == []
 
 
 def configure_payment_checkout(

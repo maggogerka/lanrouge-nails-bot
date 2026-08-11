@@ -101,6 +101,7 @@ async def booking_back_message(
             availability = await booking_service.list_availability(
                 actor_from_telegram(message.from_user),
                 service_id,
+                addon_ids=_addon_ids(data),
                 staff_member_id=staff_member_id,
                 local_date=local_date,
             )
@@ -297,6 +298,7 @@ async def _show_booking_confirmation(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(data),
             staff_member_id=staff_member_id,
             local_date=local_date,
         )
@@ -322,6 +324,7 @@ async def _show_booking_confirmation(
                 availability.service,
                 window,
                 info,
+                addons=availability.selected_addons,
                 client_name=client_name,
                 design_title=(
                     str(data["design_title"]) if data.get("design_title") is not None else None
@@ -380,6 +383,7 @@ async def confirm_booking(
             )
         request = BookingRequest(
             service_id=data["service_id"],
+            addon_ids=_addon_ids(data),
             window_id=data["window_id"],
             staff_member_id=data.get("staff_member_id"),
             client_name=data["client_name"],
@@ -481,6 +485,7 @@ async def _show_dates_after_conflict(
         availability = await booking_service.list_availability(
             actor_from_telegram(callback.from_user),
             service_id,
+            addon_ids=_addon_ids(data),
             staff_member_id=staff_member_id,
         )
     except (DomainError, KeyError, ValueError):
@@ -489,7 +494,13 @@ async def _show_dates_after_conflict(
         return
     await state.set_state(BookingFlow.date)
     if isinstance(callback.message, Message):
-        back_action = "back_masters" if data.get("master_selection_shown") else "back_services"
+        back_action = (
+            "back_masters"
+            if data.get("master_selection_shown")
+            else "back_addons"
+            if data.get("addons_shown")
+            else "back_services"
+        )
         await callback.message.edit_text(
             message + "\n\nВыберите другую дату:",
             reply_markup=dates_keyboard(
@@ -498,3 +509,10 @@ async def _show_dates_after_conflict(
             ),
         )
     await callback.answer(message, show_alert=True)
+
+
+def _addon_ids(data: dict[str, object]) -> list[int]:
+    raw = data.get("addon_ids", [])
+    if not isinstance(raw, list):
+        return []
+    return [value for value in raw if isinstance(value, int) and value > 0]
