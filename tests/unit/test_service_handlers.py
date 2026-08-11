@@ -9,7 +9,11 @@ from app.handlers.admin.service_common import (
     render_service,
 )
 from app.keyboards.admin.main import ADMIN_SERVICES_TEXT, admin_main_keyboard
-from app.keyboards.admin.services import ServiceCallback, service_details_keyboard
+from app.keyboards.admin.services import (
+    ServiceCallback,
+    service_details_keyboard,
+    service_list_keyboard,
+)
 from app.schemas.authorization import StaffContext
 from app.schemas.service import ServiceView
 
@@ -66,5 +70,18 @@ def test_admin_services_button_sends_handler_text_without_hidden_whitespace() ->
     keyboard = admin_main_keyboard(staff_context=context)
     button_texts = {button.text for row in keyboard.keyboard for button in row}
 
-    assert ADMIN_SERVICES_TEXT == "Услуги"
+    assert ADMIN_SERVICES_TEXT == "🛠 Услуги"
     assert ADMIN_SERVICES_TEXT in button_texts
+
+
+def test_service_list_can_show_and_hide_archived_rows() -> None:
+    active = service_view()
+    archived = active.model_copy(update={"is_active": False})
+
+    visible = service_list_keyboard([active], include_archived=False)
+    with_archive = service_list_keyboard([active, archived], include_archived=True)
+
+    assert any("Показать архив" in button.text for row in visible.inline_keyboard for button in row)
+    assert any(
+        "Скрыть архив" in button.text for row in with_archive.inline_keyboard for button in row
+    )

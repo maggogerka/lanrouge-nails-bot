@@ -5,7 +5,10 @@ from decimal import Decimal
 
 from app.domain.enums import AppointmentStatus
 from app.handlers.admin.appointment_common import render_admin_appointment
-from app.keyboards.admin.appointments import AdminAppointmentCallback
+from app.keyboards.admin.appointments import (
+    AdminAppointmentCallback,
+    admin_appointment_list_keyboard,
+)
 from app.keyboards.admin.settings import SettingsCallback, settings_keyboard
 from app.keyboards.client.appointments import AppointmentCallback
 from app.schemas.appointment import AdminAppointmentView
@@ -77,3 +80,23 @@ def test_appointment_and_settings_callbacks_fit_telegram_limit() -> None:
     assert len(admin.encode()) <= 64
     assert len(setting.encode()) <= 64
     assert settings_keyboard(settings_view()).inline_keyboard
+
+
+def test_admin_upcoming_keyboard_is_grouped_as_calendar_agenda() -> None:
+    first = admin_appointment()
+    second = first.model_copy(
+        update={
+            "id": 12,
+            "start_at": datetime(2026, 7, 24, 8, tzinfo=UTC),
+            "end_at": datetime(2026, 7, 24, 9, tzinfo=UTC),
+            "client_name": "Мария",
+        }
+    )
+
+    keyboard = admin_appointment_list_keyboard([second, first], list_action="upcoming")
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert labels[0] == "📅 Чт, 23 июля · 1 запись"
+    assert "10:00 · Анна & Ко · Консультация <premium>" in labels[1]
+    assert labels[2] == "📅 Пт, 24 июля · 1 запись"
+    assert labels[-1] == "🔄 Обновить календарь"

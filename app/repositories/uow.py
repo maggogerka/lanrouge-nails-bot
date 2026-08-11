@@ -13,6 +13,7 @@ from app.repositories.broadcast_repository import BroadcastRepository
 from app.repositories.business_repository import BusinessRepository
 from app.repositories.crm_repository import CrmRepository
 from app.repositories.feature_repository import FeatureRepository
+from app.repositories.hard_delete_repository import HardDeleteRepository
 from app.repositories.master_profile_repository import MasterProfileRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.payment_repository import PaymentRepository
@@ -62,6 +63,7 @@ class SqlAlchemyUnitOfWork:
         self.reference_media = ReferenceMediaRepository(self.session, business_id)
         self.crm = CrmRepository(self.session, business_id)
         self.features = FeatureRepository(self.session, business_id)
+        self.hard_delete = HardDeleteRepository(self.session, business_id)
         self.master_profile = MasterProfileRepository(self.session, business_id)
         self.waitlist = WaitlistRepository(self.session, business_id)
         self.reviews = ReviewRepository(self.session, business_id)

@@ -5,17 +5,19 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
-from app.domain.errors import EntityNotFoundError, ServiceInUseError
+from app.domain.errors import DomainError, EntityNotFoundError, ServiceInUseError
 from app.handlers.admin.service_common import actor_from_telegram, render_service
 from app.keyboards.admin.main import ADMIN_SERVICES_TEXT
 from app.keyboards.admin.services import (
     ServiceCallback,
     delete_confirmation_keyboard,
+    force_delete_confirmation_keyboard,
     service_details_keyboard,
     service_list_keyboard,
 )
 from app.schemas.service import AdminActor
 from app.services.service_catalog import ServiceCatalog
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.service_browse")
 
@@ -25,9 +27,12 @@ async def show_list_message(
     catalog: ServiceCatalog,
     actor: AdminActor,
 ) -> None:
-    services = await catalog.list_services(actor)
-    text = "Услуг пока нет." if not services else "Услуги: ✅ активна, ⏸ скрыта."
-    await message.answer(text, reply_markup=service_list_keyboard(services))
+    services = await catalog.list_services(actor, include_archived=False)
+    text = "Активных услуг пока нет." if not services else "🛠 Активные услуги:"
+    await message.answer(
+        text,
+        reply_markup=service_list_keyboard(services, include_archived=False),
+    )
 
 
 async def show_list_callback(
@@ -35,13 +40,25 @@ async def show_list_callback(
     catalog: ServiceCatalog,
     actor: AdminActor,
     *,
+    include_archived: bool = False,
     answer_text: str | None = None,
 ) -> None:
-    services = await catalog.list_services(actor)
-    text = "Услуг пока нет." if not services else "Услуги: ✅ активна, ⏸ скрыта."
+    services = await catalog.list_services(actor, include_archived=include_archived)
+    if include_archived:
+        text = "Услуг пока нет." if not services else "🛠 Все услуги: ✅ активна, ⏸ архив."
+    else:
+        text = "Активных услуг пока нет." if not services else "🛠 Активные услуги:"
+    changed = True
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(text, reply_markup=service_list_keyboard(services))
-    await callback.answer(answer_text)
+        changed = await edit_text_safely(
+            callback.message,
+            text,
+            reply_markup=service_list_keyboard(
+                services,
+                include_archived=include_archived,
+            ),
+        )
+    await callback.answer(answer_text or (None if changed else "Список уже актуален."))
 
 
 async def show_details_callback(
@@ -63,7 +80,7 @@ async def show_details_callback(
     await callback.answer()
 
 
-@router.message(F.text == ADMIN_SERVICES_TEXT)
+@router.message(F.text.in_({ADMIN_SERVICES_TEXT, "Услуги"}))
 async def show_service_list(message: Message, service_catalog: ServiceCatalog) -> None:
     if message.from_user is None:
         return
@@ -79,6 +96,19 @@ async def show_service_list_callback(
         callback,
         service_catalog,
         actor_from_telegram(callback.from_user),
+    )
+
+
+@router.callback_query(ServiceCallback.filter(F.action == "list_archived"))
+async def show_archived_service_list_callback(
+    callback: CallbackQuery,
+    service_catalog: ServiceCatalog,
+) -> None:
+    await show_list_callback(
+        callback,
+        service_catalog,
+        actor_from_telegram(callback.from_user),
+        include_archived=True,
     )
 
 
@@ -128,7 +158,9 @@ async def prompt_service_deletion(
 ) -> None:
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "Удалить услугу физически можно только если она никогда не использовалась. Продолжить?",
+            "Обычное удаление доступно только для неиспользованной услуги без дополнений. "
+            "Принудительное удаление также удалит связанные записи, оплаты, отзывы, "
+            "ожидание и дополнения.",
             reply_markup=delete_confirmation_keyboard(callback_data.service_id),
         )
     await callback.answer()
@@ -158,4 +190,43 @@ async def confirm_service_deletion(
         service_catalog,
         actor_from_telegram(callback.from_user),
         answer_text="Услуга удалена.",
+    )
+
+
+@router.callback_query(ServiceCallback.filter(F.action == "force_delete_prompt"))
+async def prompt_force_service_deletion(
+    callback: CallbackQuery,
+    callback_data: ServiceCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "⚠️ Последнее подтверждение. Услуга и вся связанная история будут удалены "
+            "безвозвратно. Продолжить?",
+            reply_markup=force_delete_confirmation_keyboard(callback_data.service_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(ServiceCallback.filter(F.action == "force_delete_confirm"))
+async def confirm_force_service_deletion(
+    callback: CallbackQuery,
+    callback_data: ServiceCallback,
+    service_catalog: ServiceCatalog,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    try:
+        deleted_appointments = await service_catalog.force_delete_service(
+            actor,
+            callback_data.service_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await show_list_callback(
+        callback,
+        service_catalog,
+        actor,
+        answer_text=f"Услуга удалена. Связанных записей удалено: {deleted_appointments}.",
     )

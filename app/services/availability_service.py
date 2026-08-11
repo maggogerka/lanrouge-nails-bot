@@ -26,7 +26,7 @@ from app.schemas.availability import (
     AvailabilityWindowView,
 )
 from app.schemas.service import AdminActor
-from app.services.appointment_common import ensure_admin
+from app.services.appointment_common import ensure_admin, ensure_owner_admin
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -47,13 +47,17 @@ class AvailabilityService:
         self,
         actor: AdminActor,
         *,
+        include_archived: bool = False,
         now: datetime | None = None,
     ) -> AvailabilityWindowList:
         self._ensure_admin(actor)
         current_time = self._aware_now(now)
         async with self._unit_of_work_factory() as unit_of_work:
             settings = await self._settings(unit_of_work)
-            windows = await unit_of_work.windows.list_upcoming(current_time)
+            windows = await unit_of_work.windows.list_upcoming(
+                current_time,
+                include_archived=include_archived,
+            )
             return AvailabilityWindowList(
                 timezone=settings.timezone,
                 windows=[self._view(window, settings.timezone) for window in windows],
@@ -287,6 +291,37 @@ class AvailabilityService:
             )
             await unit_of_work.windows.delete(window)
             await unit_of_work.commit()
+
+    async def force_delete_window(
+        self,
+        actor: AdminActor,
+        window_id: int,
+        *,
+        correlation_id: str | None = None,
+    ) -> int:
+        """Permanently remove a window and its appointment aggregate."""
+
+        ensure_owner_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            window = await self._window(unit_of_work, window_id, for_update=True)
+            before = self._audit_values(window)
+            deleted_appointments = await unit_of_work.hard_delete.delete_window_with_history(
+                window_id
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="availability_window.force_deleted",
+                entity_type="availability_window",
+                entity_id=str(window_id),
+                changes={
+                    "before": before,
+                    "deleted_appointments": deleted_appointments,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return deleted_appointments
 
     async def _lock_and_validate_active_interval(
         self,

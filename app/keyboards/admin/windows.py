@@ -18,7 +18,11 @@ class WindowCallback(CallbackData, prefix="win"):
     window_id: int
 
 
-def window_list_keyboard(windows: list[AvailabilityWindowView]) -> InlineKeyboardMarkup:
+def window_list_keyboard(
+    windows: list[AvailabilityWindowView],
+    *,
+    include_archived: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     status_markers = {
         AvailabilityWindowStatus.OPEN: "✅",
@@ -37,6 +41,17 @@ def window_list_keyboard(windows: list[AvailabilityWindowView]) -> InlineKeyboar
                 )
             ]
         )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🙈 Скрыть архив" if include_archived else "🗄 Показать архив",
+                callback_data=WindowCallback(
+                    action="list" if include_archived else "list_archived",
+                    window_id=0,
+                ).pack(),
+            )
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -68,21 +83,17 @@ def window_details_keyboard(window: AvailabilityWindowView) -> InlineKeyboardMar
                 )
             ]
         )
-    if window.status not in {
-        AvailabilityWindowStatus.RESERVED,
-        AvailabilityWindowStatus.BOOKED,
-    }:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🗑 Удалить",
-                    callback_data=WindowCallback(
-                        action="delete_prompt",
-                        window_id=window.id,
-                    ).pack(),
-                )
-            ]
-        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить",
+                callback_data=WindowCallback(
+                    action="delete_prompt",
+                    window_id=window.id,
+                ).pack(),
+            )
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -116,17 +127,50 @@ def delete_window_confirmation_keyboard(window_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Да, удалить",
+                    text="Удалить, если нет записей",
                     callback_data=WindowCallback(
                         action="delete_confirm",
                         window_id=window_id,
                     ).pack(),
                 ),
+            ],
+            [
                 InlineKeyboardButton(
-                    text="Нет",
+                    text="🔥 Удалить вместе с записью",
+                    callback_data=WindowCallback(
+                        action="force_delete_prompt",
+                        window_id=window_id,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
                     callback_data=WindowCallback(action="view", window_id=window_id).pack(),
                 ),
-            ]
+            ],
+        ]
+    )
+
+
+def force_delete_window_confirmation_keyboard(window_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔥 Да, удалить безвозвратно",
+                    callback_data=WindowCallback(
+                        action="force_delete_confirm",
+                        window_id=window_id,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет, вернуться",
+                    callback_data=WindowCallback(action="view", window_id=window_id).pack(),
+                )
+            ],
         ]
     )
 

@@ -19,7 +19,7 @@ from app.schemas.service import (
     ServicePatch,
     ServiceView,
 )
-from app.services.appointment_common import ensure_admin
+from app.services.appointment_common import ensure_admin, ensure_owner_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -35,10 +35,19 @@ class ServiceCatalog:
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
 
-    async def list_services(self, actor: AdminActor) -> list[ServiceView]:
+    async def list_services(
+        self,
+        actor: AdminActor,
+        *,
+        include_archived: bool = False,
+    ) -> list[ServiceView]:
         self._ensure_admin(actor)
         async with self._unit_of_work_factory() as unit_of_work:
-            services = await unit_of_work.services.list_all()
+            services = (
+                await unit_of_work.services.list_all()
+                if include_archived
+                else await unit_of_work.services.list_active()
+            )
             return [ServiceView.model_validate(service) for service in services]
 
     async def get_service(self, actor: AdminActor, service_id: int) -> ServiceView:
@@ -349,6 +358,37 @@ class ServiceCatalog:
             )
             await unit_of_work.services.delete(service)
             await unit_of_work.commit()
+
+    async def force_delete_service(
+        self,
+        actor: AdminActor,
+        service_id: int,
+        *,
+        correlation_id: str | None = None,
+    ) -> int:
+        """Permanently remove a service and every dependent booking aggregate."""
+
+        ensure_owner_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            service = await self._get_required(unit_of_work, service_id, for_update=True)
+            before = self._audit_values(service)
+            deleted_appointments = await unit_of_work.hard_delete.delete_service_with_history(
+                service_id
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="service.force_deleted",
+                entity_type="service",
+                entity_id=str(service_id),
+                changes={
+                    "before": before,
+                    "deleted_appointments": deleted_appointments,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return deleted_appointments
 
     def _ensure_admin(self, actor: AdminActor) -> None:
         ensure_admin(actor, self._admin_telegram_ids)

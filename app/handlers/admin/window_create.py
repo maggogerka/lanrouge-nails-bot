@@ -45,6 +45,7 @@ from app.services.date_picker_service import DatePickerPage, DatePickerService
 from app.services.menu_service import MenuService
 from app.services.settings_service import SettingsService
 from app.states.admin_window import AdminWindowCreate
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.window_create")
 logger = logging.getLogger(__name__)
@@ -79,11 +80,15 @@ async def begin_window_creation_message(
     message: Message,
     state: FSMContext,
     settings_service: SettingsService,
+    *,
+    actor: AdminActor | None = None,
 ) -> None:
     await state.clear()
-    if message.from_user is None:
-        return
-    settings = await settings_service.get(actor_from_telegram(message.from_user))
+    if actor is None:
+        if message.from_user is None:
+            return
+        actor = actor_from_telegram(message.from_user)
+    settings = await settings_service.get(actor)
     page = _build_date_page(settings)
     await state.set_state(AdminWindowCreate.local_date)
     await message.answer(_date_picker_text(page), reply_markup=date_picker_keyboard(page))
@@ -105,7 +110,12 @@ async def begin_window_creation_from_callback(
     settings_service: SettingsService,
 ) -> None:
     if isinstance(callback.message, Message):
-        await begin_window_creation_message(callback.message, state, settings_service)
+        await begin_window_creation_message(
+            callback.message,
+            state,
+            settings_service,
+            actor=actor_from_telegram(callback.from_user),
+        )
     await callback.answer()
 
 
@@ -151,12 +161,14 @@ async def handle_date_picker(
         selected = date.fromisoformat(callback_data.value)
         if callback_data.action == "page":
             page = _build_date_page(settings, requested_start=selected)
+            changed = True
             if isinstance(callback.message, Message):
-                await callback.message.edit_text(
+                changed = await edit_text_safely(
+                    callback.message,
                     _date_picker_text(page),
                     reply_markup=date_picker_keyboard(page),
                 )
-            await callback.answer()
+            await callback.answer(None if changed else "Показаны актуальные даты.")
             return
         if callback_data.action != "pick":
             raise DatePickerValidationError("Неизвестная команда календаря.")

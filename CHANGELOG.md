@@ -13,6 +13,12 @@
 ### Changed
 
 - navigation now recovers from active and stale FSM forms;
+- administrative services and availability windows hide archived rows by default and expose an
+  explicit archive toggle;
+- upcoming appointments are grouped by day as a calendar agenda, and the window date picker
+  selects today without attempting an identical Telegram edit;
+- verified owners can perform a separately confirmed aggregate hard delete for a service or
+  availability window;
 - manual prepayment lifecycle is transactional and concurrency safe;
 - staff roles, bootstrap ownership and solo/salon transitions are enforced in PostgreSQL;
 - runtime copy and test fixtures are vertical-neutral and white-label.

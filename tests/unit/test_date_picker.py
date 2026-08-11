@@ -102,6 +102,20 @@ def test_active_date_callback_contains_iso_value_and_fits_telegram_limit() -> No
     assert len((button.callback_data or "").encode()) <= 64
 
 
+def test_today_button_selects_today_instead_of_redrawing_same_page() -> None:
+    page = build(date(2026, 7, 27))
+    today_button = next(
+        button
+        for row in date_picker_keyboard(page).inline_keyboard
+        for button in row
+        if "Сегодня" in button.text
+    )
+    payload = DatePickerCallback.unpack(today_button.callback_data or "")
+
+    assert payload.action == "pick"
+    assert payload.value == "2026-07-27"
+
+
 def test_past_and_beyond_horizon_selections_are_rejected() -> None:
     today = date(2026, 7, 23)
 

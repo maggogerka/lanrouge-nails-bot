@@ -19,6 +19,7 @@ from app.keyboards.admin.main import ADMIN_TODAY_TEXT, ADMIN_UPCOMING_TEXT
 from app.schemas.appointment import AdminAppointmentView
 from app.services.appointment_service import AppointmentService
 from app.services.reference_cleanup_service import ReferenceCleanupService
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.appointment_browse")
 
@@ -39,15 +40,20 @@ async def _show_schedule(
     )
     label = "Записей на сегодня нет." if today else "Ближайших записей нет."
     if appointments:
-        label = "Записи на сегодня:" if today else "Ближайшие записи:"
+        label = (
+            "📅 Записи на сегодня по времени:"
+            if today
+            else "🗓 Ближайшие записи сгруппированы по дням:"
+        )
     keyboard = admin_appointment_list_keyboard(
         appointments,
         list_action="today" if today else "upcoming",
     )
     if isinstance(target, CallbackQuery):
+        changed = True
         if isinstance(target.message, Message):
-            await target.message.edit_text(label, reply_markup=keyboard)
-        await target.answer()
+            changed = await edit_text_safely(target.message, label, reply_markup=keyboard)
+        await target.answer(None if changed else "Расписание уже актуально.")
     else:
         await target.answer(label, reply_markup=keyboard)
 
@@ -80,6 +86,11 @@ async def show_upcoming_callback(
     appointment_service: AppointmentService,
 ) -> None:
     await _show_schedule(callback, appointment_service, today=False)
+
+
+@router.callback_query(AdminAppointmentCallback.filter(F.action == "day_label"))
+async def explain_schedule_day(callback: CallbackQuery) -> None:
+    await callback.answer("Выберите запись под этой датой.")
 
 
 async def _show_details(

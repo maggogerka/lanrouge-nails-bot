@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
+from app.domain.enums import StaffRole
 from app.domain.errors import AppointmentNotFoundError, AuthorizationError
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
 from app.schemas.service import AdminActor
@@ -30,6 +31,15 @@ def ensure_admin(actor: AdminActor, admin_telegram_ids: frozenset[int]) -> None:
         return
     if is_db_staff_authorization_required() or actor.telegram_id not in admin_telegram_ids:
         raise AuthorizationError("Administrative access denied")
+
+
+def ensure_owner_admin(actor: AdminActor, admin_telegram_ids: frozenset[int]) -> None:
+    """Restrict irreversible destructive actions to a verified business owner."""
+
+    ensure_admin(actor, admin_telegram_ids)
+    context = get_staff_context()
+    if context is not None and context.role is not StaffRole.OWNER:
+        raise AuthorizationError("Принудительное удаление доступно только владельцу бизнеса.")
 
 
 def ensure_owner(appointment: Appointment, client: User) -> None:

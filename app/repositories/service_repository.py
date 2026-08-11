@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from sqlalchemy import exists, select
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Appointment, Service, ServiceAddon
+from app.database.models import (
+    Appointment,
+    PortfolioItem,
+    Service,
+    ServiceAddon,
+    StaffServiceAssignment,
+)
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.repositories.scoped import TenantScopedRepository
 
@@ -67,5 +73,19 @@ class ServiceRepository(TenantScopedRepository):
 
     async def delete(self, service: Service) -> None:
         self._require_business(service.business_id)
+        await self._session.execute(
+            delete(StaffServiceAssignment).where(
+                StaffServiceAssignment.business_id == self.business_id,
+                StaffServiceAssignment.service_id == service.id,
+            )
+        )
+        await self._session.execute(
+            update(PortfolioItem)
+            .where(
+                PortfolioItem.business_id == self.business_id,
+                PortfolioItem.linked_service_id == service.id,
+            )
+            .values(linked_service_id=None)
+        )
         await self._session.delete(service)
         await self._session.flush()

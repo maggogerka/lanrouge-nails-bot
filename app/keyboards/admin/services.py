@@ -28,7 +28,11 @@ class ServiceAddonAdminCallback(CallbackData, prefix="svca"):
     addon_id: int = 0
 
 
-def service_list_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
+def service_list_keyboard(
+    services: list[ServiceView],
+    *,
+    include_archived: bool = False,
+) -> InlineKeyboardMarkup:
     """Show all services and an add action."""
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -46,6 +50,17 @@ def service_list_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
                 )
             ],
         )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🙈 Скрыть архив" if include_archived else "🗄 Показать архив",
+                callback_data=ServiceCallback(
+                    action="list" if include_archived else "list_archived",
+                    service_id=0,
+                ).pack(),
+            )
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -327,20 +342,58 @@ def delete_confirmation_keyboard(service_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Да, удалить",
+                    text="Удалить, если не использовалась",
                     callback_data=ServiceCallback(
                         action="delete_confirm",
                         service_id=service_id,
                     ).pack(),
                 ),
+            ],
+            [
                 InlineKeyboardButton(
-                    text="Нет",
+                    text="🔥 Удалить принудительно",
+                    callback_data=ServiceCallback(
+                        action="force_delete_prompt",
+                        service_id=service_id,
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
                     callback_data=ServiceCallback(
                         action="view",
                         service_id=service_id,
                     ).pack(),
                 ),
-            ]
+            ],
+        ]
+    )
+
+
+def force_delete_confirmation_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    """Require a separate final confirmation for aggregate deletion."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔥 Да, удалить безвозвратно",
+                    callback_data=ServiceCallback(
+                        action="force_delete_confirm",
+                        service_id=service_id,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет, вернуться",
+                    callback_data=ServiceCallback(
+                        action="view",
+                        service_id=service_id,
+                    ).pack(),
+                )
+            ],
         ]
     )
 

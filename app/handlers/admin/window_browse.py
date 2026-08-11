@@ -12,11 +12,13 @@ from app.keyboards.admin.main import ADMIN_WINDOWS_TEXT
 from app.keyboards.admin.windows import (
     WindowCallback,
     delete_window_confirmation_keyboard,
+    force_delete_window_confirmation_keyboard,
     window_details_keyboard,
     window_list_keyboard,
 )
 from app.schemas.service import AdminActor
 from app.services.availability_service import AvailabilityService
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.window_browse")
 
@@ -26,9 +28,12 @@ async def show_windows_message(
     service: AvailabilityService,
     actor: AdminActor,
 ) -> None:
-    schedule = await service.list_windows(actor)
-    text = "Будущих окон пока нет." if not schedule.windows else "Будущие окна:"
-    await message.answer(text, reply_markup=window_list_keyboard(schedule.windows))
+    schedule = await service.list_windows(actor, include_archived=False)
+    text = "Активных будущих окон пока нет." if not schedule.windows else "Активные окна:"
+    await message.answer(
+        text,
+        reply_markup=window_list_keyboard(schedule.windows, include_archived=False),
+    )
 
 
 async def show_windows_callback(
@@ -36,13 +41,25 @@ async def show_windows_callback(
     service: AvailabilityService,
     actor: AdminActor,
     *,
+    include_archived: bool = False,
     answer_text: str | None = None,
 ) -> None:
-    schedule = await service.list_windows(actor)
-    text = "Будущих окон пока нет." if not schedule.windows else "Будущие окна:"
+    schedule = await service.list_windows(actor, include_archived=include_archived)
+    if include_archived:
+        text = "Будущих окон пока нет." if not schedule.windows else "Все будущие окна:"
+    else:
+        text = "Активных будущих окон пока нет." if not schedule.windows else "Активные окна:"
+    changed = True
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(text, reply_markup=window_list_keyboard(schedule.windows))
-    await callback.answer(answer_text)
+        changed = await edit_text_safely(
+            callback.message,
+            text,
+            reply_markup=window_list_keyboard(
+                schedule.windows,
+                include_archived=include_archived,
+            ),
+        )
+    await callback.answer(answer_text or (None if changed else "Список уже актуален."))
 
 
 async def show_window_details_callback(
@@ -84,6 +101,19 @@ async def show_windows_from_callback(
         callback,
         availability_service,
         actor_from_telegram(callback.from_user),
+    )
+
+
+@router.callback_query(WindowCallback.filter(F.action == "list_archived"))
+async def show_archived_windows_from_callback(
+    callback: CallbackQuery,
+    availability_service: AvailabilityService,
+) -> None:
+    await show_windows_callback(
+        callback,
+        availability_service,
+        actor_from_telegram(callback.from_user),
+        include_archived=True,
     )
 
 
@@ -140,7 +170,9 @@ async def prompt_window_deletion(
 ) -> None:
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "Удалить это незанятое окно без возможности восстановления?",
+            "Обычное удаление доступно только для окна без записей. "
+            "Принудительное удаление безвозвратно удалит окно, связанные записи, "
+            "оплаты, отзывы и уведомления.",
             reply_markup=delete_window_confirmation_keyboard(callback_data.window_id),
         )
     await callback.answer()
@@ -168,4 +200,43 @@ async def confirm_window_deletion(
         availability_service,
         actor,
         answer_text="Окно удалено.",
+    )
+
+
+@router.callback_query(WindowCallback.filter(F.action == "force_delete_prompt"))
+async def prompt_force_window_deletion(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "⚠️ Последнее подтверждение. Окно и вся связанная с ним история будут "
+            "удалены безвозвратно. Продолжить?",
+            reply_markup=force_delete_window_confirmation_keyboard(callback_data.window_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(WindowCallback.filter(F.action == "force_delete_confirm"))
+async def confirm_force_window_deletion(
+    callback: CallbackQuery,
+    callback_data: WindowCallback,
+    availability_service: AvailabilityService,
+    correlation_id: str,
+) -> None:
+    actor = actor_from_telegram(callback.from_user)
+    try:
+        deleted_appointments = await availability_service.force_delete_window(
+            actor,
+            callback_data.window_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await show_windows_callback(
+        callback,
+        availability_service,
+        actor,
+        answer_text=f"Окно удалено. Связанных записей удалено: {deleted_appointments}.",
     )

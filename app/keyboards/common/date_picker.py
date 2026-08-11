@@ -38,9 +38,9 @@ def date_picker_keyboard(page: DatePickerPage) -> InlineKeyboardMarkup:
         [
             _navigation_button("◀️ Предыдущие даты", page.previous_start),
             InlineKeyboardButton(
-                text="Сегодня",
+                text="📍 Сегодня",
                 callback_data=DatePickerCallback(
-                    action="page",
+                    action="pick",
                     value=page.today.isoformat(),
                 ).pack(),
             ),

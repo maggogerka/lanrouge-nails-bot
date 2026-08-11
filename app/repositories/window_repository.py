@@ -18,6 +18,10 @@ _ACTIVE_STATUSES = (
     AvailabilityWindowStatus.RESERVED,
     AvailabilityWindowStatus.BOOKED,
 )
+_ARCHIVED_STATUSES = (
+    AvailabilityWindowStatus.CLOSED,
+    AvailabilityWindowStatus.EXPIRED,
+)
 
 
 class WindowRepository(TenantScopedRepository):
@@ -68,15 +72,21 @@ class WindowRepository(TenantScopedRepository):
         result = await self._session.scalars(statement)
         return list(result.all())
 
-    async def list_upcoming(self, now: datetime, *, limit: int = 50) -> list[AvailabilityWindow]:
+    async def list_upcoming(
+        self,
+        now: datetime,
+        *,
+        include_archived: bool = False,
+        limit: int = 50,
+    ) -> list[AvailabilityWindow]:
+        statement = select(AvailabilityWindow).where(
+            AvailabilityWindow.business_id == self.business_id,
+            AvailabilityWindow.start_at > now,
+        )
+        if not include_archived:
+            statement = statement.where(AvailabilityWindow.status.not_in(_ARCHIVED_STATUSES))
         result = await self._session.scalars(
-            select(AvailabilityWindow)
-            .where(
-                AvailabilityWindow.business_id == self.business_id,
-                AvailabilityWindow.start_at > now,
-            )
-            .order_by(AvailabilityWindow.start_at, AvailabilityWindow.id)
-            .limit(limit)
+            statement.order_by(AvailabilityWindow.start_at, AvailabilityWindow.id).limit(limit)
         )
         return list(result.all())
 
