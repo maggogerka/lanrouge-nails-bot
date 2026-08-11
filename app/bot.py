@@ -19,6 +19,7 @@ from app.handlers import root_router
 from app.healthcheck import check_dependencies
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
+from app.middlewares.navigation import GlobalNavigationMiddleware
 from app.middlewares.staff_context import RuntimeAuthorizationMiddleware
 from app.observability import ObservabilityConfigurationError, initialize_observability
 from app.payments.http_transport import AioHttpTransport
@@ -259,6 +260,7 @@ def create_dispatcher(
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.update.outer_middleware(RuntimeAuthorizationMiddleware())
+    dispatcher.message.outer_middleware(GlobalNavigationMiddleware())
     dispatcher.include_router(root_router)
     return dispatcher
 

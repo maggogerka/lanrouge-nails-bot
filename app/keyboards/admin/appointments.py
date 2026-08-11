@@ -50,18 +50,6 @@ def admin_appointment_list_keyboard(
             )
         ]
     )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text="🗑 Удалить референсы",
-                callback_data=AdminAppointmentCallback(
-                    action="references_delete_prompt",
-                    appointment_id=appointment.id,
-                    object_id=0,
-                ).pack(),
-            )
-        ]
-    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -133,6 +121,18 @@ def admin_appointment_details_keyboard(
                 text="🖼 Референсы",
                 callback_data=AdminAppointmentCallback(
                     action="references",
+                    appointment_id=appointment.id,
+                    object_id=0,
+                ).pack(),
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить референсы",
+                callback_data=AdminAppointmentCallback(
+                    action="references_delete_prompt",
                     appointment_id=appointment.id,
                     object_id=0,
                 ).pack(),

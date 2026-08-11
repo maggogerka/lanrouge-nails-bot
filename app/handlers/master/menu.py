@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.domain.errors import AppointmentNotFoundError, AppointmentStateError
@@ -39,11 +40,13 @@ router = Router(name="master.menu")
 @router.message(Command("master"))
 async def show_master_menu(
     message: Message,
+    state: FSMContext,
     staff_context: StaffContext,
     presentation_service: PresentationService,
 ) -> None:
     """Open a role-specific panel without exposing admin identifiers or callbacks."""
 
+    await state.clear()
     business = await presentation_service.get_business()
     await message.answer(
         f"<b>{escape(business.display_name)}</b> · мастер "

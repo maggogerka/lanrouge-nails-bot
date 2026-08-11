@@ -25,7 +25,7 @@ from app.keyboards.admin.window_create import (
     window_confirmation_keyboard,
     window_created_keyboard,
 )
-from app.keyboards.admin.windows import WindowCallback
+from app.keyboards.admin.windows import WindowCallback, stale_window_keyboard
 from app.keyboards.common.date_picker import DatePickerCallback, date_picker_keyboard
 from app.keyboards.common.time_picker import (
     TimePickerCallback,
@@ -604,7 +604,12 @@ async def _finish_creation(
 
 
 async def _stale_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Эта кнопка устарела. Начните создание окна заново.", show_alert=True)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Черновик уже закрыт. Вернитесь к открытым окнам или начните создание заново.",
+            reply_markup=stale_window_keyboard(),
+        )
+    await callback.answer("Эта кнопка устарела.", show_alert=True)
 
 
 def _build_date_page(

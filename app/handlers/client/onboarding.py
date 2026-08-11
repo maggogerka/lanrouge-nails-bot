@@ -8,10 +8,13 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.types import User as TelegramUser
 
 from app.domain.acquisition import CampaignValidationError, validate_campaign_code
+from app.domain.enums import StaffRole
 from app.domain.errors import DomainError
 from app.domain.legal import MARKETING_CONSENT_TEXT
+from app.filters import IsStaff
 from app.handlers.client.common import actor_from_telegram
 from app.handlers.client.portfolio import show_deep_linked_portfolio_item
 from app.keyboards.client.consent import (
@@ -21,6 +24,10 @@ from app.keyboards.client.consent import (
     privacy_consent_keyboard,
 )
 from app.keyboards.client.main import client_main_keyboard
+from app.keyboards.common.interface_mode import (
+    InterfaceModeCallback,
+    return_to_management_keyboard,
+)
 from app.schemas.authorization import StaffIdentity
 from app.schemas.booking import ClientActor
 from app.schemas.features import FeatureName
@@ -35,6 +42,7 @@ from app.services.privacy_service import DeletionRequestNotificationService
 
 router = Router(name="client.onboarding")
 _PENDING_ACQUISITION_KEY = "pending_acquisition_code"
+_ALL_STAFF_ROLES = frozenset(StaffRole)
 
 
 def privacy_text(business_name: str) -> str:
@@ -72,6 +80,78 @@ async def handle_start(
             correlation_id=correlation_id,
         )
         return
+    await _show_client_entry(
+        message,
+        message.from_user,
+        start_payload=start_payload,
+        state=state,
+        consent_service=consent_service,
+        portfolio_service=portfolio_service,
+        bot=bot,
+        menu_service=menu_service,
+        presentation_service=presentation_service,
+        feature_flag_service=feature_flag_service,
+        acquisition_service=acquisition_service,
+    )
+
+
+@router.callback_query(
+    InterfaceModeCallback.filter(F.action == "client"),
+    IsStaff(allowed_roles=_ALL_STAFF_ROLES),
+)
+async def open_client_interface_for_staff(
+    callback: CallbackQuery,
+    state: FSMContext,
+    consent_service: ConsentService,
+    portfolio_service: PortfolioService,
+    bot: Bot,
+    menu_service: MenuService,
+    presentation_service: PresentationService,
+    feature_flag_service: FeatureFlagService,
+    acquisition_service: AcquisitionRuntimeService,
+) -> None:
+    """Render the genuine client flow while retaining server-side staff access."""
+
+    await state.clear()
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "Вы смотрите бот глазами клиента.",
+        reply_markup=return_to_management_keyboard(),
+    )
+    await _show_client_entry(
+        callback.message,
+        callback.from_user,
+        start_payload=None,
+        state=state,
+        consent_service=consent_service,
+        portfolio_service=portfolio_service,
+        bot=bot,
+        menu_service=menu_service,
+        presentation_service=presentation_service,
+        feature_flag_service=feature_flag_service,
+        acquisition_service=acquisition_service,
+    )
+    await callback.answer()
+
+
+async def _show_client_entry(
+    message: Message,
+    telegram_user: TelegramUser,
+    *,
+    start_payload: str | None,
+    state: FSMContext,
+    consent_service: ConsentService,
+    portfolio_service: PortfolioService,
+    bot: Bot,
+    menu_service: MenuService,
+    presentation_service: PresentationService,
+    feature_flag_service: FeatureFlagService,
+    acquisition_service: AcquisitionRuntimeService,
+) -> None:
+    """Show the same consent-aware client surface to clients and authorized staff."""
+
     campaign_code = _campaign_code(start_payload)
     if campaign_code is not None:
         await state.update_data({_PENDING_ACQUISITION_KEY: campaign_code})
@@ -80,7 +160,8 @@ async def handle_start(
     except DomainError:
         await message.answer("Бот временно недоступен: профиль бизнеса не настроен.")
         return
-    status = await consent_service.get_or_create_status(actor_from_telegram(message.from_user))
+    actor = actor_from_telegram(telegram_user)
+    status = await consent_service.get_or_create_status(actor)
     if not status.privacy_accepted:
         if business.privacy_policy_url is None:
             await message.answer(
@@ -97,7 +178,7 @@ async def handle_start(
     await _record_pending_acquisition(
         state,
         acquisition_service,
-        actor_from_telegram(message.from_user),
+        actor,
     )
     if not status.marketing_answered:
         await message.answer(
@@ -109,13 +190,13 @@ async def handle_start(
         f"С возвращением в <b>{escape(business.display_name)}</b>!",
         reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
     )
-    if len(payload) == 2 and payload[1].startswith("portfolio_"):
+    if start_payload is not None and start_payload.startswith("portfolio_"):
         try:
             await feature_flag_service.require_enabled(FeatureName.PORTFOLIO)
         except DomainError:
             return
         try:
-            item_id = int(payload[1].removeprefix("portfolio_"))
+            item_id = int(start_payload.removeprefix("portfolio_"))
         except ValueError:
             return
         await show_deep_linked_portfolio_item(message, portfolio_service, bot, item_id)

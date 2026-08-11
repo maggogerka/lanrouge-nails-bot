@@ -27,8 +27,6 @@ async def cancel_admin_form(
 ) -> None:
     """Cancel any current administrative FSM consistently."""
 
-    if await state.get_state() is None:
-        return
     await state.clear()
     business = await presentation_service.get_business()
     await message.answer(
@@ -40,11 +38,13 @@ async def cancel_admin_form(
 @router.message(Command("admin"))
 async def show_admin_menu(
     message: Message,
+    state: FSMContext,
     menu_service: MenuService,
     presentation_service: PresentationService,
 ) -> None:
     """Display only administrative sections implemented at this stage."""
 
+    await state.clear()
     business = await presentation_service.get_business()
     await message.answer(
         f"Панель администратора <b>{escape(business.display_name)}</b>.",

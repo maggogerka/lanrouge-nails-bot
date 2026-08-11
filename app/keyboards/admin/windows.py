@@ -129,3 +129,18 @@ def delete_window_confirmation_keyboard(window_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def stale_window_keyboard() -> InlineKeyboardMarkup:
+    """Offer a recoverable destination for callbacks from an expired draft."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К открытым окнам",
+                    callback_data=WindowCallback(action="list", window_id=0).pack(),
+                )
+            ]
+        ]
+    )
