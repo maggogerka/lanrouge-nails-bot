@@ -13,6 +13,7 @@ from app.database import Database
 from app.database.models import (
     Appointment,
     AvailabilityWindow,
+    BusinessClient,
     Service,
     StaffMember,
     StaffServiceAssignment,
@@ -45,6 +46,7 @@ async def seed_booking_case(database: Database) -> None:
         ]
         session.add_all([administrator, *clients])
         await session.flush()
+        session.add_all(BusinessClient(business_id=1, user_id=client.id) for client in clients)
         master = StaffMember(
             business_id=1,
             user_id=administrator.id,
