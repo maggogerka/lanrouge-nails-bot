@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,7 +22,7 @@ from app.domain.enums import (
     ReservationStatus,
     StaffRole,
 )
-from app.domain.errors import AuthorizationError
+from app.domain.errors import AuthorizationError, EntityNotFoundError
 from app.domain.payments import PaymentStateError, PaymentType, WebhookProcessingStatus
 from app.payments.providers.base import (
     PaymentProvider,
@@ -50,6 +51,8 @@ class FakeUnitOfWork:
         self.business_id = business_id
         self.payments = MagicMock()
         self.payments.business_id = business_id
+        self.appointments = MagicMock()
+        self.appointments.get = AsyncMock(return_value=SimpleNamespace(staff_member_id=5))
         self.reservations = MagicMock()
         self.reservations.business_id = business_id
         self.reservations.get_appointment_for_update = AsyncMock(
@@ -428,6 +431,31 @@ async def test_manual_approval_reauthorizes_locks_audits_and_consumes() -> None:
     approval_uow.payments.get.assert_awaited_once_with(31, for_update=True)
     approval_uow.audit.add.assert_awaited_once()
     consume.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_master_cannot_approve_another_specialists_payment() -> None:
+    actor = staff_context(role=StaffRole.MASTER)
+    auth = authorize(actor)
+    local_payment = payment(provider=PaymentMode.MANUAL)
+    service, _ = provider_service(mode=PaymentMode.MANUAL)
+    approval_uow = FakeUnitOfWork()
+    approval_uow.payments.get = AsyncMock(return_value=local_payment)
+    approval_uow.appointments.get = AsyncMock(
+        return_value=SimpleNamespace(staff_member_id=actor.staff_member_id + 1)
+    )
+    coordinator = ManualPaymentApprovalCoordinator(
+        uow_factory(approval_uow),
+        auth,
+        service,
+    )
+
+    with pytest.raises(EntityNotFoundError, match="payment not found"):
+        await coordinator.approve(actor, local_payment.id, now=NOW)
+
+    assert local_payment.status is PaymentStatus.PENDING
+    approval_uow.audit.add.assert_not_awaited()
+    assert approval_uow.commit_count == 0
 
 
 @pytest.mark.asyncio

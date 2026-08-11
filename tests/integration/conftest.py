@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import pytest
 import pytest_asyncio
@@ -17,6 +19,19 @@ async def integration_database() -> AsyncIterator[Database]:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("TEST_DATABASE_URL is not configured")
+    password_file = os.getenv("TEST_DATABASE_PASSWORD_FILE")
+    if password_file:
+        password = Path(password_file).read_text(encoding="utf-8").strip()
+        parsed = urlsplit(database_url)
+        if parsed.hostname is None or parsed.username is None:
+            raise RuntimeError("TEST_DATABASE_URL must include a username and hostname")
+        host = parsed.hostname
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        netloc = f"{parsed.username}:{quote(password, safe='')}@{host}"
+        database_url = urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
     database_name = database_url.rsplit("/", maxsplit=1)[-1].split("?", maxsplit=1)[0]
     if "test" not in database_name.casefold():
         raise RuntimeError("Integration tests require a database name containing 'test'")

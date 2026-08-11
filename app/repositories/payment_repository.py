@@ -11,6 +11,7 @@ from sqlalchemy import Table, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.models.appointment import Appointment
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
 from app.domain.enums import PaymentMode, PaymentStatus, RefundStatus
 from app.repositories.scoped import TenantScopedRepository
@@ -84,6 +85,7 @@ class PaymentRepository(TenantScopedRepository):
         self,
         *,
         statuses: Collection[PaymentStatus] | None = None,
+        staff_member_id: int | None = None,
         limit: int = 30,
     ) -> list[Payment]:
         if not 1 <= limit <= 100:
@@ -98,6 +100,14 @@ class PaymentRepository(TenantScopedRepository):
             if not statuses:
                 return []
             statement = statement.where(Payment.status.in_(statuses))
+        if staff_member_id is not None:
+            statement = statement.join(
+                Appointment,
+                Appointment.id == Payment.appointment_id,
+            ).where(
+                Appointment.business_id == self.business_id,
+                Appointment.staff_member_id == staff_member_id,
+            )
         return list(await self._session.scalars(statement))
 
     async def add_refund(self, refund: Refund) -> Refund:

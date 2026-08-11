@@ -16,6 +16,7 @@ from app.domain.enums import (
     PaymentStatus,
     RefundStatus,
     ReservationStatus,
+    StaffRole,
 )
 from app.domain.errors import EntityNotFoundError
 from app.domain.payments import PaymentStateError, aware_utc, require_payment_transition
@@ -228,6 +229,9 @@ class PaymentAdministrationService:
                     PaymentStatus.PARTIALLY_REFUNDED,
                     PaymentStatus.REFUNDED,
                 },
+                staff_member_id=(
+                    live_actor.staff_member_id if live_actor.role is StaffRole.MASTER else None
+                ),
                 limit=limit,
             )
             return tuple(PaymentView.model_validate(row) for row in rows)
@@ -276,6 +280,7 @@ class PaymentAdministrationService:
             appointment_hint = await uow.appointments.get(hint.appointment_id)
             if appointment_hint is None:
                 raise EntityNotFoundError("Связанная запись не найдена.")
+            self._require_assigned_if_master(live_actor, appointment_hint.staff_member_id)
             reservation = await uow.reservations.get_active_for_appointment(
                 appointment_hint.id, for_update=True
             )
@@ -371,9 +376,18 @@ class PaymentAdministrationService:
             payment = await uow.payments.get(payment_id)
             if payment is None:
                 raise EntityNotFoundError("Платёж не найден.")
+            appointment = await uow.appointments.get(payment.appointment_id)
+            if appointment is None:
+                raise EntityNotFoundError("Связанная запись не найдена.")
+            self._require_assigned_if_master(live_actor, appointment.staff_member_id)
             if payment.receipt_file_id is None or payment.receipt_media_type is None:
                 return None
             return ManualReceiptAccess(payment.receipt_file_id, payment.receipt_media_type)
+
+    @staticmethod
+    def _require_assigned_if_master(actor: StaffContext, staff_member_id: int) -> None:
+        if actor.role is StaffRole.MASTER and staff_member_id != actor.staff_member_id:
+            raise EntityNotFoundError("Платёж не найден.")
 
     async def request_remaining_refund(
         self,

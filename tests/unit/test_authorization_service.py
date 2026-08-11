@@ -36,6 +36,8 @@ def member(
     user_id: int = 21,
     active: bool = True,
     archived_at: datetime | None = None,
+    bootstrap: bool = False,
+    permission_grants: list[str] | None = None,
 ) -> StaffMember:
     return StaffMember(
         id=member_id,
@@ -45,6 +47,8 @@ def member(
         role=role,
         is_active=active,
         is_bookable=role is StaffRole.MASTER,
+        is_bootstrap_owner=bootstrap,
+        permission_grants=permission_grants or [],
         archived_at=archived_at,
     )
 
@@ -53,7 +57,12 @@ def user(*, user_id: int = 21, telegram_id: int = 101) -> User:
     return User(id=user_id, telegram_id=telegram_id)
 
 
-def context(role: StaffRole = StaffRole.OWNER) -> StaffContext:
+def context(
+    role: StaffRole = StaffRole.OWNER,
+    *,
+    bootstrap: bool = False,
+    grants: frozenset[StaffPermission] = frozenset(),
+) -> StaffContext:
     return StaffContext(
         business_id=7,
         staff_member_id=11,
@@ -62,6 +71,8 @@ def context(role: StaffRole = StaffRole.OWNER) -> StaffContext:
         display_name="Сотрудник",
         role=role,
         is_bookable=role is StaffRole.MASTER,
+        is_bootstrap_owner=bootstrap,
+        permission_grants=grants,
     )
 
 
@@ -109,15 +120,40 @@ def test_role_permission_matrix_is_scoped() -> None:
     assert permissions_for_role(StaffRole.OWNER) == frozenset(StaffPermission)
     assert StaffPermission.MANAGE_PRIVATE_SETTINGS in permissions_for_role(StaffRole.OWNER)
     assert StaffPermission.MANAGE_PRIVATE_SETTINGS not in permissions_for_role(StaffRole.MANAGER)
+    assert StaffPermission.MANAGE_STAFF not in permissions_for_role(StaffRole.MANAGER)
+    assert StaffPermission.HANDLE_DATA_DELETION not in permissions_for_role(StaffRole.MANAGER)
+    assert StaffPermission.EDIT_PAYMENT_INSTRUCTIONS not in permissions_for_role(StaffRole.MANAGER)
+    assert StaffPermission.MANAGE_BROADCASTS in permissions_for_role(StaffRole.MANAGER)
     assert StaffPermission.MANAGE_OWN_APPOINTMENTS in permissions_for_role(StaffRole.MASTER)
     assert StaffPermission.VIEW_ALL_APPOINTMENTS not in permissions_for_role(StaffRole.MASTER)
+    assert StaffPermission.APPROVE_PREPAYMENTS in permissions_for_role(StaffRole.MASTER)
+    assert StaffPermission.REJECT_PREPAYMENTS not in permissions_for_role(StaffRole.MASTER)
+    assert StaffPermission.OVERRIDE_BOOKING_LIMIT not in permissions_for_role(StaffRole.MASTER)
     assert StaffPermission.MANAGE_ALL_APPOINTMENTS in permissions_for_role(StaffRole.RECEPTIONIST)
+    assert StaffPermission.VIEW_ALL_STATISTICS in permissions_for_role(StaffRole.RECEPTIONIST)
+    assert StaffPermission.MANAGE_BROADCASTS not in permissions_for_role(StaffRole.RECEPTIONIST)
     assert StaffPermission.REFUND_PAYMENTS not in permissions_for_role(StaffRole.RECEPTIONIST)
     assert StaffPermission.VIEW_VENDOR_SUPPORT not in permissions_for_role(StaffRole.RECEPTIONIST)
 
 
+def test_safe_permission_grant_extends_but_never_replaces_role_matrix() -> None:
+    target = context(
+        StaffRole.MASTER,
+        grants=frozenset({StaffPermission.OVERRIDE_BOOKING_LIMIT}),
+    )
+
+    assert target.has_permission(StaffPermission.VIEW_OWN_APPOINTMENTS)
+    assert target.has_permission(StaffPermission.OVERRIDE_BOOKING_LIMIT)
+    assert not target.has_permission(StaffPermission.MANAGE_PRIVATE_SETTINGS)
+
+
 def test_only_owner_can_assign_privileged_roles() -> None:
-    assert can_assign_role(StaffRole.OWNER, StaffRole.OWNER)
+    assert not can_assign_role(StaffRole.OWNER, StaffRole.OWNER)
+    assert can_assign_role(
+        StaffRole.OWNER,
+        StaffRole.OWNER,
+        actor_is_bootstrap=True,
+    )
     assert can_assign_role(StaffRole.MANAGER, StaffRole.MASTER)
     assert can_assign_role(StaffRole.MANAGER, StaffRole.RECEPTIONIST)
     assert not can_assign_role(StaffRole.MANAGER, StaffRole.MANAGER)
@@ -229,7 +265,7 @@ async def test_stale_context_cannot_issue_role_forbidden_by_live_membership() ->
     service, _, repository, _ = build_service()
     repository.get_by_telegram_id = AsyncMock(return_value=(member(StaffRole.MANAGER), user()))
 
-    with pytest.raises(AuthorizationError, match="назначить"):
+    with pytest.raises(AuthorizationError, match="Недостаточно прав"):
         await service.issue_invitation(
             context(StaffRole.OWNER),
             StaffInvitationCreate(role=StaffRole.OWNER, display_name="Ещё один владелец"),
@@ -372,7 +408,7 @@ async def test_manager_cannot_revoke_owner_invitation() -> None:
     repository.get_by_telegram_id = AsyncMock(return_value=(member(StaffRole.MANAGER), user()))
     repository.get_invitation_by_id = AsyncMock(return_value=invitation(role=StaffRole.OWNER))
 
-    with pytest.raises(AuthorizationError, match="назначить"):
+    with pytest.raises(AuthorizationError, match="Недостаточно прав"):
         await service.revoke_invitation(context(StaffRole.MANAGER), 31, now=NOW)
 
 
@@ -380,7 +416,7 @@ async def test_manager_cannot_revoke_owner_invitation() -> None:
 async def test_bootstrap_creates_owner_only_when_none_exists() -> None:
     service, session, repository, audit = build_service()
     repository.get_business_for_update = AsyncMock(return_value=SimpleNamespace(id=7))
-    repository.has_active_owner = AsyncMock(return_value=False)
+    repository.get_bootstrap_owner = AsyncMock(return_value=None)
     repository.get_by_telegram_id = AsyncMock(return_value=None)
     repository.get_or_create_user = AsyncMock(return_value=user(user_id=44, telegram_id=555))
 
@@ -405,12 +441,35 @@ async def test_bootstrap_creates_owner_only_when_none_exists() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_never_restores_archived_staff() -> None:
+async def test_bootstrap_rejects_archived_configured_identity() -> None:
     service, session, repository, audit = build_service()
     repository.get_business_for_update = AsyncMock(return_value=SimpleNamespace(id=7))
-    repository.has_active_owner = AsyncMock(return_value=False)
+    repository.get_bootstrap_owner = AsyncMock(return_value=None)
     archived = member(active=False, archived_at=NOW - timedelta(days=1))
     repository.get_by_telegram_id = AsyncMock(return_value=(archived, user()))
+    audit.add = AsyncMock()
+
+    with pytest.raises(AuthorizationError, match="отозванной"):
+        await service.bootstrap_owners(
+            business_id=7,
+            telegram_ids=[101],
+            now=NOW,
+        )
+
+    assert not archived.is_active
+    repository.get_or_create_user.assert_not_awaited()
+    repository.add.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_binds_the_configured_active_owner() -> None:
+    service, session, repository, audit = build_service()
+    repository.get_business_for_update = AsyncMock(return_value=SimpleNamespace(id=7))
+    configured = member(StaffRole.OWNER)
+    repository.get_bootstrap_owner = AsyncMock(return_value=None)
+    repository.get_by_telegram_id = AsyncMock(return_value=(configured, user()))
+    repository.flush = AsyncMock()
     audit.add = AsyncMock()
 
     result = await service.bootstrap_owners(
@@ -419,31 +478,91 @@ async def test_bootstrap_never_restores_archived_staff() -> None:
         now=NOW,
     )
 
+    assert not result.owner_already_present
     assert not result.created
-    assert result.skipped_existing_count == 1
-    assert not archived.is_active
-    repository.get_or_create_user.assert_not_awaited()
+    assert configured.is_bootstrap_owner
+    repository.get_by_telegram_id.assert_awaited_once()
     repository.add.assert_not_awaited()
     session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_is_noop_when_active_owner_exists() -> None:
+async def test_existing_bootstrap_cannot_be_replaced_by_configuration() -> None:
     service, session, repository, _ = build_service()
     repository.get_business_for_update = AsyncMock(return_value=SimpleNamespace(id=7))
-    repository.has_active_owner = AsyncMock(return_value=True)
-
-    result = await service.bootstrap_owners(
-        business_id=7,
-        telegram_ids=[101, 202],
-        now=NOW,
+    repository.get_bootstrap_owner = AsyncMock(
+        return_value=member(StaffRole.OWNER, member_id=99, bootstrap=True)
     )
+    repository.get_by_telegram_id = AsyncMock(return_value=(member(), user()))
 
-    assert result.owner_already_present
-    assert not result.created
-    repository.get_by_telegram_id.assert_not_awaited()
+    with pytest.raises(AuthorizationError, match="не совпадает"):
+        await service.bootstrap_owners(business_id=7, telegram_ids=[101], now=NOW)
+
     repository.add.assert_not_awaited()
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_member_cannot_be_revoked_even_by_itself() -> None:
+    service, session, repository, _ = build_service()
+    bootstrap = member(StaffRole.OWNER, bootstrap=True)
+    repository.get_by_telegram_id = AsyncMock(return_value=(bootstrap, user()))
+    repository.get_by_id = AsyncMock(return_value=bootstrap)
+
+    with pytest.raises(AuthorizationError, match="Bootstrap"):
+        await service.revoke_member(context(bootstrap=True), bootstrap.id, now=NOW)
+
+    repository.flush.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_bootstrap_can_revoke_an_invited_owner() -> None:
+    service, session, repository, audit = build_service()
+    target = member(StaffRole.OWNER, member_id=44, user_id=55)
+    repository.get_by_id = AsyncMock(return_value=target)
+    repository.flush = AsyncMock()
+    audit.add = AsyncMock()
+    repository.get_by_telegram_id = AsyncMock(return_value=(member(), user()))
+
+    with pytest.raises(AuthorizationError, match="только bootstrap"):
+        await service.revoke_member(context(), target.id, now=NOW)
+
+    repository.get_by_telegram_id = AsyncMock(return_value=(member(bootstrap=True), user()))
+    result = await service.revoke_member(context(bootstrap=True), target.id, now=NOW)
+
+    assert not result.is_active
+    assert target.archived_at == NOW
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_owner_can_grant_only_safe_permission_to_non_owner() -> None:
+    service, session, repository, audit = build_service()
+    target = member(StaffRole.MASTER, member_id=44, user_id=55)
+    repository.get_by_telegram_id = AsyncMock(return_value=(member(), user()))
+    repository.get_by_id = AsyncMock(return_value=target)
+    repository.flush = AsyncMock()
+    audit.add = AsyncMock()
+
+    result = await service.set_permission_grant(
+        context(),
+        target.id,
+        StaffPermission.OVERRIDE_BOOKING_LIMIT,
+        enabled=True,
+    )
+
+    assert StaffPermission.OVERRIDE_BOOKING_LIMIT in result.permission_grants
+    assert target.permission_grants == [StaffPermission.OVERRIDE_BOOKING_LIMIT.value]
+    session.commit.assert_awaited_once()
+
+    with pytest.raises(AuthorizationError, match="нельзя выдавать"):
+        await service.set_permission_grant(
+            context(),
+            target.id,
+            StaffPermission.MANAGE_PRIVATE_SETTINGS,
+            enabled=True,
+        )
 
 
 @pytest.mark.asyncio

@@ -10,18 +10,23 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.domain.errors import AppointmentNotFoundError, AppointmentStateError
+from app.domain.errors import AppointmentNotFoundError, AppointmentStateError, DomainError
+from app.domain.payments import PaymentStateError
 from app.keyboards.master.main import (
     MASTER_APPOINTMENTS_TEXT,
+    MASTER_PREPAYMENTS_TEXT,
     MASTER_SCHEDULE_TEXT,
     MASTER_SUPPORT_TEXT,
     master_main_keyboard,
 )
 from app.keyboards.master.workspace import (
     MasterAppointmentCallback,
+    MasterPaymentCallback,
     MasterScheduleCallback,
     master_appointment_actions,
     master_appointment_confirmation,
+    master_payment_actions,
+    master_payment_confirmation,
     master_schedule_actions,
 )
 from app.keyboards.support import vendor_support_keyboard
@@ -30,7 +35,9 @@ from app.schemas.master_workspace import (
     MasterAppointmentView,
     MasterScheduleView,
 )
+from app.schemas.payment import PaymentView
 from app.services.master_workspace_service import MasterWorkspaceService
+from app.services.payment_admin_service import PaymentAdministrationService
 from app.services.presentation_service import PresentationService
 from app.services.vendor_support_service import VendorSupportService
 
@@ -163,6 +170,65 @@ async def show_own_schedule(
     )
 
 
+@router.message(F.text == MASTER_PREPAYMENTS_TEXT)
+async def show_own_prepayments(
+    message: Message,
+    staff_context: StaffContext,
+    payment_admin_service: PaymentAdministrationService,
+) -> None:
+    try:
+        payments = await payment_admin_service.list_recent(staff_context, limit=50)
+    except (DomainError, PaymentStateError) as exc:
+        await message.answer(str(exc))
+        return
+    await message.answer(
+        _render_prepayments(payments),
+        reply_markup=master_payment_actions(payments),
+    )
+
+
+@router.callback_query(MasterPaymentCallback.filter(F.action == "approve_prompt"))
+async def prompt_own_prepayment_approval(
+    callback: CallbackQuery,
+    callback_data: MasterPaymentCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Подтверждайте предоплату только после фактического поступления денег.",
+            reply_markup=master_payment_confirmation(callback_data.payment_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(MasterPaymentCallback.filter(F.action == "approve_confirm"))
+async def approve_own_prepayment(
+    callback: CallbackQuery,
+    callback_data: MasterPaymentCallback,
+    staff_context: StaffContext,
+    payment_admin_service: PaymentAdministrationService,
+    correlation_id: str,
+) -> None:
+    try:
+        await payment_admin_service.approve_manual(
+            staff_context,
+            callback_data.payment_id,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Предоплата подтверждена.")
+    await callback.answer("Запись активирована.")
+
+
+@router.callback_query(MasterPaymentCallback.filter(F.action == "dismiss"))
+async def dismiss_own_prepayment(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Действие отменено.")
+    await callback.answer()
+
+
 @router.callback_query(MasterScheduleCallback.filter())
 async def change_own_schedule_pause(
     callback: CallbackQuery,
@@ -215,6 +281,25 @@ def _render_appointments(items: tuple[MasterAppointmentView, ...]) -> str:
             f"Статус: <code>{item.status.value}</code>"
         )
     return "\n\n".join(rows)
+
+
+def _render_prepayments(items: tuple[PaymentView, ...]) -> str:
+    pending = [
+        item
+        for item in items
+        if item.manual_status is not None
+        and item.manual_status.value in {"client_reported", "review_pending"}
+    ]
+    if not pending:
+        return "Предоплат по вашим записям, ожидающих проверки, нет."
+    rows = ["<b>Предоплаты моих записей</b>"]
+    rows.extend(
+        f"№{item.id} · запись №{item.appointment_id} · "
+        f"{item.amount:.2f} {escape(item.currency)}"
+        + (" · чек приложен" if item.has_receipt else "")
+        for item in pending
+    )
+    return "\n".join(rows)
 
 
 def _render_schedule(schedule: MasterScheduleView) -> str:

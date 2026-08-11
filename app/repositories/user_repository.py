@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import BusinessClient, User
+from app.database.models import BusinessClient, StaffMember, User
 from app.domain.enums import UserRole
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.repositories.scoped import TenantScopedRepository
@@ -119,6 +119,16 @@ class UserRepository(TenantScopedRepository):
         await self._session.flush()
 
     async def mark_blocked(self, user: User) -> None:
+        is_bootstrap = await self._session.scalar(
+            select(
+                exists().where(
+                    StaffMember.user_id == user.id,
+                    StaffMember.is_bootstrap_owner.is_(True),
+                )
+            )
+        )
+        if is_bootstrap:
+            return
         user.is_blocked = True
         await self._session.flush()
 

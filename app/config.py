@@ -563,11 +563,24 @@ class Settings(BaseSettings):
 
     @property
     def admin_telegram_ids(self) -> frozenset[int]:
-        """Return the immutable set used as the only admin authority source."""
+        """Return IDs used once to bootstrap database-backed owner memberships."""
 
         if not self.admin_telegram_ids_raw:
             return frozenset()
         return frozenset(int(part) for part in self.admin_telegram_ids_raw.split(","))
+
+    @property
+    def configured_owner_telegram_ids(self) -> tuple[int, ...]:
+        """Preserve configuration order; the first ID is the immutable bootstrap owner."""
+
+        if not self.admin_telegram_ids_raw:
+            return ()
+        return tuple(dict.fromkeys(int(part) for part in self.admin_telegram_ids_raw.split(",")))
+
+    @property
+    def bootstrap_owner_telegram_id(self) -> int | None:
+        configured = self.configured_owner_telegram_ids
+        return configured[0] if configured else None
 
     @property
     def api_allowed_hosts(self) -> tuple[str, ...]:

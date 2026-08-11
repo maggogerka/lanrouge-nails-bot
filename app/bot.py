@@ -293,7 +293,7 @@ async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
         authorization_service = AuthorizationService(database.sessions)
         bootstrap_result = await authorization_service.bootstrap_owners(
             business_id=DEFAULT_BUSINESS_ID,
-            telegram_ids=settings.admin_telegram_ids,
+            telegram_ids=settings.configured_owner_telegram_ids,
         )
         log_event(
             logger,

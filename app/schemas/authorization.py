@@ -55,13 +55,21 @@ class StaffPermission(StrEnum):
     VIEW_VENDOR_SUPPORT = "view_vendor_support"
 
 
+GRANTABLE_STAFF_PERMISSIONS = frozenset(
+    {
+        StaffPermission.INVITE_STAFF,
+        StaffPermission.MANAGE_STAFF,
+        StaffPermission.MANAGE_BROADCASTS,
+        StaffPermission.OVERRIDE_BOOKING_LIMIT,
+    }
+)
+
+
 _OWNER_PERMISSIONS = frozenset(StaffPermission)
 _MANAGER_PERMISSIONS = frozenset(
     {
         StaffPermission.VIEW_BUSINESS,
         StaffPermission.VIEW_STAFF,
-        StaffPermission.INVITE_STAFF,
-        StaffPermission.MANAGE_STAFF,
         StaffPermission.VIEW_SERVICES,
         StaffPermission.MANAGE_SERVICES,
         StaffPermission.VIEW_ALL_SCHEDULES,
@@ -75,14 +83,9 @@ _MANAGER_PERMISSIONS = frozenset(
         StaffPermission.VIEW_PREPAYMENTS,
         StaffPermission.APPROVE_PREPAYMENTS,
         StaffPermission.REJECT_PREPAYMENTS,
-        StaffPermission.EDIT_PAYMENT_INSTRUCTIONS,
-        StaffPermission.EDIT_PAYMENT_TIMERS,
-        StaffPermission.CHANGE_PAYMENT_SETTINGS,
         StaffPermission.MANAGE_BROADCASTS,
         StaffPermission.VIEW_ALL_STATISTICS,
         StaffPermission.VIEW_FEATURE_FLAGS,
-        StaffPermission.HANDLE_DATA_DELETION,
-        StaffPermission.OVERRIDE_BOOKING_LIMIT,
         StaffPermission.VIEW_VENDOR_SUPPORT,
     }
 )
@@ -96,8 +99,9 @@ _MASTER_PERMISSIONS = frozenset(
         StaffPermission.MANAGE_OWN_APPOINTMENTS,
         StaffPermission.VIEW_OWN_CLIENTS,
         StaffPermission.MANAGE_OWN_CLIENTS,
+        StaffPermission.VIEW_PREPAYMENTS,
+        StaffPermission.APPROVE_PREPAYMENTS,
         StaffPermission.VIEW_OWN_STATISTICS,
-        StaffPermission.OVERRIDE_BOOKING_LIMIT,
         StaffPermission.VIEW_VENDOR_SUPPORT,
     }
 )
@@ -115,6 +119,7 @@ _RECEPTIONIST_PERMISSIONS = frozenset(
         StaffPermission.VIEW_PREPAYMENTS,
         StaffPermission.APPROVE_PREPAYMENTS,
         StaffPermission.REJECT_PREPAYMENTS,
+        StaffPermission.VIEW_ALL_STATISTICS,
     }
 )
 
@@ -134,9 +139,16 @@ def permissions_for_role(role: StaffRole) -> frozenset[StaffPermission]:
     return ROLE_PERMISSIONS[role]
 
 
-def can_assign_role(actor_role: StaffRole, target_role: StaffRole) -> bool:
-    """Prevent managers from creating peers or owners through an invitation."""
+def can_assign_role(
+    actor_role: StaffRole,
+    target_role: StaffRole,
+    *,
+    actor_is_bootstrap: bool = False,
+) -> bool:
+    """Prevent every non-bootstrap account from creating another owner."""
 
+    if target_role is StaffRole.OWNER:
+        return actor_is_bootstrap
     if actor_role is StaffRole.OWNER:
         return True
     return actor_role is StaffRole.MANAGER and target_role in {
@@ -166,10 +178,14 @@ class StaffContext(BaseModel):
     display_name: Annotated[str, Field(min_length=1, max_length=255)]
     role: StaffRole
     is_bookable: bool
+    is_bootstrap_owner: bool = False
+    permission_grants: frozenset[StaffPermission] = frozenset()
 
     @property
     def permissions(self) -> frozenset[StaffPermission]:
-        return permissions_for_role(self.role)
+        if self.is_bootstrap_owner:
+            return _OWNER_PERMISSIONS
+        return permissions_for_role(self.role) | self.permission_grants
 
     def has_permission(self, permission: StaffPermission) -> bool:
         return permission in self.permissions
@@ -230,6 +246,8 @@ class StaffMemberView(BaseModel):
     role: StaffRole
     is_active: bool
     is_bookable: bool
+    is_bootstrap_owner: bool = False
+    permission_grants: frozenset[StaffPermission] = frozenset()
     is_bound: bool
     archived_at: datetime | None = None
 

@@ -9,6 +9,18 @@ class AuthorizationError(DomainError):
     """The actor is not allowed to execute an administrative use case."""
 
 
+class BusinessTypeTransitionError(DomainError):
+    """The business cannot enter solo mode while staff-owned data remains."""
+
+    def __init__(self, blockers: tuple[str, ...]) -> None:
+        self.blockers = blockers
+        super().__init__("Нельзя перейти в режим «Один мастер»: " + "; ".join(blockers))
+
+
+class StaffReassignmentError(DomainError):
+    """Future staff appointments cannot be moved without compatible target windows."""
+
+
 class FeatureDisabledError(DomainError):
     """A disabled module was called directly despite being hidden in the UI."""
 

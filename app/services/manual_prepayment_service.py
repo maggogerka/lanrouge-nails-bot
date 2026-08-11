@@ -22,6 +22,7 @@ from app.domain.enums import (
     PaymentMode,
     PaymentStatus,
     ReservationStatus,
+    StaffRole,
 )
 from app.domain.errors import AuthorizationError, EntityNotFoundError
 from app.domain.payments import PaymentStateError, aware_utc
@@ -111,7 +112,7 @@ class ManualPrepaymentService:
                     }
                 )
                 staff_rows = await uow.staff.list_active_by_roles(
-                    uow.business_id, LEGACY_ADMIN_ROLES
+                    uow.business_id, LEGACY_ADMIN_ROLES | {StaffRole.MASTER}
                 )
                 await uow.notifications.add_all(
                     [
@@ -126,8 +127,18 @@ class ManualPrepaymentService:
                         )
                         for staff_member, staff_user in staff_rows
                         if not staff_user.is_blocked
+                        and (
+                            staff_member.role is not StaffRole.MASTER
+                            or staff_member.id == appointment.staff_member_id
+                        )
                         and StaffPermission.VIEW_PREPAYMENTS
-                        in permissions_for_role(staff_member.role)
+                        in (
+                            permissions_for_role(staff_member.role)
+                            | {
+                                StaffPermission(value)
+                                for value in (staff_member.permission_grants or [])
+                            }
+                        )
                         for offset in offsets
                     ]
                 )

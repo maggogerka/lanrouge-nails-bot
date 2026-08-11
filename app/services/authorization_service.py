@@ -12,10 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.models.business import StaffInvitation, StaffMember
 from app.domain.enums import StaffInvitationStatus, StaffRole
-from app.domain.errors import AuthorizationError, EntityNotFoundError
+from app.domain.errors import AuthorizationError, EntityNotFoundError, StaffReassignmentError
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.staff_repository import StaffRepository
 from app.schemas.authorization import (
+    GRANTABLE_STAFF_PERMISSIONS,
     AcceptedStaffInvitation,
     IssuedStaffInvitation,
     RevokedStaffInvitation,
@@ -105,6 +106,8 @@ class AuthorizationService:
                     role=member.role,
                     is_active=member.is_active and member.archived_at is None,
                     is_bookable=member.is_bookable,
+                    is_bootstrap_owner=bool(member.is_bootstrap_owner),
+                    permission_grants=self._permission_grants(member),
                     is_bound=member.user_id is not None,
                     archived_at=member.archived_at,
                 )
@@ -166,7 +169,7 @@ class AuthorizationService:
                 actor.telegram_id,
             )
             self._require_permission(live_actor, StaffPermission.INVITE_STAFF)
-            self._require_assignable_role(live_actor.role, values.role)
+            self._require_assignable_role(live_actor, values.role)
             invitation = await repository.add_invitation(
                 StaffInvitation(
                     business_id=live_actor.business_id,
@@ -320,7 +323,7 @@ class AuthorizationService:
             )
             if invitation is None or invitation.status is not StaffInvitationStatus.ACTIVE:
                 raise EntityNotFoundError("Активное приглашение не найдено.")
-            self._require_assignable_role(live_actor.role, invitation.role)
+            self._require_assignable_role(live_actor, invitation.role)
             if invitation.expires_at <= current:
                 invitation.status = StaffInvitationStatus.EXPIRED
                 await repository.flush()
@@ -356,6 +359,213 @@ class AuthorizationService:
             raise RuntimeError("invitation revocation produced no result")
         return result
 
+    async def revoke_member(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        """Revoke an ordinary membership without deleting historical foreign keys."""
+
+        current = self._aware_now(now)
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(
+                repository,
+                actor.business_id,
+                actor.telegram_id,
+            )
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            target = await repository.get_by_id(
+                live_actor.business_id,
+                staff_member_id,
+                for_update=True,
+            )
+            if target is None:
+                raise EntityNotFoundError("Сотрудник не найден.")
+            self._require_manageable_target(live_actor, target)
+            target.is_active = False
+            target.is_bookable = False
+            target.archived_at = current
+            target.permission_grants = []
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.role_revoked",
+                entity_type="staff_member",
+                entity_id=str(target.id),
+                changes={"previous_role": target.role.value},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(target)
+
+    async def change_member_role(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        role: StaffRole,
+        *,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        """Change a live membership while preserving the owner hierarchy."""
+
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(
+                repository,
+                actor.business_id,
+                actor.telegram_id,
+            )
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            target = await repository.get_by_id(
+                live_actor.business_id,
+                staff_member_id,
+                for_update=True,
+            )
+            if target is None:
+                raise EntityNotFoundError("Сотрудник не найден.")
+            self._require_manageable_target(live_actor, target)
+            self._require_assignable_role(live_actor, role)
+            previous = target.role
+            target.role = role
+            if role is not StaffRole.MASTER and not target.is_bootstrap_owner:
+                target.is_bookable = False
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.role_changed",
+                entity_type="staff_member",
+                entity_id=str(target.id),
+                changes={"previous_role": previous.value, "role": role.value},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(target)
+
+    async def set_permission_grant(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        permission: StaffPermission,
+        *,
+        enabled: bool,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        """Grant only explicitly safe capabilities; bootstrap authority is never editable."""
+
+        if permission not in GRANTABLE_STAFF_PERMISSIONS:
+            raise AuthorizationError("Это разрешение нельзя выдавать отдельно.")
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(
+                repository,
+                actor.business_id,
+                actor.telegram_id,
+            )
+            if live_actor.role is not StaffRole.OWNER:
+                raise AuthorizationError("Только владелец может менять дополнительные разрешения.")
+            target = await repository.get_by_id(
+                live_actor.business_id,
+                staff_member_id,
+                for_update=True,
+            )
+            if target is None:
+                raise EntityNotFoundError("Сотрудник не найден.")
+            self._require_manageable_target(live_actor, target)
+            grants = self._permission_grants(target)
+            updated = grants | {permission} if enabled else grants - {permission}
+            target.permission_grants = sorted(item.value for item in updated)
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.permission_grant_changed",
+                entity_type="staff_member",
+                entity_id=str(target.id),
+                changes={"permission": permission.value, "enabled": enabled},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(target)
+
+    async def reassign_future_appointments(
+        self,
+        actor: StaffContext,
+        source_staff_member_id: int,
+        target_staff_member_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> int:
+        """Safely move future bookings to matching target windows, preserving history."""
+
+        if source_staff_member_id == target_staff_member_id:
+            raise StaffReassignmentError("Исходный и новый специалист совпадают.")
+        current = self._aware_now(now)
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(
+                repository,
+                actor.business_id,
+                actor.telegram_id,
+            )
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            source = await repository.get_by_id(
+                live_actor.business_id,
+                source_staff_member_id,
+                for_update=True,
+            )
+            target = await repository.get_by_id(
+                live_actor.business_id,
+                target_staff_member_id,
+                for_update=True,
+            )
+            if source is None or target is None:
+                raise EntityNotFoundError("Сотрудник не найден.")
+            self._require_manageable_target(live_actor, source)
+            if not target.is_active or target.archived_at is not None or not target.is_bookable:
+                raise StaffReassignmentError(
+                    "Новый специалист неактивен или недоступен для записи."
+                )
+            try:
+                count = await repository.reassign_future_appointments(
+                    live_actor.business_id,
+                    source.id,
+                    target,
+                    now=current,
+                )
+            except ValueError as exc:
+                messages = {
+                    "target_missing_service_assignments": (
+                        "Сначала назначьте новому специалисту все услуги переносимых записей."
+                    ),
+                    "target_missing_exact_windows": (
+                        "Сначала создайте новому специалисту свободные окна на то же время."
+                    ),
+                    "source_window_missing": "Исходное окно записи не найдено.",
+                }
+                raise StaffReassignmentError(messages.get(str(exc), "Перенос невозможен.")) from exc
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.future_appointments_reassigned",
+                entity_type="staff_member",
+                entity_id=str(source.id),
+                changes={"target_staff_member_id": target.id, "appointment_count": count},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return count
+
     async def bootstrap_owners(
         self,
         *,
@@ -365,10 +575,12 @@ class AuthorizationService:
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> StaffBootstrapResult:
-        """Create owners once, never promoting or restoring an existing membership."""
+        """Bind one immutable bootstrap owner and optionally seed ordinary owners once."""
 
         current = self._aware_now(now)
-        normalized_ids = tuple(sorted(set(telegram_ids)))
+        normalized_ids = tuple(dict.fromkeys(telegram_ids))
+        if not normalized_ids:
+            raise ValueError("at least one bootstrap Telegram ID is required")
         if any(value <= 0 for value in normalized_ids):
             raise ValueError("bootstrap Telegram IDs must be positive integers")
         normalized_name = display_name.strip()
@@ -381,15 +593,90 @@ class AuthorizationService:
             business = await repository.get_business_for_update(business_id)
             if business is None:
                 raise EntityNotFoundError("Бизнес не найден.")
-            if await repository.has_active_owner(business_id):
-                return StaffBootstrapResult(
-                    business_id=business_id,
-                    owner_already_present=True,
-                )
-
             created: list[StaffContext] = []
             skipped = 0
-            for index, telegram_id in enumerate(normalized_ids, start=1):
+            existing_bootstrap = await repository.get_bootstrap_owner(
+                business_id,
+                for_update=True,
+            )
+            bootstrap_id = normalized_ids[0]
+            configured_bootstrap = await repository.get_by_telegram_id(
+                business_id,
+                bootstrap_id,
+                active_only=False,
+                for_update=True,
+            )
+            if existing_bootstrap is not None:
+                if (
+                    configured_bootstrap is None
+                    or configured_bootstrap[0].id != existing_bootstrap.id
+                ):
+                    raise AuthorizationError(
+                        "Настроенный bootstrap ID не совпадает "
+                        "с неизменяемым владельцем экземпляра."
+                    )
+            elif configured_bootstrap is not None:
+                bootstrap_member, bootstrap_user = configured_bootstrap
+                if (
+                    bootstrap_member.role is not StaffRole.OWNER
+                    or not bootstrap_member.is_active
+                    or bootstrap_member.archived_at is not None
+                    or bootstrap_user.is_blocked
+                ):
+                    raise AuthorizationError(
+                        "Настроенный bootstrap ID связан с отозванной или заблокированной ролью."
+                    )
+                bootstrap_member.is_bootstrap_owner = True
+                bootstrap_member.permission_grants = []
+                await repository.flush()
+                await audit.add(
+                    business_id=business_id,
+                    actor_user_id=bootstrap_user.id,
+                    action="staff.bootstrap_owner_bound",
+                    entity_type="staff_member",
+                    entity_id=str(bootstrap_member.id),
+                    changes={"business_id": business_id},
+                    correlation_id=correlation_id,
+                )
+            else:
+                bootstrap_user = await repository.get_or_create_user(
+                    StaffIdentity(telegram_id=bootstrap_id)
+                )
+                if bootstrap_user.is_blocked:
+                    raise AuthorizationError("Bootstrap-владелец не может быть заблокирован.")
+                bootstrap_member = await repository.add(
+                    StaffMember(
+                        business_id=business_id,
+                        user_id=bootstrap_user.id,
+                        display_name=normalized_name,
+                        role=StaffRole.OWNER,
+                        is_active=True,
+                        is_bookable=False,
+                        is_bootstrap_owner=True,
+                    )
+                )
+                created.append(
+                    self._context(
+                        bootstrap_member,
+                        bootstrap_user.id,
+                        bootstrap_user.telegram_id,
+                    )
+                )
+                await audit.add(
+                    business_id=business_id,
+                    actor_user_id=None,
+                    action="staff.bootstrap_owner_created",
+                    entity_type="staff_member",
+                    entity_id=str(bootstrap_member.id),
+                    changes={
+                        "business_id": business_id,
+                        "role": StaffRole.OWNER.value,
+                        "created_at": current.isoformat(),
+                    },
+                    correlation_id=correlation_id,
+                )
+
+            for index, telegram_id in enumerate(normalized_ids[1:], start=2):
                 existing = await repository.get_by_telegram_id(
                     business_id,
                     telegram_id,
@@ -397,7 +684,6 @@ class AuthorizationService:
                     for_update=True,
                 )
                 if existing is not None:
-                    # This includes archived/revoked staff. Bootstrap must never restore it.
                     skipped += 1
                     continue
                 user = await repository.get_or_create_user(StaffIdentity(telegram_id=telegram_id))
@@ -405,14 +691,11 @@ class AuthorizationService:
                     StaffMember(
                         business_id=business_id,
                         user_id=user.id,
-                        display_name=(
-                            normalized_name
-                            if len(normalized_ids) == 1
-                            else f"{normalized_name} {index}"
-                        ),
+                        display_name=f"{normalized_name} {index}",
                         role=StaffRole.OWNER,
                         is_active=True,
                         is_bookable=False,
+                        is_bootstrap_owner=False,
                     )
                 )
                 context = self._context(member, user.id, user.telegram_id)
@@ -420,7 +703,7 @@ class AuthorizationService:
                 await audit.add(
                     business_id=business_id,
                     actor_user_id=None,
-                    action="staff.bootstrap_owner_created",
+                    action="staff.configured_owner_created",
                     entity_type="staff_member",
                     entity_id=str(member.id),
                     changes={
@@ -433,7 +716,7 @@ class AuthorizationService:
             await session.commit()
             return StaffBootstrapResult(
                 business_id=business_id,
-                owner_already_present=False,
+                owner_already_present=existing_bootstrap is not None,
                 created=tuple(created),
                 skipped_existing_count=skipped,
             )
@@ -467,7 +750,44 @@ class AuthorizationService:
             display_name=member.display_name,
             role=member.role,
             is_bookable=member.is_bookable,
+            is_bootstrap_owner=bool(member.is_bootstrap_owner),
+            permission_grants=AuthorizationService._permission_grants(member),
         )
+
+    @staticmethod
+    def _permission_grants(member: StaffMember) -> frozenset[StaffPermission]:
+        return frozenset(StaffPermission(value) for value in (member.permission_grants or []))
+
+    @classmethod
+    def _member_view(cls, member: StaffMember) -> StaffMemberView:
+        return StaffMemberView(
+            id=member.id,
+            display_name=member.display_name,
+            role=member.role,
+            is_active=member.is_active and member.archived_at is None,
+            is_bookable=member.is_bookable,
+            is_bootstrap_owner=bool(member.is_bootstrap_owner),
+            permission_grants=cls._permission_grants(member),
+            is_bound=member.user_id is not None,
+            archived_at=member.archived_at,
+        )
+
+    @staticmethod
+    def _require_manageable_target(actor: StaffContext, target: StaffMember) -> None:
+        if target.id == actor.staff_member_id or target.is_bootstrap_owner:
+            raise AuthorizationError("Bootstrap-владельца и собственную роль изменять нельзя.")
+        if target.role is StaffRole.OWNER:
+            if not actor.is_bootstrap_owner:
+                raise AuthorizationError("Управлять другими владельцами может только bootstrap.")
+            return
+        if actor.role is StaffRole.OWNER:
+            return
+        if actor.role is StaffRole.MANAGER and target.role in {
+            StaffRole.MASTER,
+            StaffRole.RECEPTIONIST,
+        }:
+            return
+        raise AuthorizationError("Недостаточно прав для изменения этого сотрудника.")
 
     @staticmethod
     def _require_permission(
@@ -478,8 +798,12 @@ class AuthorizationService:
             raise AuthorizationError("Недостаточно прав для этого действия.")
 
     @staticmethod
-    def _require_assignable_role(actor_role: StaffRole, target_role: StaffRole) -> None:
-        if not can_assign_role(actor_role, target_role):
+    def _require_assignable_role(actor: StaffContext, target_role: StaffRole) -> None:
+        if not can_assign_role(
+            actor.role,
+            target_role,
+            actor_is_bootstrap=actor.is_bootstrap_owner,
+        ):
             raise AuthorizationError("Нельзя назначить выбранную роль.")
 
     @staticmethod

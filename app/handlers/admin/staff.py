@@ -17,11 +17,13 @@ from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.admin.staff import (
     ROLE_LABELS,
     StaffAdminCallback,
+    reassign_confirmation,
     revoke_invitation_confirmation,
+    revoke_member_confirmation,
     staff_invitation_link,
     staff_management_keyboard,
 )
-from app.schemas.authorization import StaffContext, StaffInvitationCreate
+from app.schemas.authorization import StaffContext, StaffInvitationCreate, StaffPermission
 from app.services.authorization_service import AuthorizationService
 from app.states.staff import StaffInvitationForm
 
@@ -39,8 +41,10 @@ async def _show_staff(
     for member in members:
         state = "активен" if member.is_active else "отключён"
         binding = "Telegram привязан" if member.is_bound else "без Telegram"
+        bootstrap = " · bootstrap-владелец" if member.is_bootstrap_owner else ""
         lines.append(
-            f"• {escape(member.display_name)} — {ROLE_LABELS[member.role]}, {state}, {binding}"
+            f"• {escape(member.display_name)} — {ROLE_LABELS[member.role]}, "
+            f"{state}, {binding}{bootstrap}"
         )
     if invitations:
         lines.append("\n<b>Ожидают принятия</b>")
@@ -51,7 +55,7 @@ async def _show_staff(
         )
     await message.answer(
         "\n".join(lines),
-        reply_markup=staff_management_keyboard(actor.role, invitations),
+        reply_markup=staff_management_keyboard(actor, members, invitations),
     )
 
 
@@ -184,5 +188,129 @@ async def revoke_invitation(
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.answer("Приглашение отозвано.")
+    if isinstance(callback.message, Message):
+        await _show_staff(callback.message, authorization_service, staff_context)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "member_revoke_prompt"))
+async def prompt_revoke_member(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Отозвать роль сотрудника? Доступ прекратится сразу, история сохранится.",
+            reply_markup=revoke_member_confirmation(callback_data.staff_member_id),
+        )
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "member_revoke_confirm"))
+async def revoke_member(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        await authorization_service.revoke_member(
+            staff_context,
+            callback_data.staff_member_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Роль отозвана.")
+    if isinstance(callback.message, Message):
+        await _show_staff(callback.message, authorization_service, staff_context)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "reassign_prompt"))
+async def prompt_reassign_future_appointments(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Переназначить все будущие активные записи? Для нового специалиста должны "
+            "быть назначены те же услуги и созданы свободные окна на то же время.",
+            reply_markup=reassign_confirmation(
+                callback_data.staff_member_id,
+                callback_data.target_staff_member_id,
+            ),
+        )
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "reassign_confirm"))
+async def reassign_future_appointments(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        count = await authorization_service.reassign_future_appointments(
+            staff_context,
+            callback_data.staff_member_id,
+            callback_data.target_staff_member_id,
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer(f"Переназначено записей: {count}.", show_alert=True)
+    if isinstance(callback.message, Message):
+        await _show_staff(callback.message, authorization_service, staff_context)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "role"))
+async def change_member_role(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        role = StaffRole(callback_data.role)
+        await authorization_service.change_member_role(
+            staff_context,
+            callback_data.staff_member_id,
+            role,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Роль обновлена.")
+    if isinstance(callback.message, Message):
+        await _show_staff(callback.message, authorization_service, staff_context)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "perm"))
+async def toggle_member_permission(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        permission = StaffPermission(callback_data.permission)
+        await authorization_service.set_permission_grant(
+            staff_context,
+            callback_data.staff_member_id,
+            permission,
+            enabled=callback_data.enabled,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Разрешение обновлено.")
     if isinstance(callback.message, Message):
         await _show_staff(callback.message, authorization_service, staff_context)

@@ -83,7 +83,11 @@ async def show_business_profile(
     subscription_text = await _subscription_summary(subscription_service, staff_context.business_id)
     await message.answer(
         _render(view) + f"\n\n{subscription_text}",
-        reply_markup=business_profile_keyboard(),
+        reply_markup=business_profile_keyboard(
+            business_type=view.business_type,
+            is_bootstrap_owner=staff_context.is_bootstrap_owner,
+            is_bookable=staff_context.is_bookable,
+        ),
     )
 
 
@@ -108,14 +112,54 @@ async def toggle_business_type(
 ) -> None:
     current = await business_service.get(staff_context)
     target = BusinessType.SALON if current.business_type is BusinessType.SOLO else BusinessType.SOLO
-    view = await business_service.update(
-        staff_context,
-        BusinessProfileUpdate(business_type=target),
-        correlation_id=correlation_id,
-    )
+    try:
+        view = await business_service.update(
+            staff_context,
+            BusinessProfileUpdate(business_type=target),
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(_render(view), reply_markup=business_profile_keyboard())
+        await callback.message.edit_text(
+            _render(view),
+            reply_markup=business_profile_keyboard(
+                business_type=view.business_type,
+                is_bootstrap_owner=staff_context.is_bootstrap_owner,
+                is_bookable=staff_context.is_bookable,
+            ),
+        )
     await callback.answer("Тип бизнеса обновлён.")
+
+
+@router.callback_query(BusinessProfileCallback.filter(F.action == "self_master"))
+async def toggle_bootstrap_specialist(
+    callback: CallbackQuery,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        updated = await business_service.set_bootstrap_bookable(
+            staff_context,
+            enabled=not staff_context.is_bookable,
+            correlation_id=correlation_id,
+        )
+        view = await business_service.get(updated)
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render(view),
+            reply_markup=business_profile_keyboard(
+                business_type=view.business_type,
+                is_bootstrap_owner=True,
+                is_bookable=updated.is_bookable,
+            ),
+        )
+    await callback.answer("Профиль специалиста обновлён.")
 
 
 @router.callback_query(BusinessProfileCallback.filter(F.action == "logo"))
@@ -196,7 +240,14 @@ async def save_text_value(
         await message.answer(f"Не удалось сохранить: {escape(str(exc))}")
         return
     await state.clear()
-    await message.answer(_render(view), reply_markup=business_profile_keyboard())
+    await message.answer(
+        _render(view),
+        reply_markup=business_profile_keyboard(
+            business_type=view.business_type,
+            is_bootstrap_owner=staff_context.is_bootstrap_owner,
+            is_bookable=staff_context.is_bookable,
+        ),
+    )
 
 
 @router.message(BusinessProfileStates.waiting_logo, F.photo)
@@ -227,7 +278,11 @@ async def save_logo(
     await state.clear()
     await message.answer(
         _render(view) + warning,
-        reply_markup=business_profile_keyboard(),
+        reply_markup=business_profile_keyboard(
+            business_type=view.business_type,
+            is_bootstrap_owner=staff_context.is_bootstrap_owner,
+            is_bookable=staff_context.is_bookable,
+        ),
     )
 
 

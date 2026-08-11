@@ -82,6 +82,26 @@ async def test_list_recent_reauthorizes_and_returns_safe_views() -> None:
     assert "safe_metadata" not in result[0].model_dump()
 
 
+@pytest.mark.asyncio
+async def test_master_payment_list_is_repository_scoped_to_self() -> None:
+    authorization = MagicMock()
+    authorization.authorize = AsyncMock(return_value=actor(StaffRole.MASTER))
+    unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
+    unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
+    unit_of_work.__aexit__ = AsyncMock(return_value=None)
+    unit_of_work.payments.list_recent = AsyncMock(return_value=[])
+    service = PaymentAdministrationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        authorization,
+        MagicMock(),
+    )
+
+    await service.list_recent(actor(StaffRole.MASTER))
+
+    assert unit_of_work.payments.list_recent.await_args.kwargs["staff_member_id"] == 2
+
+
 def test_receptionist_payment_panel_never_offers_manual_approval() -> None:
     payment_view = MagicMock()
     payment_view.id = 10
@@ -110,6 +130,7 @@ async def test_manual_rejection_is_atomic_and_replay_safe() -> None:
     local_payment = payment()
     appointment = SimpleNamespace(
         id=20,
+        staff_member_id=2,
         client_id=30,
         status=AppointmentStatus.PENDING_MANUAL_CONFIRMATION,
         reservation_expires_at=None,
@@ -171,6 +192,7 @@ async def test_receipt_reference_requires_fresh_view_permission() -> None:
     local_payment.receipt_file_id = "telegram-file-id"
     local_payment.receipt_media_type = "document"
     unit_of_work.payments.get = AsyncMock(return_value=local_payment)
+    unit_of_work.appointments.get = AsyncMock(return_value=SimpleNamespace(staff_member_id=2))
     service = PaymentAdministrationService(
         lambda: unit_of_work,  # type: ignore[arg-type]
         authorization,

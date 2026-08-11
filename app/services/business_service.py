@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from app.domain.enums import BusinessStatus
-from app.domain.errors import EntityNotFoundError
+from app.domain.enums import BusinessStatus, BusinessType
+from app.domain.errors import AuthorizationError, BusinessTypeTransitionError, EntityNotFoundError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.business import BusinessAdminView, BusinessProfileUpdate
@@ -51,6 +51,23 @@ class BusinessAdministrationService:
             if business is None:
                 raise EntityNotFoundError("Business was not found")
             changes = values.model_dump(exclude_unset=True)
+            if (
+                changes.get("business_type") is BusinessType.SOLO
+                and business.business_type is BusinessType.SALON
+            ):
+                bootstrap = await unit_of_work.staff.get_bootstrap_owner(
+                    live_actor.business_id,
+                    for_update=True,
+                )
+                if bootstrap is None:
+                    raise BusinessTypeTransitionError(("bootstrap-владелец ещё не привязан",))
+                blockers = await unit_of_work.staff.solo_transition_blockers(
+                    live_actor.business_id,
+                    bootstrap.id,
+                    now=current,
+                )
+                if blockers:
+                    raise BusinessTypeTransitionError(blockers)
             changed_fields = [
                 field for field, value in changes.items() if getattr(business, field) != value
             ]
@@ -75,6 +92,45 @@ class BusinessAdministrationService:
             )
             await unit_of_work.commit()
             return BusinessAdminView.model_validate(business)
+
+    async def set_bootstrap_bookable(
+        self,
+        actor: StaffContext,
+        *,
+        enabled: bool,
+        correlation_id: str | None = None,
+    ) -> StaffContext:
+        """Toggle the bootstrap owner's specialist profile without changing authority."""
+
+        live_actor = await self._authorize(actor)
+        if not live_actor.is_bootstrap_owner:
+            raise AuthorizationError("Только bootstrap-владелец может изменить свой профиль.")
+        async with self._unit_of_work_factory() as unit_of_work:
+            self._require_tenant(unit_of_work, live_actor)
+            business = await unit_of_work.businesses.get(for_update=True)
+            member = await unit_of_work.staff.get_by_id(
+                live_actor.business_id,
+                live_actor.staff_member_id,
+                for_update=True,
+            )
+            if business is None or member is None or not member.is_bootstrap_owner:
+                raise EntityNotFoundError("Bootstrap-профиль не найден.")
+            if enabled and business.business_type is not BusinessType.SOLO:
+                raise AuthorizationError(
+                    "Отметить bootstrap специалистом можно в режиме «Один мастер»."
+                )
+            member.is_bookable = enabled
+            await unit_of_work.staff.flush()
+            await unit_of_work.audit.add(
+                actor_user_id=live_actor.user_id,
+                action="staff.bootstrap_bookable_changed",
+                entity_type="staff_member",
+                entity_id=str(member.id),
+                changes={"is_bookable": enabled},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return live_actor.model_copy(update={"is_bookable": enabled})
 
     async def _authorize(self, actor: StaffContext) -> StaffContext:
         return await self._authorization.authorize(

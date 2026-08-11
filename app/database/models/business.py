@@ -97,6 +97,18 @@ class StaffMember(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("sort_order BETWEEN -100000 AND 100000", name="sort_order_valid"),
         CheckConstraint("max_daily_appointments > 0", name="daily_limit_positive"),
+        CheckConstraint(
+            "NOT is_bootstrap_owner OR "
+            "(role = 'owner' AND is_active AND archived_at IS NULL AND user_id IS NOT NULL)",
+            name="bootstrap_owner_invariant",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(permission_grants) = 'array' AND "
+            "permission_grants <@ "
+            '\'["invite_staff", "manage_staff", "manage_broadcasts", '
+            '"override_booking_limit"]\'::jsonb',
+            name="permission_grants_array",
+        ),
         Index(
             "uq_staff_members_business_user",
             "business_id",
@@ -116,6 +128,12 @@ class StaffMember(TimestampMixin, Base):
             "is_bookable",
             "sort_order",
             "id",
+        ),
+        Index(
+            "uq_staff_members_business_bootstrap_owner",
+            "business_id",
+            unique=True,
+            postgresql_where=text("is_bootstrap_owner"),
         ),
     )
 
@@ -139,6 +157,12 @@ class StaffMember(TimestampMixin, Base):
     )
     is_bookable: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
+    )
+    is_bootstrap_owner: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    permission_grants: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     schedule_paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     max_daily_appointments: Mapped[int] = mapped_column(

@@ -18,10 +18,12 @@ from app.domain.enums import (
     PaymentMode,
     PaymentStatus,
     RefundStatus,
+    StaffRole,
 )
 from app.domain.errors import DomainError, EntityNotFoundError
 from app.domain.payments import PaymentStateError, WebhookProcessingStatus, aware_utc
 from app.payments.providers.base import PaymentProviderError, ProviderWebhookEvent
+from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.payment_repository import PaymentRepository
 from app.repositories.reservation_repository import ReservationRepository
@@ -65,6 +67,7 @@ class PaymentUnitOfWork(Protocol):
     """Minimal transaction port; the concrete SQLAlchemy UoW satisfies it."""
 
     business_id: int
+    appointments: AppointmentRepository
     payments: PaymentRepository
     reservations: ReservationRepository
     audit: AuditRepository
@@ -340,6 +343,12 @@ class ManualPaymentApprovalCoordinator:
             _require_actor_scope(uow, live_actor)
             payment = await uow.payments.get(payment_id, for_update=True)
             if payment is None:
+                raise EntityNotFoundError("payment not found")
+            appointment = await uow.appointments.get(payment.appointment_id)
+            if appointment is None or (
+                live_actor.role is StaffRole.MASTER
+                and appointment.staff_member_id != live_actor.staff_member_id
+            ):
                 raise EntityNotFoundError("payment not found")
             if payment.provider is not PaymentMode.MANUAL:
                 raise PaymentStateError("manual approval requires a manual payment")

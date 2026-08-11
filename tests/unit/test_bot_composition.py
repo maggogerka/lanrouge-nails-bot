@@ -108,7 +108,7 @@ async def test_polling_bootstraps_env_owners_before_dispatcher_runtime() -> None
     create_database.assert_called_once_with(settings.database_url.get_secret_value())
     authorization_service.bootstrap_owners.assert_awaited_once_with(
         business_id=1,
-        telegram_ids=settings.admin_telegram_ids,
+        telegram_ids=settings.configured_owner_telegram_ids,
     )
     build_dispatcher.assert_called_once()
     dispatcher_args = build_dispatcher.call_args.args

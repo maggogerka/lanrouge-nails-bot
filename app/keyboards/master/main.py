@@ -7,6 +7,7 @@ from app.security import get_staff_context
 
 MASTER_APPOINTMENTS_TEXT = "📅 Мои записи"
 MASTER_SCHEDULE_TEXT = "🕒 Моё расписание"
+MASTER_PREPAYMENTS_TEXT = "💳 Предоплаты"
 MASTER_SUPPORT_TEXT = "🛟 Поддержка"
 
 
@@ -19,6 +20,8 @@ def master_main_keyboard(staff_context: StaffContext | None = None) -> ReplyKeyb
         rows.append([KeyboardButton(text=MASTER_APPOINTMENTS_TEXT)])
     if _can(context, StaffPermission.VIEW_OWN_SCHEDULE):
         rows.append([KeyboardButton(text=MASTER_SCHEDULE_TEXT)])
+    if _can(context, StaffPermission.VIEW_PREPAYMENTS):
+        rows.append([KeyboardButton(text=MASTER_PREPAYMENTS_TEXT)])
     if _can(context, StaffPermission.VIEW_VENDOR_SUPPORT):
         rows.append([KeyboardButton(text=MASTER_SUPPORT_TEXT)])
     return ReplyKeyboardMarkup(

@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import AppointmentStatus
 from app.schemas.master_workspace import MasterAppointmentView
+from app.schemas.payment import PaymentView
 
 
 class MasterScheduleCallback(CallbackData, prefix="master_schedule"):
@@ -16,6 +17,11 @@ class MasterScheduleCallback(CallbackData, prefix="master_schedule"):
 class MasterAppointmentCallback(CallbackData, prefix="master_appt"):
     action: str
     appointment_id: int
+
+
+class MasterPaymentCallback(CallbackData, prefix="master_pay"):
+    action: str
+    payment_id: int
 
 
 def master_schedule_actions(*, is_paused: bool) -> InlineKeyboardMarkup:
@@ -117,6 +123,47 @@ def master_appointment_confirmation(
                     callback_data=MasterAppointmentCallback(
                         action="dismiss",
                         appointment_id=appointment_id,
+                    ).pack(),
+                ),
+            ]
+        ]
+    )
+
+
+def master_payment_actions(payments: tuple[PaymentView, ...]) -> InlineKeyboardMarkup | None:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"Подтвердить предоплату №{payment.id}",
+                callback_data=MasterPaymentCallback(
+                    action="approve_prompt",
+                    payment_id=payment.id,
+                ).pack(),
+            )
+        ]
+        for payment in payments
+        if payment.manual_status is not None
+        and payment.manual_status.value in {"client_reported", "review_pending"}
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def master_payment_confirmation(payment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, деньги получены",
+                    callback_data=MasterPaymentCallback(
+                        action="approve_confirm",
+                        payment_id=payment_id,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Нет",
+                    callback_data=MasterPaymentCallback(
+                        action="dismiss",
+                        payment_id=payment_id,
                     ).pack(),
                 ),
             ]
