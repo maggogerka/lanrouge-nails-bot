@@ -11,12 +11,14 @@ from app.database.models import (
     AppointmentReferenceMedia,
     AvailabilityWindow,
     Service,
+    StaffMember,
     User,
 )
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
     MediaType,
+    StaffRole,
     UserRole,
 )
 from app.repositories import SqlAlchemyUnitOfWork
@@ -31,6 +33,16 @@ async def seed_expired_reference(database: Database) -> int:
         client = User(telegram_id=101, role=UserRole.CLIENT)
         session.add_all([administrator, client])
         await session.flush()
+        master = StaffMember(
+            business_id=1,
+            user_id=administrator.id,
+            display_name="Мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+        session.add(master)
+        await session.flush()
         catalog_service = Service(
             business_id=1,
             name="Маникюр",
@@ -43,7 +55,7 @@ async def seed_expired_reference(database: Database) -> int:
         await session.flush()
         window = AvailabilityWindow(
             business_id=1,
-            staff_member_id=1,
+            staff_member_id=master.id,
             start_at=NOW - timedelta(days=31, hours=3),
             end_at=NOW - timedelta(days=31),
             status=AvailabilityWindowStatus.CLOSED,
@@ -53,7 +65,7 @@ async def seed_expired_reference(database: Database) -> int:
         await session.flush()
         appointment = Appointment(
             business_id=1,
-            staff_member_id=1,
+            staff_member_id=master.id,
             client_id=client.id,
             window_id=window.id,
             service_id=catalog_service.id,

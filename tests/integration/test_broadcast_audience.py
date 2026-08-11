@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.database import Database
-from app.database.models import Broadcast, BroadcastRecipient, User
+from app.database.models import Broadcast, BroadcastRecipient, BusinessClient, User
 from app.domain.enums import (
     BroadcastAudienceType,
     BroadcastButtonType,
@@ -59,6 +59,10 @@ async def test_only_live_subscribers_are_frozen_once(
             [admin, subscribed, unsubscribed, blocked, self_booking_blocked, no_consent]
         )
         await session.flush()
+        session.add_all(
+            BusinessClient(business_id=1, user_id=user.id)
+            for user in (subscribed, unsubscribed, blocked, self_booking_blocked, no_consent)
+        )
         campaign = Broadcast(
             business_id=1,
             title="Campaign",
@@ -95,14 +99,15 @@ async def test_only_live_subscribers_are_frozen_once(
         await uow.commit()
 
     async with integration_database.sessions() as session:
-        session.add(
-            User(
-                telegram_id=106,
-                role=UserRole.CLIENT,
-                marketing_consent_at=NOW,
-                is_blocked=False,
-            )
+        late_subscriber = User(
+            telegram_id=106,
+            role=UserRole.CLIENT,
+            marketing_consent_at=NOW,
+            is_blocked=False,
         )
+        session.add(late_subscriber)
+        await session.flush()
+        session.add(BusinessClient(business_id=1, user_id=late_subscriber.id))
         await session.commit()
         count = await session.scalar(select(func.count(BroadcastRecipient.id)))
         assert count == 1

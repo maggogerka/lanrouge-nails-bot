@@ -11,11 +11,12 @@ from app.database.models import (
     AvailabilityWindow,
     BusinessSettings,
     Service,
+    StaffMember,
     User,
     WaitlistEntry,
     WaitlistNotification,
 )
-from app.domain.enums import AvailabilityWindowStatus, UserRole, WaitlistStatus
+from app.domain.enums import AvailabilityWindowStatus, StaffRole, UserRole, WaitlistStatus
 from app.repositories import SqlAlchemyUnitOfWork
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
@@ -39,6 +40,16 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         ]
         admin = User(telegram_id=900, first_name="Admin", role=UserRole.ADMIN)
         session.add_all([admin, *users])
+        await session.flush()
+        master = StaffMember(
+            business_id=1,
+            user_id=admin.id,
+            display_name="Мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+        session.add(master)
         await session.flush()
         fitting = Service(
             business_id=1,
@@ -120,7 +131,7 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         )
         window = AvailabilityWindow(
             business_id=1,
-            staff_member_id=1,
+            staff_member_id=master.id,
             start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
             end_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
             status=AvailabilityWindowStatus.OPEN,

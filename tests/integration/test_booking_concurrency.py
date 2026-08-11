@@ -14,10 +14,11 @@ from app.database.models import (
     Appointment,
     AvailabilityWindow,
     Service,
+    StaffMember,
     StaffServiceAssignment,
     User,
 )
-from app.domain.enums import AvailabilityWindowStatus, UserRole
+from app.domain.enums import AvailabilityWindowStatus, StaffRole, UserRole
 from app.domain.errors import BookingConflictError
 from app.repositories import SqlAlchemyUnitOfWork
 from app.schemas.booking import BookingReceipt, BookingRequest, ClientActor
@@ -44,6 +45,16 @@ async def seed_booking_case(database: Database) -> None:
         ]
         session.add_all([administrator, *clients])
         await session.flush()
+        master = StaffMember(
+            business_id=1,
+            user_id=administrator.id,
+            display_name="Мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+        session.add(master)
+        await session.flush()
         service = Service(
             business_id=1,
             name="Маникюр",
@@ -58,7 +69,7 @@ async def seed_booking_case(database: Database) -> None:
         session.add(
             StaffServiceAssignment(
                 business_id=1,
-                staff_member_id=1,
+                staff_member_id=master.id,
                 service_id=service.id,
                 online_booking_enabled=True,
                 is_active=True,
@@ -67,7 +78,7 @@ async def seed_booking_case(database: Database) -> None:
         session.add(
             AvailabilityWindow(
                 business_id=1,
-                staff_member_id=1,
+                staff_member_id=master.id,
                 start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
                 end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
                 status=AvailabilityWindowStatus.OPEN,
