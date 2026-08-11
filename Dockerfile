@@ -51,9 +51,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp
 
 USER root
+# ENTRYPOINT is cleared below and backup runs as UID 10001, so the Go-based
+# privilege-drop helper inherited from PostgreSQL is unused and removed.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates restic \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -f /usr/local/bin/gosu \
     && groupadd --gid 10001 app \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
 

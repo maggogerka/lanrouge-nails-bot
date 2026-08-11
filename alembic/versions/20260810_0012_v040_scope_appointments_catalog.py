@@ -210,11 +210,11 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE appointments AS appointment
-        SET scheduled_start_at = window.start_at,
-            scheduled_end_at = window.end_at,
+        SET scheduled_start_at = booking_window.start_at,
+            scheduled_end_at = booking_window.end_at,
             master_name_snapshot = staff.display_name
-        FROM availability_windows AS window, staff_members AS staff
-        WHERE appointment.window_id = window.id AND staff.id = 1
+        FROM availability_windows AS booking_window, staff_members AS staff
+        WHERE appointment.window_id = booking_window.id AND staff.id = 1
         """
     )
     op.alter_column("appointments", "scheduled_start_at", nullable=False)

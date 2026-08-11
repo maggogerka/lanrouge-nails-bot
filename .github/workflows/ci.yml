@@ -65,7 +65,7 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
           python -m pip check
       - name: Reject tracked local environment files
-        run: test -z "$(git ls-files '.env' '.env.*' '.secrets/**')"
+        run: test -z "$(git ls-files -- '.env' '.env.*' '.secrets/**' ':(exclude).env.example')"
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format
