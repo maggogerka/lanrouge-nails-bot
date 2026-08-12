@@ -252,7 +252,50 @@ class StaffMemberView(BaseModel):
     is_bootstrap_owner: bool = False
     permission_grants: frozenset[StaffPermission] = frozenset()
     is_bound: bool
+    bio: str | None = None
+    specialization: str | None = None
+    telegram_photo_file_id: str | None = None
     archived_at: datetime | None = None
+
+
+class StaffProfilePatch(BaseModel):
+    """Validated public profile fields editable by staff administrators."""
+
+    display_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    bio: Annotated[str, Field(max_length=4000)] | None = None
+    specialization: Annotated[str, Field(max_length=500)] | None = None
+    telegram_photo_file_id: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    telegram_photo_file_unique_id: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+
+    @field_validator("display_name", "bio", "specialization", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> StaffProfilePatch:
+        if not self.model_fields_set:
+            raise ValueError("at least one profile field must be supplied")
+        if "display_name" in self.model_fields_set and self.display_name is None:
+            raise ValueError("display name cannot be empty")
+        photo_fields = {
+            "telegram_photo_file_id",
+            "telegram_photo_file_unique_id",
+        }
+        if self.model_fields_set & photo_fields and not photo_fields <= self.model_fields_set:
+            raise ValueError("photo id and unique id must be supplied together")
+        if (self.telegram_photo_file_id is None) != (self.telegram_photo_file_unique_id is None):
+            raise ValueError("photo id and unique id must be supplied together")
+        return self
+
+
+class StaffServiceAssignmentView(BaseModel):
+    service_id: Annotated[int, Field(gt=0)]
+    service_name: str
+    assigned: bool
 
 
 class StaffInvitationView(BaseModel):

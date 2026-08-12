@@ -87,4 +87,5 @@ def admin_appointment_view(
         client_name=client.first_name or "—",
         client_phone=client.phone,
         client_username=client.username,
+        client_telegram_id=client.telegram_id,
     )

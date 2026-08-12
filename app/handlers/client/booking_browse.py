@@ -26,6 +26,7 @@ from app.keyboards.client.booking import (
 )
 from app.keyboards.client.main import CLIENT_BOOK_TEXT
 from app.schemas.booking import BookingMasterOptions, ClientActor
+from app.schemas.service import ServiceView
 from app.services.booking_service import BookingService
 from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
@@ -66,7 +67,20 @@ async def start_booking(
     if not services:
         await message.answer("Сейчас нет активных услуг для записи.")
         return
+    await show_service_cards(message, state, services)
+
+
+async def show_service_cards(
+    message: Message,
+    state: FSMContext,
+    services: list[ServiceView],
+    *,
+    preferred_staff_member_id: int | None = None,
+) -> None:
+    """Render reusable service cards and prepare the shared booking FSM."""
+
     await state.set_state(BookingFlow.service)
+    await state.update_data(preferred_staff_member_id=preferred_staff_member_id)
     await message.answer("Выберите услугу:")
     for service in services:
         description = escape(service.description or "Описание не добавлено.")
@@ -219,6 +233,29 @@ async def _continue_after_addons(
         return
     if not options.masters:
         await callback.answer("Для этой услуги пока нет доступных мастеров.", show_alert=True)
+        return
+    data = await state.get_data()
+    preferred_staff_member_id = data.get("preferred_staff_member_id")
+    if isinstance(preferred_staff_member_id, int):
+        if preferred_staff_member_id not in {master.id for master in options.masters}:
+            await callback.answer(
+                "Эта услуга больше недоступна у выбранного мастера.",
+                show_alert=True,
+            )
+            return
+        await state.update_data(
+            staff_member_id=preferred_staff_member_id,
+            master_selection_shown=False,
+        )
+        should_answer = await _show_dates(
+            callback,
+            state,
+            booking_service,
+            service_id,
+            preferred_staff_member_id,
+        )
+        if should_answer:
+            await callback.answer()
         return
     show_selection = should_show_master_selection(business.business_type, options)
     await state.update_data(master_selection_shown=show_selection)

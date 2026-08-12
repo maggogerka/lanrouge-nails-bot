@@ -14,6 +14,7 @@ from app.keyboards.admin.services import (
     service_details_keyboard,
     service_list_keyboard,
 )
+from app.keyboards.client.consent import privacy_consent_keyboard
 from app.schemas.authorization import StaffContext
 from app.schemas.service import ServiceView
 
@@ -85,3 +86,11 @@ def test_service_list_can_show_and_hide_archived_rows() -> None:
     assert any(
         "Скрыть архив" in button.text for row in with_archive.inline_keyboard for button in row
     )
+
+
+def test_privacy_consent_copy_is_gender_neutral() -> None:
+    keyboard = privacy_consent_keyboard("https://example.com/privacy")
+    labels = [button.text.casefold() for row in keyboard.inline_keyboard for button in row]
+
+    assert any("подтверждаю" in label for label in labels)
+    assert all("согласна" not in label and "согласен" not in label for label in labels)

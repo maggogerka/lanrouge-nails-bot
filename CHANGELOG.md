@@ -4,6 +4,9 @@
 
 ### Added
 
+- client service and master cards with photos and direct booking actions;
+- compact staff profile administration with booking visibility, service assignments and media;
+- direct Telegram client-chat links in appointment details;
 - recoverable, lease-protected privacy anonymization with bounded retries and worker health;
 - draft/preview/publish workflow for a safe formatted welcome text and optional photo;
 - service add-ons, duration ranges, media and immutable appointment snapshots;
@@ -13,6 +16,11 @@
 ### Changed
 
 - navigation now recovers from active and stale FSM forms;
+- Telegram contact sharing is accepted without treating contact-only messages as navigation;
+- consent and booking copy is gender-neutral, and the primary booking action has a clear emoji;
+- disabled client features refresh stale persistent keyboards instead of silently doing nothing;
+- SOLO instances unify the technical master profile with the bootstrap owner while preserving data;
+- window creation chooses a master in salon mode and skips the choice for a single master;
 - administrative services and availability windows hide archived rows by default and expose an
   explicit archive toggle;
 - upcoming appointments are grouped by day as a calendar agenda, and the window date picker

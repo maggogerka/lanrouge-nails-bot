@@ -110,12 +110,13 @@ class AvailabilityService:
                     local_date=values.local_date,
                     start_at=start_at,
                     end_at=end_at,
+                    staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
                 )
 
             window = await unit_of_work.windows.add(
                 AvailabilityWindow(
                     business_id=unit_of_work.business_id,
-                    staff_member_id=DEFAULT_STAFF_MEMBER_ID,
+                    staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
                     start_at=start_at,
                     end_at=end_at,
                     status=values.status,
@@ -176,6 +177,7 @@ class AvailabilityService:
                     local_date=values.local_date,
                     start_at=start_at,
                     end_at=end_at,
+                    staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
                 )
             return AvailabilityWindowPreview(
                 start_at=start_at,

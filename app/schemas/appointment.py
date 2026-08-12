@@ -35,6 +35,7 @@ class AdminAppointmentView(AppointmentView):
     client_name: str
     client_phone: str | None
     client_username: str | None
+    client_telegram_id: int | None = None
 
 
 class RescheduleAvailability(BaseModel):

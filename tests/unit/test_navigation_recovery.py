@@ -51,6 +51,21 @@ async def test_regular_form_input_keeps_current_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_contact_without_text_reaches_booking_handler() -> None:
+    event = MagicMock(spec=Message)
+    event.text = None
+    state = MagicMock(spec=FSMContext)
+    state.clear = AsyncMock()
+    handler = AsyncMock(return_value="contact handled")
+
+    result = await GlobalNavigationMiddleware()(handler, event, {"state": state})
+
+    assert result == "contact handled"
+    state.clear.assert_not_awaited()
+    handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_today_empty_state_is_clear_and_not_an_error() -> None:
     message = MagicMock(spec=Message)
     message.from_user = SimpleNamespace(

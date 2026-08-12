@@ -5,10 +5,30 @@ from __future__ import annotations
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.schemas.authorization import StaffMemberView
+
 
 class WindowFormCallback(CallbackData, prefix="awf"):
     action: str
     value: str = "-"
+
+
+def window_master_keyboard(masters: tuple[StaffMemberView, ...]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💅 {master.display_name[:35]}",
+                    callback_data=WindowFormCallback(
+                        action="master",
+                        value=str(master.id),
+                    ).pack(),
+                )
+            ]
+            for master in masters
+        ]
+        + [[_cancel_button()]]
+    )
 
 
 def duration_keyboard(default_minutes: int) -> InlineKeyboardMarkup:

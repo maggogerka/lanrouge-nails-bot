@@ -17,15 +17,23 @@ from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.admin.staff import (
     ROLE_LABELS,
     StaffAdminCallback,
+    invitation_roles_keyboard,
     reassign_confirmation,
     revoke_invitation_confirmation,
     revoke_member_confirmation,
     staff_invitation_link,
     staff_management_keyboard,
+    staff_member_keyboard,
+    staff_services_keyboard,
 )
-from app.schemas.authorization import StaffContext, StaffInvitationCreate, StaffPermission
+from app.schemas.authorization import (
+    StaffContext,
+    StaffInvitationCreate,
+    StaffPermission,
+    StaffProfilePatch,
+)
 from app.services.authorization_service import AuthorizationService
-from app.states.staff import StaffInvitationForm
+from app.states.staff import StaffInvitationForm, StaffProfileForm
 
 router = Router(name="admin.staff")
 
@@ -37,14 +45,19 @@ async def _show_staff(
 ) -> None:
     members = await service.list_staff(actor)
     invitations = await service.list_active_invitations(actor)
-    lines = ["<b>Мастера и сотрудники</b>"]
+    lines = [
+        "<b>Мастера и сотрудники</b>",
+        "Роль отвечает за доступ к админке, а переключатель «Принимать записи» — "
+        "за показ клиентам. Поэтому владелец может одновременно работать мастером.",
+        "\nОткройте карточку человека, чтобы настроить фото, описание и услуги.",
+    ]
     for member in members:
         state = "активен" if member.is_active else "отключён"
-        binding = "Telegram привязан" if member.is_bound else "без Telegram"
-        bootstrap = " · bootstrap-владелец" if member.is_bootstrap_owner else ""
+        booking = " · принимает записи" if member.is_bookable else ""
+        binding = "Telegram привязан" if member.is_bound else "профиль без входа"
         lines.append(
             f"• {escape(member.display_name)} — {ROLE_LABELS[member.role]}, "
-            f"{state}, {binding}{bootstrap}"
+            f"{state}, {binding}{booking}"
         )
     if invitations:
         lines.append("\n<b>Ожидают принятия</b>")
@@ -70,6 +83,239 @@ async def show_staff(
         await _show_staff(message, authorization_service, staff_context)
     except DomainError as exc:
         await message.answer(str(exc))
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "invite_menu"))
+async def show_invitation_roles(
+    callback: CallbackQuery,
+    staff_context: StaffContext,
+) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Кого добавить? Мастер принимает записи, администратор управляет бизнесом, "
+            "менеджер работает с клиентами и расписанием.",
+            reply_markup=invitation_roles_keyboard(staff_context),
+        )
+    await callback.answer()
+
+
+async def _show_member(
+    message: Message,
+    service: AuthorizationService,
+    actor: StaffContext,
+    staff_member_id: int,
+) -> None:
+    member = await service.get_staff_member(actor, staff_member_id)
+    lines = [
+        f"<b>{escape(member.display_name)}</b>",
+        f"Доступ: {ROLE_LABELS[member.role]}",
+        f"Запись клиентов: {'включена' if member.is_bookable else 'выключена'}",
+        f"Telegram: {'привязан' if member.is_bound else 'не привязан (это допустимо для профиля)'}",
+    ]
+    if member.specialization:
+        lines.append(f"Специализация: {escape(member.specialization)}")
+    if member.bio:
+        lines.append(f"О мастере: {escape(member.bio)}")
+    text = "\n".join(lines)
+    keyboard = staff_member_keyboard(actor, member)
+    if member.telegram_photo_file_id:
+        await message.answer_photo(
+            member.telegram_photo_file_id,
+            caption=text[:1024],
+            reply_markup=keyboard,
+        )
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "member"))
+async def show_member(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        if isinstance(callback.message, Message):
+            await _show_member(
+                callback.message,
+                authorization_service,
+                staff_context,
+                callback_data.staff_member_id,
+            )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "bookable"))
+async def toggle_bookable(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        await authorization_service.set_staff_bookable(
+            staff_context,
+            callback_data.staff_member_id,
+            enabled=callback_data.enabled,
+            correlation_id=correlation_id,
+        )
+        if isinstance(callback.message, Message):
+            await _show_member(
+                callback.message,
+                authorization_service,
+                staff_context,
+                callback_data.staff_member_id,
+            )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Настройка записи обновлена.")
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "services"))
+async def show_staff_services(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        assignments = await authorization_service.list_staff_service_assignments(
+            staff_context, callback_data.staff_member_id
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "<b>Услуги мастера</b>\nНажмите на услугу, чтобы включить или выключить запись.",
+            reply_markup=staff_services_keyboard(callback_data.staff_member_id, assignments),
+        )
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "service_toggle"))
+async def toggle_staff_service(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        await authorization_service.set_staff_service_assignment(
+            staff_context,
+            callback_data.staff_member_id,
+            callback_data.target_staff_member_id,
+            enabled=callback_data.enabled,
+            correlation_id=correlation_id,
+        )
+        assignments = await authorization_service.list_staff_service_assignments(
+            staff_context, callback_data.staff_member_id
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(
+            reply_markup=staff_services_keyboard(callback_data.staff_member_id, assignments)
+        )
+    await callback.answer("Услуги обновлены.")
+
+
+_PROFILE_ACTIONS = {
+    "edit_name": ("display_name", "Введите имя, которое увидят клиенты:"),
+    "edit_specialization": ("specialization", "Введите специализацию мастера:"),
+    "edit_bio": ("bio", "Расскажите о мастере (до 4000 символов):"),
+    "edit_photo": ("photo", "Отправьте одну фотографию мастера:"),
+}
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action.in_(_PROFILE_ACTIONS)))
+async def begin_profile_edit(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    state: FSMContext,
+) -> None:
+    field, prompt = _PROFILE_ACTIONS[callback_data.action]
+    await state.set_state(StaffProfileForm.value)
+    await state.set_data({"staff_member_id": callback_data.staff_member_id, "profile_field": field})
+    if isinstance(callback.message, Message):
+        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+    await callback.answer()
+
+
+@router.message(StaffProfileForm.value)
+async def save_profile_edit(
+    message: Message,
+    state: FSMContext,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    data = await state.get_data()
+    try:
+        staff_member_id = int(str(data["staff_member_id"]))
+        field = str(data["profile_field"])
+        if field == "photo":
+            if not message.photo:
+                await message.answer("Нужно отправить фотографию, не файл и не текст.")
+                return
+            photo = message.photo[-1]
+            patch = StaffProfilePatch(
+                telegram_photo_file_id=photo.file_id,
+                telegram_photo_file_unique_id=photo.file_unique_id,
+            )
+        else:
+            patch = StaffProfilePatch(**{field: message.text or ""})
+        await authorization_service.update_staff_profile(
+            staff_context,
+            staff_member_id,
+            patch,
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError, KeyError, ValueError) as exc:
+        await message.answer(f"Не удалось сохранить профиль: {exc}")
+        return
+    await state.clear()
+    await message.answer("Профиль мастера обновлён.")
+    await _show_member(message, authorization_service, staff_context, staff_member_id)
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "clear_photo"))
+async def clear_profile_photo(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        await authorization_service.update_staff_profile(
+            staff_context,
+            callback_data.staff_member_id,
+            StaffProfilePatch(
+                telegram_photo_file_id=None,
+                telegram_photo_file_unique_id=None,
+            ),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Фото удалено.")
+    if isinstance(callback.message, Message):
+        await _show_member(
+            callback.message,
+            authorization_service,
+            staff_context,
+            callback_data.staff_member_id,
+        )
 
 
 @router.callback_query(StaffAdminCallback.filter(F.action == "list"))

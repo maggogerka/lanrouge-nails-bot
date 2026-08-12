@@ -76,6 +76,32 @@ class ServiceAssignmentRepository:
         )
         return [(row[0], row[1], row[2]) for row in rows.all()]
 
+    async def list_bookable_services_for_staff(
+        self, business_id: int, staff_member_id: int
+    ) -> list[tuple[StaffServiceAssignment, Service]]:
+        rows = await self._session.execute(
+            select(StaffServiceAssignment, Service)
+            .join(Service, Service.id == StaffServiceAssignment.service_id)
+            .join(StaffMember, StaffMember.id == StaffServiceAssignment.staff_member_id)
+            .where(
+                StaffServiceAssignment.business_id == business_id,
+                StaffServiceAssignment.staff_member_id == staff_member_id,
+                StaffServiceAssignment.is_active.is_(True),
+                StaffServiceAssignment.online_booking_enabled.is_(True),
+                StaffServiceAssignment.archived_at.is_(None),
+                Service.business_id == business_id,
+                Service.is_active.is_(True),
+                Service.online_booking_enabled.is_(True),
+                Service.archived_at.is_(None),
+                StaffMember.business_id == business_id,
+                StaffMember.is_active.is_(True),
+                StaffMember.is_bookable.is_(True),
+                StaffMember.archived_at.is_(None),
+            )
+            .order_by(StaffServiceAssignment.sort_order, Service.sort_order, Service.name)
+        )
+        return [(row[0], row[1]) for row in rows.all()]
+
     async def add_category(self, category: ServiceCategory) -> ServiceCategory:
         self._session.add(category)
         await self._session.flush()

@@ -102,7 +102,7 @@ async def test_non_admin_is_rejected_before_opening_uow() -> None:
 @pytest.mark.asyncio
 async def test_archived_window_visibility_is_forwarded_to_repository() -> None:
     unit_of_work = build_uow()
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     await service.list_windows(actor(), include_archived=True, now=NOW)
 
@@ -121,7 +121,7 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
         return window
 
     unit_of_work.windows.add = AsyncMock(side_effect=add_window)
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     created = await service.create_window(
         actor(),
@@ -147,7 +147,7 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
 @pytest.mark.asyncio
 async def test_preview_validates_interval_without_writing_or_committing() -> None:
     unit_of_work = build_uow()
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     preview = await service.preview_window(actor(), create_values(), now=NOW)
 
@@ -168,7 +168,7 @@ async def test_create_closed_window_does_not_consume_active_capacity() -> None:
         return window
 
     unit_of_work.windows.add = AsyncMock(side_effect=add_window)
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     await service.create_window(
         actor(),
@@ -186,7 +186,7 @@ async def test_close_open_window_changes_status_and_writes_audit() -> None:
     unit_of_work = build_uow()
     window = persisted_window(AvailabilityWindowStatus.OPEN)
     unit_of_work.windows.get = AsyncMock(return_value=window)
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     closed = await service.close_window(actor(), 7, correlation_id="request-2")
 
@@ -205,7 +205,7 @@ async def test_window_with_appointment_history_cannot_be_deleted() -> None:
         return_value=persisted_window(AvailabilityWindowStatus.CLOSED)
     )
     unit_of_work.windows.has_appointments = AsyncMock(return_value=True)
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     with pytest.raises(WindowInUseError, match="история записей"):
         await service.delete_unused_window(actor(), 7)
@@ -220,7 +220,7 @@ async def test_owner_can_force_delete_window_aggregate() -> None:
     window = persisted_window(AvailabilityWindowStatus.BOOKED)
     unit_of_work.windows.get = AsyncMock(return_value=window)
     unit_of_work.hard_delete.delete_window_with_history = AsyncMock(return_value=2)
-    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))
+    service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     deleted = await service.force_delete_window(actor(), 7, correlation_id="force-window")
 

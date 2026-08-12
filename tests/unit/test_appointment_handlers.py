@@ -7,6 +7,7 @@ from app.domain.enums import AppointmentStatus
 from app.handlers.admin.appointment_common import render_admin_appointment
 from app.keyboards.admin.appointments import (
     AdminAppointmentCallback,
+    admin_appointment_details_keyboard,
     admin_appointment_list_keyboard,
 )
 from app.keyboards.admin.settings import SettingsCallback, settings_keyboard
@@ -33,6 +34,7 @@ def admin_appointment() -> AdminAppointmentView:
         client_name="Анна & Ко",
         client_phone="+7<999>",
         client_username="anna_test",
+        client_telegram_id=123456,
     )
 
 
@@ -61,6 +63,15 @@ def test_admin_appointment_render_escapes_contact_values() -> None:
     assert "Консультация &lt;premium&gt;" in rendered
     assert "Анна &amp; Ко" in rendered
     assert "+7&lt;999&gt;" in rendered
+
+
+def test_admin_can_open_client_chat_even_without_username() -> None:
+    appointment = admin_appointment().model_copy(update={"client_username": None})
+    keyboard = admin_appointment_details_keyboard(appointment)
+    contact = keyboard.inline_keyboard[0][0]
+
+    assert contact.text == "💬 Написать клиенту"
+    assert str(contact.url) == "tg://user?id=123456"
 
 
 def test_appointment_and_settings_callbacks_fit_telegram_limit() -> None:

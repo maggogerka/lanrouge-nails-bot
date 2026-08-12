@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app.domain.enums import AvailabilityWindowStatus
 from app.domain.errors import DatePickerValidationError, DomainError
+from app.domain.tenancy import DEFAULT_STAFF_MEMBER_ID
 from app.handlers.admin.service_common import actor_from_telegram, parse_positive_minutes
 from app.handlers.admin.window_browse import show_windows_callback
 from app.handlers.admin.window_common import parse_local_time, render_window
@@ -24,6 +25,7 @@ from app.keyboards.admin.window_create import (
     duration_keyboard,
     window_confirmation_keyboard,
     window_created_keyboard,
+    window_master_keyboard,
 )
 from app.keyboards.admin.windows import WindowCallback, stale_window_keyboard
 from app.keyboards.common.date_picker import DatePickerCallback, date_picker_keyboard
@@ -34,12 +36,14 @@ from app.keyboards.common.time_picker import (
     time_picker_keyboard,
 )
 from app.logging import log_event
+from app.schemas.authorization import StaffContext
 from app.schemas.availability import (
     AvailabilityWindowCreate,
     AvailabilityWindowPreview,
 )
 from app.schemas.service import AdminActor
 from app.schemas.settings import BusinessSettingsView
+from app.services.authorization_service import AuthorizationService
 from app.services.availability_service import AvailabilityService
 from app.services.date_picker_service import DatePickerPage, DatePickerService
 from app.services.menu_service import MenuService
@@ -82,16 +86,33 @@ async def begin_window_creation_message(
     settings_service: SettingsService,
     *,
     actor: AdminActor | None = None,
+    staff_context: StaffContext | None = None,
+    authorization_service: AuthorizationService | None = None,
 ) -> None:
     await state.clear()
     if actor is None:
         if message.from_user is None:
             return
         actor = actor_from_telegram(message.from_user)
+    if staff_context is not None and authorization_service is not None:
+        members = await authorization_service.list_staff(staff_context)
+        masters = tuple(member for member in members if member.is_active and member.is_bookable)
+        if not masters:
+            await message.answer(
+                "Сначала откройте «Мастера и сотрудники» и включите "
+                "«Принимать записи» хотя бы в одном профиле."
+            )
+            return
+        if len(masters) > 1:
+            await state.set_state(AdminWindowCreate.master)
+            await message.answer(
+                "Для какого мастера создать окно?",
+                reply_markup=window_master_keyboard(masters),
+            )
+            return
+        await state.update_data(staff_member_id=masters[0].id)
     settings = await settings_service.get(actor)
-    page = _build_date_page(settings)
-    await state.set_state(AdminWindowCreate.local_date)
-    await message.answer(_date_picker_text(page), reply_markup=date_picker_keyboard(page))
+    await _show_date_picker(message, state, settings)
 
 
 @router.message(F.text == ADMIN_ADD_WINDOW_TEXT)
@@ -99,8 +120,16 @@ async def begin_window_creation_from_menu(
     message: Message,
     state: FSMContext,
     settings_service: SettingsService,
+    authorization_service: AuthorizationService | None = None,
+    staff_context: StaffContext | None = None,
 ) -> None:
-    await begin_window_creation_message(message, state, settings_service)
+    await begin_window_creation_message(
+        message,
+        state,
+        settings_service,
+        staff_context=staff_context,
+        authorization_service=authorization_service,
+    )
 
 
 @router.callback_query(WindowCallback.filter(F.action == "add"))
@@ -108,6 +137,8 @@ async def begin_window_creation_from_callback(
     callback: CallbackQuery,
     state: FSMContext,
     settings_service: SettingsService,
+    authorization_service: AuthorizationService | None = None,
+    staff_context: StaffContext | None = None,
 ) -> None:
     if isinstance(callback.message, Message):
         await begin_window_creation_message(
@@ -115,6 +146,40 @@ async def begin_window_creation_from_callback(
             state,
             settings_service,
             actor=actor_from_telegram(callback.from_user),
+            staff_context=staff_context,
+            authorization_service=authorization_service,
+        )
+    await callback.answer()
+
+
+@router.callback_query(AdminWindowCreate.master, WindowFormCallback.filter(F.action == "master"))
+async def select_window_master(
+    callback: CallbackQuery,
+    callback_data: WindowFormCallback,
+    state: FSMContext,
+    settings_service: SettingsService,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        staff_member_id = int(callback_data.value)
+        members = await authorization_service.list_staff(staff_context)
+        selected = next(
+            member
+            for member in members
+            if member.id == staff_member_id and member.is_active and member.is_bookable
+        )
+    except (DomainError, ValueError, StopIteration):
+        await callback.answer("Мастер больше недоступен.", show_alert=True)
+        return
+    await state.update_data(staff_member_id=selected.id)
+    settings = await settings_service.get(actor_from_telegram(callback.from_user))
+    await state.set_state(AdminWindowCreate.local_date)
+    page = _build_date_page(settings)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"Мастер: {escape(selected.display_name)}\n\n" + _date_picker_text(page),
+            reply_markup=date_picker_keyboard(page),
         )
     await callback.answer()
 
@@ -505,6 +570,7 @@ async def _preview_selected_time(
         AvailabilityWindowCreate(
             local_date=_state_date(data),
             local_start_time=selected_time,
+            staff_member_id=int(str(data.get("staff_member_id", DEFAULT_STAFF_MEMBER_ID))),
             status=AvailabilityWindowStatus.OPEN,
         ),
     )
@@ -648,10 +714,19 @@ def _window_values(data: dict[str, object]) -> AvailabilityWindowCreate:
     return AvailabilityWindowCreate(
         local_date=_state_date(data),
         local_start_time=time.fromisoformat(str(data["local_start_time"])),
+        staff_member_id=int(str(data.get("staff_member_id", DEFAULT_STAFF_MEMBER_ID))),
         duration_minutes=data.get("duration_minutes"),
         admin_comment=data.get("admin_comment"),
         status=AvailabilityWindowStatus.OPEN,
     )
+
+
+async def _show_date_picker(
+    message: Message, state: FSMContext, settings: BusinessSettingsView
+) -> None:
+    page = _build_date_page(settings)
+    await state.set_state(AdminWindowCreate.local_date)
+    await message.answer(_date_picker_text(page), reply_markup=date_picker_keyboard(page))
 
 
 def _state_date(data: dict[str, object]) -> date:

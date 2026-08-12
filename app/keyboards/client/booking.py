@@ -62,12 +62,16 @@ def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def service_card_keyboard(service_id: int) -> InlineKeyboardMarkup:
+def service_card_keyboard(
+    service_id: int,
+    *,
+    action_text: str = "✨ Записаться на эту услугу",
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Выбрать услугу",
+                    text=action_text,
                     callback_data=BookingCallback(action="service", object_id=service_id).pack(),
                 )
             ],

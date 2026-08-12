@@ -52,6 +52,8 @@ class GlobalNavigationMiddleware(BaseMiddleware):
     @staticmethod
     def is_navigation(text: str | None) -> bool:
         normalized = (text or "").strip()
+        if not normalized:
+            return False
         if normalized in GLOBAL_NAVIGATION_TEXTS:
             return True
         command = normalized.split(maxsplit=1)[0].casefold().split("@", maxsplit=1)[0]

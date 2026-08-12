@@ -350,6 +350,15 @@ class StaffRepository:
         )
         return list(await self._session.scalars(statement))
 
+    async def has_bookable_member(self, business_id: int) -> bool:
+        statement = select(StaffMember.id).where(
+            StaffMember.business_id == business_id,
+            StaffMember.is_active.is_(True),
+            StaffMember.is_bookable.is_(True),
+            StaffMember.archived_at.is_(None),
+        )
+        return (await self._session.scalar(statement.limit(1))) is not None
+
     async def list_active_invitations(
         self,
         business_id: int,

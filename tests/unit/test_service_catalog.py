@@ -63,7 +63,7 @@ async def test_non_admin_is_rejected_before_opening_uow() -> None:
 @pytest.mark.asyncio
 async def test_catalog_hides_archived_services_until_explicitly_requested() -> None:
     unit_of_work = build_uow()
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     await catalog.list_services(actor())
     await catalog.list_services(actor(), include_archived=True)
@@ -81,7 +81,7 @@ async def test_create_service_audits_and_commits() -> None:
         return service
 
     unit_of_work.services.add = AsyncMock(side_effect=add_service)
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     created = await catalog.create_service(actor(), create_values(), correlation_id="request-1")
 
@@ -113,7 +113,7 @@ async def test_create_addon_is_scoped_audited_and_committed() -> None:
         return value
 
     unit_of_work.service_addons.add = AsyncMock(side_effect=add_addon)
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     created = await catalog.create_addon(
         actor(),
@@ -147,7 +147,7 @@ async def test_service_with_appointments_cannot_be_deleted() -> None:
     )
     unit_of_work.services.get = AsyncMock(return_value=service)
     unit_of_work.services.has_appointments = AsyncMock(return_value=True)
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     with pytest.raises(ServiceInUseError, match="архивирована"):
         await catalog.delete_unused_service(actor(), 7)
@@ -171,7 +171,7 @@ async def test_owner_can_force_delete_service_aggregate() -> None:
     )
     unit_of_work.services.get = AsyncMock(return_value=service)
     unit_of_work.hard_delete.delete_service_with_history = AsyncMock(return_value=3)
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     deleted = await catalog.force_delete_service(actor(), 7, correlation_id="force-service")
 
@@ -193,7 +193,7 @@ async def test_archive_changes_state_and_writes_audit() -> None:
         is_active=True,
     )
     unit_of_work.services.get = AsyncMock(return_value=service)
-    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
 
     archived = await catalog.set_active(actor(), 7, is_active=False)
 

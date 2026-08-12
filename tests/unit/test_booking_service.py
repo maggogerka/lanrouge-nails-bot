@@ -454,6 +454,21 @@ async def test_bookable_master_options_follow_service_assignments_and_feature_fl
 
 
 @pytest.mark.asyncio
+async def test_list_services_for_master_is_scoped_to_active_assignments() -> None:
+    unit_of_work = build_uow()
+    service = catalog_service()
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(
+        return_value=[(SimpleNamespace(), service)]
+    )
+    booking = BookingService(lambda: unit_of_work, frozenset())  # type: ignore[arg-type]
+
+    services = await booking.list_active_services_for_master(actor(), 7)
+
+    assert [item.id for item in services] == [3]
+    unit_of_work.service_assignments.list_bookable_services_for_staff.assert_awaited_once_with(1, 7)
+
+
+@pytest.mark.asyncio
 async def test_availability_is_scoped_to_selected_assigned_master() -> None:
     unit_of_work = build_uow()
     second_master = StaffMember(

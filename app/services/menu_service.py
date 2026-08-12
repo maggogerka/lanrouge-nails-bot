@@ -20,6 +20,9 @@ class MenuService:
             settings = await unit_of_work.settings.get()
             flags = await unit_of_work.features.get()
             profile = await unit_of_work.master_profile.get()
+            has_bookable_master = await unit_of_work.staff.has_bookable_member(
+                unit_of_work.business_id
+            )
             if settings is None:
                 raise RuntimeError("Business settings row is missing")
             if flags is None:
@@ -29,7 +32,9 @@ class MenuService:
             )
             return MenuCapabilities(
                 online_booking_visible=bool(flags.online_booking),
-                masters_visible=bool(flags.master_selection),
+                # The catalog is useful in solo mode too. The feature flag controls
+                # whether the booking wizard asks a client to choose between masters.
+                masters_visible=has_bookable_master,
                 portfolio_visible=bool(flags.portfolio)
                 and mode is not PortfolioDisplayMode.DISABLED,
                 reviews_visible=bool(flags.reviews) and bool(settings.reviews_enabled),

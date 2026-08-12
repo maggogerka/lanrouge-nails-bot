@@ -61,6 +61,7 @@ def build_uow(
     unit_of_work.master_profile.get = AsyncMock(
         return_value=SimpleNamespace(is_published=master_published)
     )
+    unit_of_work.staff.has_bookable_member = AsyncMock(return_value=True)
     return unit_of_work
 
 
@@ -162,7 +163,7 @@ async def test_central_flags_drive_client_capabilities_and_fail_closed() -> None
     capabilities = await service.get_capabilities()
 
     assert not capabilities.online_booking_visible
-    assert not capabilities.masters_visible
+    assert capabilities.masters_visible
     assert not capabilities.waitlist_visible
     assert not capabilities.portfolio_visible
     assert not capabilities.reviews_visible

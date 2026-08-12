@@ -133,6 +133,24 @@ class BookingService:
             services = await unit_of_work.services.list_active()
             return [ServiceView.model_validate(service) for service in services]
 
+    async def list_active_services_for_master(
+        self,
+        actor: ClientActor,
+        staff_member_id: int,
+    ) -> list[ServiceView]:
+        """Return public services that are currently bookable with one master."""
+
+        if staff_member_id <= 0:
+            raise BookingUnavailableError("Мастер больше недоступен для записи.")
+        async with self._unit_of_work_factory() as unit_of_work:
+            await require_feature(unit_of_work, FeatureName.ONLINE_BOOKING)
+            await self._consented_client(unit_of_work, actor.telegram_id)
+            rows = await unit_of_work.service_assignments.list_bookable_services_for_staff(
+                unit_of_work.business_id,
+                staff_member_id,
+            )
+            return [ServiceView.model_validate(service) for _, service in rows]
+
     async def list_bookable_masters(
         self,
         actor: ClientActor,

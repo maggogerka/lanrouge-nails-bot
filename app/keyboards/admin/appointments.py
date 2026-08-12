@@ -119,6 +119,17 @@ def admin_appointment_details_keyboard(
     appointment: AdminAppointmentView,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    contact_url = (
+        f"https://t.me/{appointment.client_username}"
+        if appointment.client_username
+        else (
+            f"tg://user?id={appointment.client_telegram_id}"
+            if appointment.client_telegram_id
+            else None
+        )
+    )
+    if contact_url:
+        rows.append([InlineKeyboardButton(text="💬 Написать клиенту", url=contact_url)])
     if appointment.status.value == "confirmed":
         rows.append(
             [

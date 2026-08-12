@@ -11,9 +11,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.models.business import StaffInvitation, StaffMember
-from app.domain.enums import StaffInvitationStatus, StaffRole
+from app.database.models.service_assignment import StaffServiceAssignment
+from app.domain.enums import BusinessType, StaffInvitationStatus, StaffRole
 from app.domain.errors import AuthorizationError, EntityNotFoundError, StaffReassignmentError
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.service_assignment_repository import ServiceAssignmentRepository
+from app.repositories.service_repository import ServiceRepository
 from app.repositories.staff_repository import StaffRepository
 from app.schemas.authorization import (
     GRANTABLE_STAFF_PERMISSIONS,
@@ -27,6 +30,8 @@ from app.schemas.authorization import (
     StaffInvitationView,
     StaffMemberView,
     StaffPermission,
+    StaffProfilePatch,
+    StaffServiceAssignmentView,
     can_assign_role,
 )
 
@@ -109,10 +114,189 @@ class AuthorizationService:
                     is_bootstrap_owner=bool(member.is_bootstrap_owner),
                     permission_grants=self._permission_grants(member),
                     is_bound=member.user_id is not None,
+                    bio=member.bio,
+                    specialization=member.specialization,
+                    telegram_photo_file_id=member.telegram_photo_file_id,
                     archived_at=member.archived_at,
                 )
                 for member in members
             )
+
+    async def get_staff_member(self, actor: StaffContext, staff_member_id: int) -> StaffMemberView:
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            live_actor = await self._live_context(repository, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.VIEW_STAFF)
+            member = await repository.get_by_id(live_actor.business_id, staff_member_id)
+            if member is None:
+                raise EntityNotFoundError("Сотрудник не найден.")
+            return self._member_view(member)
+
+    async def update_staff_profile(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        patch: StaffProfilePatch,
+        *,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(repository, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            member = await repository.get_by_id(
+                live_actor.business_id, staff_member_id, for_update=True
+            )
+            if member is None or member.archived_at is not None:
+                raise EntityNotFoundError("Профиль мастера не найден.")
+            before = {
+                "display_name": member.display_name,
+                "bio": member.bio,
+                "specialization": member.specialization,
+                "has_photo": member.telegram_photo_file_id is not None,
+            }
+            for field in patch.model_fields_set:
+                setattr(member, field, getattr(patch, field))
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.public_profile_updated",
+                entity_type="staff_member",
+                entity_id=str(member.id),
+                changes={
+                    "before": before,
+                    "after": {
+                        "display_name": member.display_name,
+                        "bio": member.bio,
+                        "specialization": member.specialization,
+                        "has_photo": member.telegram_photo_file_id is not None,
+                    },
+                },
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(member)
+
+    async def set_staff_bookable(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        *,
+        enabled: bool,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        """Let owners retain owner access while also exposing a booking profile."""
+
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(repository, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            member = await repository.get_by_id(
+                live_actor.business_id, staff_member_id, for_update=True
+            )
+            if member is None or not member.is_active or member.archived_at is not None:
+                raise EntityNotFoundError("Профиль мастера не найден.")
+            if enabled and member.role not in {StaffRole.OWNER, StaffRole.MASTER}:
+                raise AuthorizationError(
+                    "Принимать записи может владелец или сотрудник с ролью мастера."
+                )
+            member.is_bookable = enabled
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.bookable_changed",
+                entity_type="staff_member",
+                entity_id=str(member.id),
+                changes={"enabled": enabled},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(member)
+
+    async def list_staff_service_assignments(
+        self, actor: StaffContext, staff_member_id: int
+    ) -> tuple[StaffServiceAssignmentView, ...]:
+        async with self._session_factory() as session:
+            staff = self._staff_repository_factory(session)
+            live_actor = await self._live_context(staff, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.VIEW_SERVICES)
+            member = await staff.get_by_id(live_actor.business_id, staff_member_id)
+            if member is None:
+                raise EntityNotFoundError("Профиль мастера не найден.")
+            services = await ServiceRepository(session, live_actor.business_id).list_active()
+            assignments = ServiceAssignmentRepository(session)
+            result: list[StaffServiceAssignmentView] = []
+            for service in services:
+                assignment = await assignments.get_assignment(
+                    live_actor.business_id, member.id, service.id
+                )
+                result.append(
+                    StaffServiceAssignmentView(
+                        service_id=service.id,
+                        service_name=service.name,
+                        assigned=bool(
+                            assignment
+                            and assignment.is_active
+                            and assignment.online_booking_enabled
+                        ),
+                    )
+                )
+            return tuple(result)
+
+    async def set_staff_service_assignment(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        service_id: int,
+        *,
+        enabled: bool,
+        correlation_id: str | None = None,
+    ) -> None:
+        async with self._session_factory() as session:
+            staff = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(staff, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.MANAGE_SERVICES)
+            member = await staff.get_by_id(live_actor.business_id, staff_member_id, for_update=True)
+            service = await ServiceRepository(session, live_actor.business_id).get(service_id)
+            if member is None or member.archived_at is not None:
+                raise EntityNotFoundError("Профиль мастера не найден.")
+            if service is None or service.archived_at is not None or not service.is_active:
+                raise EntityNotFoundError("Услуга не найдена или архивирована.")
+            assignments = ServiceAssignmentRepository(session)
+            assignment = await assignments.get_assignment(
+                live_actor.business_id,
+                member.id,
+                service.id,
+                for_update=True,
+            )
+            if assignment is None:
+                await assignments.add_assignment(
+                    StaffServiceAssignment(
+                        business_id=live_actor.business_id,
+                        staff_member_id=member.id,
+                        service_id=service.id,
+                        is_active=enabled,
+                        online_booking_enabled=enabled,
+                    )
+                )
+            else:
+                assignment.is_active = enabled
+                assignment.online_booking_enabled = enabled
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.service_assignment_changed",
+                entity_type="staff_member",
+                entity_id=str(member.id),
+                changes={"service_id": service.id, "enabled": enabled},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
 
     async def list_active_invitations(
         self,
@@ -651,7 +835,10 @@ class AuthorizationService:
                         display_name=normalized_name,
                         role=StaffRole.OWNER,
                         is_active=True,
-                        is_bookable=False,
+                        is_bookable=(
+                            getattr(business, "business_type", BusinessType.SOLO)
+                            is BusinessType.SOLO
+                        ),
                         is_bootstrap_owner=True,
                     )
                 )
@@ -769,6 +956,9 @@ class AuthorizationService:
             is_bootstrap_owner=bool(member.is_bootstrap_owner),
             permission_grants=cls._permission_grants(member),
             is_bound=member.user_id is not None,
+            bio=member.bio,
+            specialization=member.specialization,
+            telegram_photo_file_id=member.telegram_photo_file_id,
             archived_at=member.archived_at,
         )
 
