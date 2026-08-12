@@ -1,6 +1,13 @@
 """Role/profile separation in the staff administration UI."""
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from app.domain.enums import StaffRole
+from app.handlers.admin.staff import _show_staff
 from app.keyboards.admin.staff import staff_management_keyboard, staff_member_keyboard
 from app.schemas.authorization import StaffContext, StaffMemberView
 
@@ -53,3 +60,29 @@ def test_owner_can_enable_booking_without_losing_owner_role() -> None:
     assert "✅ Принимать записи" in visible
     assert "🛠 Назначить услуги" in visible
     assert "📸 Фото" in visible
+
+
+@pytest.mark.asyncio
+async def test_staff_screen_hides_only_archived_unbound_migration_profile() -> None:
+    current = owner_member(bookable=True)
+    legacy = StaffMemberView(
+        id=1,
+        display_name="Бизнес",
+        role=StaffRole.MASTER,
+        is_active=False,
+        is_bookable=False,
+        is_bound=False,
+        archived_at=datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    service = SimpleNamespace(
+        list_staff=AsyncMock(return_value=(legacy, current)),
+        list_active_invitations=AsyncMock(return_value=()),
+    )
+    message = MagicMock()
+    message.answer = AsyncMock()
+
+    await _show_staff(message, service, owner_context())
+
+    text = message.answer.await_args.args[0]
+    assert "• Бизнес" not in text
+    assert "• Владелец" in text

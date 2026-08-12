@@ -44,6 +44,11 @@ async def _show_staff(
     actor: StaffContext,
 ) -> None:
     members = await service.list_staff(actor)
+    # Hide only obsolete unbound migration profiles. Revoked real employees
+    # remain visible so their history can still be administered.
+    visible_members = tuple(
+        member for member in members if not (member.archived_at is not None and not member.is_bound)
+    )
     invitations = await service.list_active_invitations(actor)
     lines = [
         "<b>Мастера и сотрудники</b>",
@@ -51,7 +56,7 @@ async def _show_staff(
         "за показ клиентам. Поэтому владелец может одновременно работать мастером.",
         "\nОткройте карточку человека, чтобы настроить фото, описание и услуги.",
     ]
-    for member in members:
+    for member in visible_members:
         state = "активен" if member.is_active else "отключён"
         booking = " · принимает записи" if member.is_bookable else ""
         binding = "Telegram привязан" if member.is_bound else "профиль без входа"
@@ -68,7 +73,7 @@ async def _show_staff(
         )
     await message.answer(
         "\n".join(lines),
-        reply_markup=staff_management_keyboard(actor, members, invitations),
+        reply_markup=staff_management_keyboard(actor, visible_members, invitations),
     )
 
 
