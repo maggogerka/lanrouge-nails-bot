@@ -255,6 +255,7 @@ class StaffMemberView(BaseModel):
     bio: str | None = None
     specialization: str | None = None
     telegram_photo_file_id: str | None = None
+    social_links: dict[str, str] = Field(default_factory=dict)
     archived_at: datetime | None = None
 
 

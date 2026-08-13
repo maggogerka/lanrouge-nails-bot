@@ -22,6 +22,7 @@ from app.domain.appointments import SCHEDULE_OCCUPYING_STATUSES
 from app.domain.enums import (
     AppointmentStatus,
     AvailabilityWindowStatus,
+    BusinessType,
     StaffInvitationStatus,
     StaffRole,
     UserRole,
@@ -358,6 +359,29 @@ class StaffRepository:
             StaffMember.archived_at.is_(None),
         )
         return (await self._session.scalar(statement.limit(1))) is not None
+
+    async def sync_business_type(self, business_id: int) -> BusinessType:
+        """Derive solo/salon mode from the number of active bookable specialists."""
+
+        count = int(
+            await self._session.scalar(
+                select(func.count())
+                .select_from(StaffMember)
+                .where(
+                    StaffMember.business_id == business_id,
+                    StaffMember.is_active.is_(True),
+                    StaffMember.is_bookable.is_(True),
+                    StaffMember.archived_at.is_(None),
+                )
+            )
+            or 0
+        )
+        business = await self.get_business_for_update(business_id)
+        if business is None:
+            raise ValueError("business_not_found")
+        business.business_type = BusinessType.SALON if count > 1 else BusinessType.SOLO
+        await self._session.flush()
+        return business.business_type
 
     async def list_active_invitations(
         self,

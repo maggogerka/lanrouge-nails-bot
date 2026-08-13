@@ -13,6 +13,7 @@ from app.domain.errors import EntityNotFoundError
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.domain.welcome import default_welcome_html
 from app.schemas.presentation import BusinessPresentation, PublicMasterPresentation
+from app.schemas.public_links import public_links_from_mapping
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -66,6 +67,7 @@ class PresentationService:
                     bio=member.bio,
                     specialization=member.specialization,
                     telegram_photo_file_id=member.telegram_photo_file_id,
+                    social_links=public_links_from_mapping(member.settings.get("social_links")),
                 )
                 for member in rows.all()
             )
@@ -81,15 +83,14 @@ class PresentationService:
             business_type=business.business_type,
             timezone=business.timezone,
             currency=business.currency,
-            address=business.address or self._settings_value(settings, "address"),
-            map_url=self._safe_url(business.map_url or self._settings_value(settings, "map_url")),
+            address=business.address,
+            map_url=self._safe_url(business.map_url),
             contact_phone=business.contact_phone,
             contact_email=business.contact_email,
             logo_telegram_file_id=business.logo_telegram_file_id,
             support_name=business.client_support_name,
-            support_url=self._safe_url(
-                business.client_support_url or self._settings_value(settings, "master_telegram_url")
-            ),
+            support_url=self._safe_url(business.client_support_url),
+            support_sources=public_links_from_mapping(business.social_links),
             support_hours=business.client_support_hours,
             support_instructions=business.client_support_instructions,
             privacy_policy_url=self._safe_url(business.privacy_policy_url)

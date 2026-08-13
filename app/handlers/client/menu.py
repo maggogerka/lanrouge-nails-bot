@@ -98,7 +98,7 @@ async def show_masters(
         if master.bio:
             lines.append(escape(master.bio))
         text = "\n".join(lines)
-        keyboard = public_master_keyboard(master.staff_member_id)
+        keyboard = public_master_keyboard(master.staff_member_id, master.social_links)
         if master.telegram_photo_file_id:
             await message.answer_photo(
                 master.telegram_photo_file_id,

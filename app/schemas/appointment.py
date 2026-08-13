@@ -24,8 +24,8 @@ class AppointmentView(BaseModel):
     end_at: datetime
     timezone: str
     address: str
-    map_url: str
-    master_telegram_url: str
+    map_url: str | None = None
+    master_telegram_url: str | None = None
     can_self_manage: bool
 
 

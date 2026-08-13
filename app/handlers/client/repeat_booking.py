@@ -53,7 +53,17 @@ async def _show_repeat_offer(
                             ).pack(),
                         )
                     ],
-                    [InlineKeyboardButton(text="Написать мастеру", url=offer.master_telegram_url)],
+                    *(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    text="Написать мастеру", url=offer.master_telegram_url
+                                )
+                            ]
+                        ]
+                        if offer.master_telegram_url
+                        else []
+                    ),
                 ]
             ),
         )

@@ -11,8 +11,14 @@ def business_links_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     if business.map_url is not None:
         rows.append([InlineKeyboardButton(text="📍 Открыть на карте", url=business.map_url)])
-    if business.support_url is not None:
-        rows.append([InlineKeyboardButton(text="💬 Написать", url=business.support_url)])
+    if business.support_sources:
+        rows.extend(
+            [InlineKeyboardButton(text=f"💬 {link.label}", url=link.url)]
+            for link in business.support_sources
+        )
+    elif business.support_url is not None:
+        label = business.support_name or "Написать"
+        rows.append([InlineKeyboardButton(text=f"💬 {label}", url=business.support_url)])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 

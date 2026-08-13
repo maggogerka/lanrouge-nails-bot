@@ -30,6 +30,8 @@ FEATURE_LABELS: dict[FeatureName, str] = {
     FeatureName.CLIENT_SUPPORT: "Поддержка клиентов",
 }
 
+_HIDDEN_UNFINISHED_FEATURES = {FeatureName.LOYALTY, FeatureName.MINI_APP}
+
 
 def feature_flags_keyboard(
     snapshot: FeatureSnapshot,
@@ -38,6 +40,8 @@ def feature_flags_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for feature in FeatureName:
+        if feature in _HIDDEN_UNFINISHED_FEATURES:
+            continue
         enabled = snapshot.enabled(feature)
         label = f"{'✅' if enabled else '▫️'} {FEATURE_LABELS[feature]}"
         if can_manage:

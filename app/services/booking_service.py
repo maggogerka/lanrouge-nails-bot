@@ -79,6 +79,7 @@ from app.services.appointment_common import ensure_admin
 from app.services.authorization_service import AuthorizationService
 from app.services.feature_guard import require_feature
 from app.services.payment_service import PaymentService
+from app.services.public_contact import resolve_staff_contact_url
 from app.services.reservation_service import ReservationService
 from app.services.subscription_service import SubscriptionService
 
@@ -204,11 +205,12 @@ class BookingService:
         async with self._unit_of_work_factory() as unit_of_work:
             await self._consented_client(unit_of_work, actor.telegram_id)
             settings = await self._settings(unit_of_work)
+            address, map_url = await self._business_location(unit_of_work)
             return BusinessInfo(
                 business_name=settings.business_name,
-                address=settings.address,
-                map_url=settings.map_url,
-                master_telegram_url=settings.master_telegram_url,
+                address=address,
+                map_url=map_url,
+                master_telegram_url=None,
             )
 
     async def get_reference_media_policy(self, actor: ClientActor) -> ReferenceMediaPolicy:
@@ -364,6 +366,7 @@ class BookingService:
                 if values.reference_media:
                     await require_feature(unit_of_work, FeatureName.REFERENCE_PHOTOS)
                 settings = await self._settings(unit_of_work)
+                address, map_url = await self._business_location(unit_of_work)
                 initial_window = await unit_of_work.windows.get(values.window_id)
                 if initial_window is None or initial_window.business_id != unit_of_work.business_id:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
@@ -406,6 +409,7 @@ class BookingService:
                     window.staff_member_id,
                     for_update=True,
                 )
+                master_contact_url = await resolve_staff_contact_url(unit_of_work.session, master)
                 assignment = await unit_of_work.service_assignments.get_assignment(
                     unit_of_work.business_id,
                     window.staff_member_id,
@@ -513,6 +517,9 @@ class BookingService:
                         design_title_snapshot=design.title if design is not None else None,
                         service_name_snapshot=service.name,
                         master_name_snapshot=master.display_name,
+                        address_snapshot=address,
+                        map_url_snapshot=map_url,
+                        master_contact_url_snapshot=master_contact_url,
                         price_snapshot=terms.price,
                         prepayment_snapshot=prepayment_amount,
                         currency_snapshot="RUB",
@@ -727,9 +734,9 @@ class BookingService:
                         start_at=window.start_at,
                         end_at=window.end_at,
                         timezone=settings.timezone,
-                        address=settings.address,
-                        map_url=settings.map_url,
-                        master_telegram_url=settings.master_telegram_url,
+                        address=address,
+                        map_url=map_url,
+                        master_telegram_url=master_contact_url,
                         client_name=values.client_name,
                         phone=values.phone,
                         design_title=appointment.design_title_snapshot,
@@ -798,6 +805,7 @@ class BookingService:
                 reservation.appointment_id
             )
             settings = await self._settings(unit_of_work)
+            current_address, _ = await self._business_location(unit_of_work)
             payment_settings = await unit_of_work.reservations.payment_settings()
             if (
                 appointment is None
@@ -809,6 +817,13 @@ class BookingService:
             ):
                 raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
             references = await unit_of_work.reference_media.list_active(appointment.id)
+            master = await unit_of_work.staff.get_by_id(
+                unit_of_work.business_id,
+                appointment.staff_member_id,
+            )
+            master_contact_url = appointment.master_contact_url_snapshot or (
+                await resolve_staff_contact_url(unit_of_work.session, master)
+            )
             addon_snapshots = await unit_of_work.service_addons.list_snapshots(appointment.id)
             if sorted(values.addon_ids) != sorted(row.service_addon_id for row in addon_snapshots):
                 raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
@@ -849,9 +864,9 @@ class BookingService:
                     start_at=window.start_at,
                     end_at=window.end_at,
                     timezone=settings.timezone,
-                    address=settings.address,
-                    map_url=settings.map_url,
-                    master_telegram_url=settings.master_telegram_url,
+                    address=appointment.address_snapshot or current_address,
+                    map_url=appointment.map_url_snapshot,
+                    master_telegram_url=master_contact_url,
                     client_name=client.first_name or values.client_name,
                     phone=client.phone or values.phone,
                     design_title=appointment.design_title_snapshot,
@@ -1264,6 +1279,15 @@ class BookingService:
         if settings is None:
             raise RuntimeError("Business settings row is missing")
         return settings
+
+    @staticmethod
+    async def _business_location(
+        unit_of_work: SqlAlchemyUnitOfWork,
+    ) -> tuple[str, str | None]:
+        business = await unit_of_work.businesses.get()
+        if business is None:
+            raise RuntimeError("Business row is missing")
+        return business.address or "Адрес не указан", business.map_url
 
     @staticmethod
     def _active_service(service: Service | None) -> Service:

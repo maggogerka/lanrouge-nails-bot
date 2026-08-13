@@ -44,7 +44,7 @@ def test_business_projection_prefers_tenant_branding_and_sanitizes_links() -> No
     projection = service._business_projection(business, settings)
 
     assert projection.display_name == "Новая студия"
-    assert projection.address == "Адрес из настроек"
+    assert projection.address is None
     assert projection.map_url is None
     assert projection.support_url == "https://support.example.test/chat"
     assert projection.privacy_policy_url == "https://legal.example.test/privacy"

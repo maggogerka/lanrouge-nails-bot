@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.enums import BusinessStatus, BusinessType
+from app.schemas.public_links import normalize_public_link_mapping
 
 
 class BusinessAdminView(BaseModel):
@@ -25,12 +26,14 @@ class BusinessAdminView(BaseModel):
     timezone: str
     currency: str
     address: str | None
+    map_url: str | None
     contact_phone: str | None
     logo_telegram_file_id: str | None
     client_support_name: str | None
     client_support_url: str | None
     client_support_hours: str | None
     client_support_instructions: str | None
+    social_links: dict[str, str] = Field(default_factory=dict)
     privacy_policy_url: str | None
     privacy_policy_version: str | None
     terms_url: str | None
@@ -59,6 +62,7 @@ class BusinessProfileUpdate(BaseModel):
     business_type: BusinessType | None = None
     timezone: Annotated[str, Field(min_length=1, max_length=64)] | None = None
     address: Annotated[str, Field(max_length=500)] | None = None
+    map_url: Annotated[str, Field(max_length=2048)] | None = None
     contact_phone: Annotated[str, Field(max_length=32)] | None = None
     logo_telegram_file_id: Annotated[str, Field(max_length=512)] | None = None
     client_support_name: Annotated[str, Field(max_length=100)] | None = None
@@ -69,6 +73,7 @@ class BusinessProfileUpdate(BaseModel):
     privacy_policy_version: Annotated[str, Field(max_length=64)] | None = None
     terms_url: Annotated[str, Field(max_length=2048)] | None = None
     terms_version: Annotated[str, Field(max_length=64)] | None = None
+    social_links: dict[str, str] | None = None
 
     @field_validator("display_name", mode="before")
     @classmethod
@@ -94,7 +99,7 @@ class BusinessProfileUpdate(BaseModel):
         normalized = value.strip()
         return normalized or None
 
-    @field_validator("client_support_url", "privacy_policy_url", "terms_url")
+    @field_validator("map_url", "client_support_url", "privacy_policy_url", "terms_url")
     @classmethod
     def public_urls_use_https(cls, value: str | None) -> str | None:
         if value is None:
@@ -108,6 +113,13 @@ class BusinessProfileUpdate(BaseModel):
         ):
             raise ValueError("public URL must use HTTPS without embedded credentials")
         return value
+
+    @field_validator("social_links", mode="before")
+    @classmethod
+    def support_links_are_safe(cls, value: object) -> dict[str, str] | None:
+        if value is None:
+            return None
+        return normalize_public_link_mapping(value)
 
     @field_validator("timezone")
     @classmethod
@@ -124,7 +136,7 @@ class BusinessProfileUpdate(BaseModel):
     def at_least_one_field(self) -> BusinessProfileUpdate:
         if not self.model_fields_set:
             raise ValueError("at least one business field must be supplied")
-        for field in ("display_name", "business_type", "timezone"):
+        for field in ("display_name", "business_type", "timezone", "social_links"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} must not be null")
         return self

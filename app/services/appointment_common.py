@@ -65,9 +65,9 @@ def appointment_view(
         start_at=window.start_at,
         end_at=window.end_at,
         timezone=settings.timezone,
-        address=settings.address,
-        map_url=settings.map_url,
-        master_telegram_url=settings.master_telegram_url,
+        address=appointment.address_snapshot or "Адрес не указан",
+        map_url=appointment.map_url_snapshot,
+        master_telegram_url=appointment.master_contact_url_snapshot,
         can_self_manage=(
             window.start_at - now >= timedelta(hours=settings.cancellation_deadline_hours)
         ),

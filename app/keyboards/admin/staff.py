@@ -12,6 +12,7 @@ from app.schemas.authorization import (
     StaffServiceAssignmentView,
     can_assign_role,
 )
+from app.schemas.public_links import PublicLink
 
 
 class StaffAdminCallback(CallbackData, prefix="staffadm"):
@@ -195,6 +196,14 @@ def staff_member_keyboard(actor: StaffContext, member: StaffMemberView) -> Inlin
                         ).pack(),
                     ),
                 ],
+                [
+                    InlineKeyboardButton(
+                        text="🔗 Контакты и соцсети",
+                        callback_data=StaffAdminCallback(
+                            action="socials", staff_member_id=member.id
+                        ).pack(),
+                    )
+                ],
             ]
         )
         if member.telegram_photo_file_id:
@@ -227,6 +236,47 @@ def staff_member_keyboard(actor: StaffContext, member: StaffMemberView) -> Inlin
         [
             InlineKeyboardButton(
                 text="⬅️ К сотрудникам", callback_data=StaffAdminCallback(action="list").pack()
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def staff_social_links_keyboard(
+    staff_member_id: int,
+    links: tuple[PublicLink, ...],
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"🗑 {link.label[:45]}",
+                callback_data=StaffAdminCallback(
+                    action="social_delete",
+                    staff_member_id=staff_member_id,
+                    target_staff_member_id=index,
+                ).pack(),
+            )
+        ]
+        for index, link in enumerate(links)
+    ]
+    if len(links) < 5:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить контакт",
+                    callback_data=StaffAdminCallback(
+                        action="social_add", staff_member_id=staff_member_id
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ К профилю",
+                callback_data=StaffAdminCallback(
+                    action="member", staff_member_id=staff_member_id
+                ).pack(),
             )
         ]
     )

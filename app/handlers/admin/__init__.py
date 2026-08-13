@@ -8,7 +8,6 @@ from app.handlers.admin.broadcasts import router as broadcasts_router
 from app.handlers.admin.business import router as business_router
 from app.handlers.admin.crm import router as crm_router
 from app.handlers.admin.features import router as features_router
-from app.handlers.admin.master_profile import router as master_profile_router
 from app.handlers.admin.menu import router as menu_router
 from app.handlers.admin.payments import router as payments_router
 from app.handlers.admin.portfolio import router as portfolio_router
@@ -48,7 +47,6 @@ _require_permission(broadcasts_router, StaffPermission.MANAGE_BROADCASTS)
 _require_permission(business_router, StaffPermission.MANAGE_BUSINESS)
 _require_permission(crm_router, StaffPermission.MANAGE_ALL_CLIENTS)
 _require_permission(features_router, StaffPermission.VIEW_FEATURE_FLAGS)
-_require_permission(master_profile_router, StaffPermission.MANAGE_BUSINESS)
 _require_permission(payments_router, StaffPermission.VIEW_PAYMENTS)
 _require_permission(portfolio_router, StaffPermission.MANAGE_SERVICES)
 _require_permission(privacy_router, StaffPermission.HANDLE_DATA_DELETION)
@@ -67,7 +65,6 @@ _require_feature(reviews_router, FeatureName.REVIEWS)
 _require_feature(waitlist_router, FeatureName.WAITLIST)
 router.include_routers(
     menu_router,
-    master_profile_router,
     appointments_router,
     broadcasts_router,
     business_router,

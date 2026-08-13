@@ -39,6 +39,7 @@ from app.schemas.booking import BookingReceipt, BookingWindowView, ClientActor
 from app.schemas.service import AdminActor, AppointmentAddonView
 from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import appointment_view, ensure_admin, ensure_owner
+from app.services.public_contact import resolve_staff_contact_url
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -290,6 +291,12 @@ class RescheduleService:
                         rescheduled_from_id=appointment.id,
                         service_name_snapshot=appointment.service_name_snapshot,
                         master_name_snapshot=master.display_name,
+                        address_snapshot=appointment.address_snapshot,
+                        map_url_snapshot=appointment.map_url_snapshot,
+                        master_contact_url_snapshot=await resolve_staff_contact_url(
+                            unit_of_work.session,
+                            master,
+                        ),
                         price_snapshot=appointment.price_snapshot,
                         prepayment_snapshot=appointment.prepayment_snapshot,
                         currency_snapshot=appointment.currency_snapshot,
@@ -415,9 +422,9 @@ class RescheduleService:
                     start_at=new_window.start_at,
                     end_at=new_window.end_at,
                     timezone=settings.timezone,
-                    address=settings.address,
-                    map_url=settings.map_url,
-                    master_telegram_url=settings.master_telegram_url,
+                    address=new_appointment.address_snapshot or "Адрес не указан",
+                    map_url=new_appointment.map_url_snapshot,
+                    master_telegram_url=new_appointment.master_contact_url_snapshot,
                     client_name=client.first_name or "—",
                     phone=client.phone or "—",
                 )

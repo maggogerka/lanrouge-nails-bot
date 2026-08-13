@@ -17,14 +17,23 @@ from aiogram.types import (
 )
 from pydantic import ValidationError
 
-from app.domain.enums import BusinessType, SubscriptionStatus
+from app.domain.enums import SubscriptionStatus
 from app.domain.errors import DomainError, EntityNotFoundError
-from app.keyboards.admin.business import BusinessProfileCallback, business_profile_keyboard
+from app.keyboards.admin.business import (
+    BusinessProfileCallback,
+    BusinessSupportCallback,
+    BusinessTimezoneCallback,
+    business_address_keyboard,
+    business_profile_keyboard,
+    business_support_keyboard,
+    business_timezone_keyboard,
+)
 from app.keyboards.admin.main import ADMIN_BUSINESS_SETTINGS_TEXT
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.authorization import StaffContext
 from app.schemas.business import BusinessAdminView, BusinessProfileUpdate
+from app.schemas.public_links import PublicLink, public_links_from_mapping
 from app.services.business_service import BusinessAdministrationService
 from app.services.subscription_service import SubscriptionService
 from app.states.business import BusinessProfileStates
@@ -37,33 +46,42 @@ _FIELD_BY_ACTION = {
     "short": "short_description",
     "phone": "contact_phone",
     "address": "address",
+    "map_url": "map_url",
     "timezone": "timezone",
     "privacy": "privacy_policy_url",
     "terms": "terms_url",
-    "support_name": "client_support_name",
-    "support_url": "client_support_url",
 }
 
 _PROMPT_BY_ACTION = {
     "name": "Введите название бренда:",
-    "description": "Введите описание до 512 символов или «-», чтобы очистить:",
-    "short": "Введите короткое описание до 120 символов или «-», чтобы очистить:",
+    "description": (
+        "Введите описание до 512 символов. После синхронизации оно появится "
+        "в полном описании профиля бота. Отправьте «-», чтобы очистить:"
+    ),
+    "short": (
+        "Введите короткое описание до 120 символов. После синхронизации оно появится "
+        "в BIO профиля бота. Отправьте «-», чтобы очистить:"
+    ),
     "phone": "Введите клиентский телефон или «-», чтобы очистить:",
-    "address": "Введите адрес или «-», чтобы очистить:",
-    "timezone": "Введите IANA timezone, например Europe/Moscow:",
+    "address": "Введите адрес салона так, как его увидит клиент, или «-», чтобы очистить:",
+    "map_url": (
+        "Пришлите HTTPS-ссылку на точку в Яндекс Картах, 2ГИС или Google Maps. "
+        "Отправьте «-», чтобы убрать кнопку карты:"
+    ),
+    "timezone": (
+        "Введите техническое название часового пояса в формате Регион/Город, "
+        "например Europe/Moscow или Asia/Yekaterinburg:"
+    ),
     "privacy": "Введите HTTPS-ссылку на политику:",
     "terms": "Введите HTTPS-ссылку на оферту или «-», чтобы очистить:",
-    "support_name": "Введите имя клиентской поддержки или «-», чтобы очистить:",
-    "support_url": "Введите HTTPS-ссылку клиентской поддержки или «-», чтобы очистить:",
 }
 _OPTIONAL_ACTIONS = {
     "description",
     "short",
     "phone",
     "address",
+    "map_url",
     "terms",
-    "support_name",
-    "support_url",
 }
 
 
@@ -72,12 +90,15 @@ def _render(view: BusinessAdminView) -> str:
     return (
         f"<b>Настройки бизнеса</b>\n"
         f"Бренд: <b>{escape(view.display_name)}</b>\n"
-        f"Тип: <code>{view.business_type.value}</code> · timezone: <code>{view.timezone}</code>\n"
-        f"Телефон: {escape(view.contact_phone or 'не задан')}\n"
+        f"Часовой пояс: <code>{view.timezone}</code>\n"
+        f"Телефон салона: {escape(view.contact_phone or 'не задан')}\n"
         f"Адрес: {escape(view.address or 'не задан')}\n"
+        f"Карта: {escape(view.map_url or 'не задана')}\n"
+        f"Описание профиля: {escape(view.description or 'не задано')}\n"
+        f"Короткое описание профиля: {escape(view.short_description or 'не задано')}\n"
         f"Политика: {escape(view.privacy_policy_url or 'не задана')}\n"
         f"Оферта: {escape(view.terms_url or 'не задана')}\n"
-        f"Клиентская поддержка: {escape(view.client_support_name or 'не задана')}\n"
+        f"Источников поддержки: {len(view.social_links)}\n"
         f"Первичная настройка завершена: {completed}"
     )
 
@@ -113,63 +134,180 @@ async def show_subscription(
     await callback.answer()
 
 
-@router.callback_query(BusinessProfileCallback.filter(F.action == "type"))
-async def toggle_business_type(
+@router.callback_query(BusinessProfileCallback.filter(F.action == "address_menu"))
+async def show_address_settings(
     callback: CallbackQuery,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    view = await business_service.get(staff_context)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "<b>Адрес и карта</b>\n"
+            f"Адрес: {escape(view.address or 'не задан')}\n"
+            f"Ссылка на карту: {escape(view.map_url or 'не задана')}\n\n"
+            "Адрес показывается текстом, а ссылка открывается отдельной кнопкой.",
+            reply_markup=business_address_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(BusinessProfileCallback.filter(F.action == "timezone_menu"))
+async def show_timezone_settings(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "<b>Часовой пояс</b>\nВыберите ближайший город. Все окна и уведомления "
+            "будут показываться по этому местному времени.",
+            reply_markup=business_timezone_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(BusinessTimezoneCallback.filter())
+async def save_timezone_choice(
+    callback: CallbackQuery,
+    callback_data: BusinessTimezoneCallback,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        view = await business_service.update(
+            staff_context,
+            BusinessProfileUpdate(timezone=callback_data.timezone),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer(_render(view), reply_markup=business_profile_keyboard())
+    await callback.answer("Часовой пояс сохранён.")
+
+
+@router.callback_query(BusinessProfileCallback.filter(F.action == "support_sources"))
+async def show_support_sources(
+    callback: CallbackQuery,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    view = await business_service.get(staff_context)
+    links = public_links_from_mapping(view.social_links)
+    lines = [
+        "<b>Источники поддержки</b>",
+        "Добавьте до 5 кнопок для связи с салоном. Они появятся у клиента в разделе "
+        "«Поддержка и контакты».",
+    ]
+    lines.extend(f"• {escape(link.label)} — {escape(link.url)}" for link in links)
+    if not links:
+        lines.append("\nПока не добавлено ни одного источника.")
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "\n".join(lines),
+            reply_markup=business_support_keyboard(links),
+        )
+    await callback.answer()
+
+
+@router.callback_query(BusinessSupportCallback.filter(F.action == "add"))
+async def begin_support_source(
+    callback: CallbackQuery,
+    state: FSMContext,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    view = await business_service.get(staff_context)
+    if len(public_links_from_mapping(view.social_links)) >= 5:
+        await callback.answer("Можно добавить не более 5 источников.", show_alert=True)
+        return
+    await state.set_state(BusinessProfileStates.waiting_support_label)
+    await state.set_data({})
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Введите короткое название кнопки, например «Telegram», «WhatsApp» или «VK»:",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(BusinessProfileStates.waiting_support_label)
+async def save_support_label(message: Message, state: FSMContext) -> None:
+    label = (message.text or "").strip()
+    try:
+        PublicLink(label=label, url="https://example.test")
+    except ValidationError as exc:
+        await message.answer(f"Не удалось сохранить название: {escape(str(exc))}")
+        return
+    await state.update_data(support_label=label)
+    await state.set_state(BusinessProfileStates.waiting_support_url)
+    await message.answer(
+        "Теперь пришлите HTTPS-ссылку, которая откроется по кнопке:",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(BusinessProfileStates.waiting_support_url)
+async def save_support_url(
+    message: Message,
+    state: FSMContext,
+    business_service: BusinessAdministrationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    data = await state.get_data()
+    label = str(data.get("support_label", ""))
+    try:
+        new_link = PublicLink(label=label, url=message.text or "")
+        current = await business_service.get(staff_context)
+        links = dict(current.social_links)
+        links[new_link.label] = new_link.url
+        view = await business_service.update(
+            staff_context,
+            BusinessProfileUpdate(
+                social_links=links,
+                client_support_name=None,
+                client_support_url=None,
+            ),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError, ValueError) as exc:
+        await message.answer(f"Не удалось сохранить ссылку: {escape(str(exc))}")
+        return
+    await state.clear()
+    public_links = public_links_from_mapping(view.social_links)
+    await message.answer(
+        "Источник поддержки добавлен.",
+        reply_markup=business_support_keyboard(public_links),
+    )
+
+
+@router.callback_query(BusinessSupportCallback.filter(F.action == "delete"))
+async def delete_support_source(
+    callback: CallbackQuery,
+    callback_data: BusinessSupportCallback,
     business_service: BusinessAdministrationService,
     staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
     current = await business_service.get(staff_context)
-    target = BusinessType.SALON if current.business_type is BusinessType.SOLO else BusinessType.SOLO
-    try:
-        view = await business_service.update(
-            staff_context,
-            BusinessProfileUpdate(business_type=target),
-            correlation_id=correlation_id,
-        )
-    except DomainError as exc:
-        await callback.answer(str(exc), show_alert=True)
+    links = list(public_links_from_mapping(current.social_links))
+    if callback_data.index < 0 or callback_data.index >= len(links):
+        await callback.answer("Список уже изменился. Откройте его заново.", show_alert=True)
         return
+    del links[callback_data.index]
+    view = await business_service.update(
+        staff_context,
+        BusinessProfileUpdate(
+            social_links={link.label: link.url for link in links},
+            client_support_name=None,
+            client_support_url=None,
+        ),
+        correlation_id=correlation_id,
+    )
+    updated = public_links_from_mapping(view.social_links)
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            _render(view),
-            reply_markup=business_profile_keyboard(
-                business_type=view.business_type,
-                is_bootstrap_owner=staff_context.is_bootstrap_owner,
-                is_bookable=staff_context.is_bookable,
-            ),
-        )
-    await callback.answer("Тип бизнеса обновлён.")
-
-
-@router.callback_query(BusinessProfileCallback.filter(F.action == "self_master"))
-async def toggle_bootstrap_specialist(
-    callback: CallbackQuery,
-    business_service: BusinessAdministrationService,
-    staff_context: StaffContext,
-    correlation_id: str,
-) -> None:
-    try:
-        updated = await business_service.set_bootstrap_bookable(
-            staff_context,
-            enabled=not staff_context.is_bookable,
-            correlation_id=correlation_id,
-        )
-        view = await business_service.get(updated)
-    except DomainError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            _render(view),
-            reply_markup=business_profile_keyboard(
-                business_type=view.business_type,
-                is_bootstrap_owner=True,
-                is_bookable=updated.is_bookable,
-            ),
-        )
-    await callback.answer("Профиль специалиста обновлён.")
+        await callback.message.edit_reply_markup(reply_markup=business_support_keyboard(updated))
+    await callback.answer("Источник удалён.")
 
 
 @router.callback_query(BusinessProfileCallback.filter(F.action == "logo"))
@@ -191,6 +329,7 @@ async def sync_bot_profile(
     staff_context: StaffContext,
 ) -> None:
     view = await business_service.get(staff_context)
+    logo_warning = False
     try:
         await bot.set_my_name(name=view.display_name[:64])
         await bot.set_my_description(description=(view.description or "")[:512])
@@ -205,7 +344,20 @@ async def sync_bot_profile(
     except TelegramAPIError:
         await callback.answer("Telegram не применил профиль. Повторите позже.", show_alert=True)
         return
-    await callback.answer("Профиль бота синхронизирован.", show_alert=True)
+    if view.logo_telegram_file_id:
+        try:
+            buffer = BytesIO()
+            await bot.download(view.logo_telegram_file_id, destination=buffer)
+            uploaded = BufferedInputFile(buffer.getvalue(), filename="business-profile.jpg")
+            await bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo=uploaded))
+        except (OSError, TelegramAPIError):
+            logo_warning = True
+    result = "Тексты и команды профиля бота синхронизированы."
+    if logo_warning:
+        result += " Логотип Telegram не применил — попробуйте загрузить его заново."
+    elif view.logo_telegram_file_id:
+        result += " Логотип тоже обновлён."
+    await callback.answer(result, show_alert=True)
 
 
 @router.callback_query(BusinessProfileCallback.filter(F.action.in_(set(_FIELD_BY_ACTION))))

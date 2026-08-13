@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from app.domain.enums import BusinessType
+from app.schemas.public_links import PublicLink
 
 
 class BusinessPresentation(BaseModel):
@@ -24,6 +25,7 @@ class BusinessPresentation(BaseModel):
     logo_telegram_file_id: str | None = None
     support_name: str | None = None
     support_url: str | None = None
+    support_sources: tuple[PublicLink, ...] = ()
     support_hours: str | None = None
     support_instructions: str | None = None
     privacy_policy_url: str | None = None
@@ -42,3 +44,4 @@ class PublicMasterPresentation(BaseModel):
     bio: str | None = None
     specialization: str | None = None
     telegram_photo_file_id: str | None = None
+    social_links: tuple[PublicLink, ...] = ()

@@ -12,7 +12,7 @@ class RepeatBookingOffer(BaseModel):
     previous_price: Decimal
     current_price: Decimal | None
     service_active: bool
-    master_telegram_url: str
+    master_telegram_url: str | None = None
 
     @property
     def price_changed(self) -> bool:

@@ -38,13 +38,10 @@ def should_show_master_selection(
     business_type: BusinessType,
     options: BookingMasterOptions,
 ) -> bool:
-    """Return whether this booking needs an explicit master-selection step."""
+    """Offer a choice automatically whenever several specialists are available."""
 
-    return (
-        business_type is BusinessType.SALON
-        and options.selection_enabled
-        and len(options.masters) > 1
-    )
+    del business_type
+    return options.selection_enabled and len(options.masters) > 1
 
 
 async def start_booking(

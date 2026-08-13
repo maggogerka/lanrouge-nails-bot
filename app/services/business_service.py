@@ -75,6 +75,15 @@ class BusinessAdministrationService:
             ]
             for field in changed_fields:
                 setattr(business, field, changes[field])
+            legacy_fields = {"display_name", "timezone", "address", "map_url"}
+            if legacy_fields.intersection(changed_fields):
+                settings = await unit_of_work.settings.get(for_update=True)
+                if settings is not None:
+                    settings.business_name = business.display_name
+                    settings.timezone = business.timezone
+                    settings.address = business.address or "Адрес не указан"
+                    settings.map_url = business.map_url or ""
+                    settings.version += 1
             if (
                 business.display_name
                 and business.address

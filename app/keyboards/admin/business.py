@@ -4,6 +4,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import BusinessType
+from app.schemas.public_links import PublicLink
 
 
 class BusinessProfileCallback(CallbackData, prefix="biz"):
@@ -14,33 +15,33 @@ class BusinessWelcomeCallback(CallbackData, prefix="bwel"):
     action: str
 
 
+class BusinessSupportCallback(CallbackData, prefix="bizsup"):
+    action: str
+    index: int = -1
+
+
+class BusinessTimezoneCallback(CallbackData, prefix="biztz"):
+    timezone: str
+
+
 def business_profile_keyboard(
     *,
     business_type: BusinessType | None = None,
     is_bootstrap_owner: bool = False,
     is_bookable: bool = False,
 ) -> InlineKeyboardMarkup:
+    del business_type, is_bootstrap_owner, is_bookable
     actions: list[tuple[tuple[str, str], ...]] = [
         (("👋 Приветствие", "welcome"),),
-        (("Название", "name"), ("Описание", "description")),
-        (("Короткое описание", "short"), ("Тип solo/salon", "type")),
-        (("Телефон", "phone"), ("Адрес", "address")),
-        (("Часовой пояс", "timezone"), ("Логотип", "logo")),
-        (("Политика", "privacy"), ("Оферта", "terms")),
-        (("Поддержка клиента", "support_name"), ("Ссылка поддержки", "support_url")),
+        (("🏷 Название", "name"), ("📝 Описание", "description")),
+        (("✍️ Короткое описание", "short"), ("🖼 Логотип", "logo")),
+        (("☎️ Телефон салона", "phone"), ("📍 Адрес и карта", "address_menu")),
+        (("🕐 Часовой пояс", "timezone_menu"),),
+        (("🔒 Политика", "privacy"), ("📄 Оферта", "terms")),
+        (("🛟 Источники поддержки", "support_sources"),),
         (("💼 CRM-подписка", "subscription"),),
         (("🔄 Синхронизировать профиль бота", "sync_bot"),),
     ]
-    if is_bootstrap_owner and business_type is BusinessType.SOLO:
-        actions.insert(
-            3,
-            (
-                (
-                    "Не быть специалистом" if is_bookable else "Работать как специалист",
-                    "self_master",
-                ),
-            ),
-        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -53,6 +54,82 @@ def business_profile_keyboard(
             for row in actions
         ]
     )
+
+
+def business_address_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Изменить адрес",
+                    callback_data=BusinessProfileCallback(action="address").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗺 Изменить ссылку на карту",
+                    callback_data=BusinessProfileCallback(action="map_url").pack(),
+                )
+            ],
+        ]
+    )
+
+
+def business_support_keyboard(links: tuple[PublicLink, ...]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"🗑 {link.label[:45]}",
+                callback_data=BusinessSupportCallback(action="delete", index=index).pack(),
+            )
+        ]
+        for index, link in enumerate(links)
+    ]
+    if len(links) < 5:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить источник",
+                    callback_data=BusinessSupportCallback(action="add").pack(),
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def business_timezone_keyboard() -> InlineKeyboardMarkup:
+    choices = (
+        ("Калининград", "Europe/Kaliningrad"),
+        ("Москва", "Europe/Moscow"),
+        ("Самара", "Europe/Samara"),
+        ("Екатеринбург", "Asia/Yekaterinburg"),
+        ("Омск", "Asia/Omsk"),
+        ("Красноярск", "Asia/Krasnoyarsk"),
+        ("Иркутск", "Asia/Irkutsk"),
+        ("Якутск", "Asia/Yakutsk"),
+        ("Владивосток", "Asia/Vladivostok"),
+        ("Магадан", "Asia/Magadan"),
+        ("Камчатка", "Asia/Kamchatka"),
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=BusinessTimezoneCallback(timezone=timezone).pack(),
+            )
+            for label, timezone in choices[index : index + 2]
+        ]
+        for index in range(0, len(choices), 2)
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Другой город / пояс",
+                callback_data=BusinessProfileCallback(action="timezone").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def business_welcome_keyboard(*, has_photo: bool) -> InlineKeyboardMarkup:

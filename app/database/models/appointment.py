@@ -110,6 +110,9 @@ class Appointment(TimestampMixin, Base):
     )
     service_name_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
     master_name_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
+    address_snapshot: Mapped[str | None] = mapped_column(String(500))
+    map_url_snapshot: Mapped[str | None] = mapped_column(String(2048))
+    master_contact_url_snapshot: Mapped[str | None] = mapped_column(String(2048))
     price_snapshot: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     prepayment_snapshot: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), nullable=False, default=Decimal("0"), server_default="0"

@@ -108,8 +108,22 @@ def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboard
                     ).pack(),
                 ),
             ],
-            [InlineKeyboardButton(text="Написать мастеру", url=appointment.master_telegram_url)],
-            [InlineKeyboardButton(text="📍 Открыть на карте", url=appointment.map_url)],
+            *(
+                [
+                    [
+                        InlineKeyboardButton(
+                            text="💬 Написать мастеру", url=appointment.master_telegram_url
+                        )
+                    ]
+                ]
+                if appointment.master_telegram_url
+                else []
+            ),
+            *(
+                [[InlineKeyboardButton(text="📍 Открыть на карте", url=appointment.map_url)]]
+                if appointment.map_url
+                else []
+            ),
             [
                 InlineKeyboardButton(
                     text="⬅️ К списку",

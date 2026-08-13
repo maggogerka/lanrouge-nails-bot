@@ -27,9 +27,6 @@ ADMIN_VENDOR_SUPPORT_TEXT = "🛟 Техническая поддержка"
 ADMIN_BUSINESS_SETTINGS_TEXT = "🏢 Настройки бизнеса"
 
 
-ADMIN_MASTER_PROFILE_TEXT = "ℹ️ Информация о мастере"
-
-
 def admin_main_keyboard(
     capabilities: MenuCapabilities | None = None,
     staff_context: StaffContext | None = None,
@@ -83,7 +80,6 @@ def admin_main_keyboard(
         rows.append([KeyboardButton(text=ADMIN_STATISTICS_TEXT)])
     if _can(context, StaffPermission.MANAGE_BUSINESS):
         rows.append([KeyboardButton(text=ADMIN_BUSINESS_SETTINGS_TEXT)])
-        rows.append([KeyboardButton(text=ADMIN_MASTER_PROFILE_TEXT)])
     if _can(context, StaffPermission.MANAGE_PRIVATE_SETTINGS):
         rows.append([KeyboardButton(text=ADMIN_SETTINGS_TEXT)])
     if (

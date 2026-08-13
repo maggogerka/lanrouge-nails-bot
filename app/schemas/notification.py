@@ -19,8 +19,8 @@ class NotificationDelivery(BaseModel):
     start_at: datetime
     timezone: str
     address: str
-    map_url: str
-    master_telegram_url: str
+    map_url: str | None = None
+    master_telegram_url: str | None = None
     client_name: str
     client_phone: str | None
     payment_id: int | None = None

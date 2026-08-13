@@ -34,6 +34,7 @@ from app.schemas.authorization import (
     StaffServiceAssignmentView,
     can_assign_role,
 )
+from app.schemas.public_links import normalize_public_link_mapping, public_links_from_mapping
 
 SessionFactory = async_sessionmaker[AsyncSession]
 StaffRepositoryFactory = Callable[[AsyncSession], StaffRepository]
@@ -205,6 +206,7 @@ class AuthorizationService:
                 )
             member.is_bookable = enabled
             await repository.flush()
+            await repository.sync_business_type(live_actor.business_id)
             await audit.add(
                 business_id=live_actor.business_id,
                 actor_user_id=live_actor.user_id,
@@ -212,6 +214,43 @@ class AuthorizationService:
                 entity_type="staff_member",
                 entity_id=str(member.id),
                 changes={"enabled": enabled},
+                correlation_id=correlation_id,
+            )
+            await session.commit()
+            return self._member_view(member)
+
+    async def set_staff_social_links(
+        self,
+        actor: StaffContext,
+        staff_member_id: int,
+        links: object,
+        *,
+        correlation_id: str | None = None,
+    ) -> StaffMemberView:
+        """Replace one public staff contact list after live authorization."""
+
+        validated = normalize_public_link_mapping(links)
+        async with self._session_factory() as session:
+            repository = self._staff_repository_factory(session)
+            audit = self._audit_repository_factory(session)
+            live_actor = await self._live_context(repository, actor.business_id, actor.telegram_id)
+            self._require_permission(live_actor, StaffPermission.MANAGE_STAFF)
+            member = await repository.get_by_id(
+                live_actor.business_id, staff_member_id, for_update=True
+            )
+            if member is None or member.archived_at is not None:
+                raise EntityNotFoundError("Профиль мастера не найден.")
+            settings = dict(member.settings or {})
+            settings["social_links"] = validated
+            member.settings = settings
+            await repository.flush()
+            await audit.add(
+                business_id=live_actor.business_id,
+                actor_user_id=live_actor.user_id,
+                action="staff.social_links_updated",
+                entity_type="staff_member",
+                entity_id=str(member.id),
+                changes={"link_count": len(validated)},
                 correlation_id=correlation_id,
             )
             await session.commit()
@@ -452,6 +491,7 @@ class AuthorizationService:
                 invitation.accepted_by_user_id = user.id
                 invitation.used_at = current
                 await repository.flush()
+                await repository.sync_business_type(invitation.business_id)
                 context = self._context(member, user.id, user.telegram_id)
                 await audit.add(
                     business_id=invitation.business_id,
@@ -576,6 +616,7 @@ class AuthorizationService:
             target.archived_at = current
             target.permission_grants = []
             await repository.flush()
+            await repository.sync_business_type(live_actor.business_id)
             await audit.add(
                 business_id=live_actor.business_id,
                 actor_user_id=live_actor.user_id,
@@ -621,6 +662,7 @@ class AuthorizationService:
             if role is not StaffRole.MASTER and not target.is_bootstrap_owner:
                 target.is_bookable = False
             await repository.flush()
+            await repository.sync_business_type(live_actor.business_id)
             await audit.add(
                 business_id=live_actor.business_id,
                 actor_user_id=live_actor.user_id,
@@ -959,6 +1001,12 @@ class AuthorizationService:
             bio=member.bio,
             specialization=member.specialization,
             telegram_photo_file_id=member.telegram_photo_file_id,
+            social_links={
+                link.label: link.url
+                for link in public_links_from_mapping(
+                    member.settings.get("social_links", {}) if member.settings else {}
+                )
+            },
             archived_at=member.archived_at,
         )
 

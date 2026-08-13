@@ -266,8 +266,8 @@ def booking_navigation_keyboard(*, request_contact: bool = False) -> ReplyKeyboa
 
 
 def appointment_links_keyboard(
-    map_url: str,
-    master_url: str,
+    map_url: str | None,
+    master_url: str | None,
     *,
     payment_url: str | None = None,
     manual_payment_id: int | None = None,
@@ -277,12 +277,10 @@ def appointment_links_keyboard(
         rows.append([InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)])
     if manual_payment_id is not None:
         rows.append([manual_payment_report_button(manual_payment_id)])
-    rows.extend(
-        [
-            [InlineKeyboardButton(text="📍 Открыть на карте", url=map_url)],
-            [InlineKeyboardButton(text="Написать мастеру", url=master_url)],
-        ]
-    )
+    if map_url is not None:
+        rows.append([InlineKeyboardButton(text="📍 Открыть на карте", url=map_url)])
+    if master_url is not None:
+        rows.append([InlineKeyboardButton(text="💬 Написать мастеру", url=master_url)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

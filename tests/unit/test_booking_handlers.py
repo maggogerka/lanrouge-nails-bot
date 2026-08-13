@@ -82,7 +82,7 @@ def test_master_selection_is_only_shown_for_multi_master_salon() -> None:
     )
 
     assert should_show_master_selection(BusinessType.SALON, two_masters)
-    assert not should_show_master_selection(BusinessType.SOLO, two_masters)
+    assert should_show_master_selection(BusinessType.SOLO, two_masters)
     assert not should_show_master_selection(
         BusinessType.SALON,
         two_masters.model_copy(update={"selection_enabled": False}),

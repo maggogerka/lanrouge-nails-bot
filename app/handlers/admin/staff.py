@@ -25,6 +25,7 @@ from app.keyboards.admin.staff import (
     staff_management_keyboard,
     staff_member_keyboard,
     staff_services_keyboard,
+    staff_social_links_keyboard,
 )
 from app.schemas.authorization import (
     StaffContext,
@@ -32,6 +33,7 @@ from app.schemas.authorization import (
     StaffPermission,
     StaffProfilePatch,
 )
+from app.schemas.public_links import PublicLink, public_links_from_mapping
 from app.services.authorization_service import AuthorizationService
 from app.states.staff import StaffInvitationForm, StaffProfileForm
 
@@ -121,6 +123,8 @@ async def _show_member(
         lines.append(f"Специализация: {escape(member.specialization)}")
     if member.bio:
         lines.append(f"О мастере: {escape(member.bio)}")
+    if member.social_links:
+        lines.append("Контакты: " + ", ".join(escape(label) for label in member.social_links))
     text = "\n".join(lines)
     keyboard = staff_member_keyboard(actor, member)
     if member.telegram_photo_file_id:
@@ -204,6 +208,101 @@ async def show_staff_services(
     await callback.answer()
 
 
+async def _show_social_links(
+    message: Message,
+    service: AuthorizationService,
+    actor: StaffContext,
+    staff_member_id: int,
+) -> None:
+    member = await service.get_staff_member(actor, staff_member_id)
+    links = public_links_from_mapping(member.social_links)
+    lines = [
+        f"<b>Контакты: {escape(member.display_name)}</b>",
+        "До 5 HTTPS-ссылок. Первая ссылка используется кнопкой «Написать мастеру» "
+        "в подтверждении записи.",
+    ]
+    lines.extend(f"• {escape(link.label)} — {escape(link.url)}" for link in links)
+    if not links:
+        lines.append("\nКонтакты ещё не добавлены.")
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=staff_social_links_keyboard(staff_member_id, links),
+    )
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "socials"))
+async def show_social_links(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        if isinstance(callback.message, Message):
+            await _show_social_links(
+                callback.message,
+                authorization_service,
+                staff_context,
+                callback_data.staff_member_id,
+            )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "social_add"))
+async def begin_social_link(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    state: FSMContext,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    member = await authorization_service.get_staff_member(
+        staff_context, callback_data.staff_member_id
+    )
+    if len(member.social_links) >= 5:
+        await callback.answer("Можно добавить не более 5 контактов.", show_alert=True)
+        return
+    await state.set_state(StaffProfileForm.value)
+    await state.set_data({"staff_member_id": member.id, "profile_field": "social_label"})
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Введите название кнопки, например «Telegram», «WhatsApp» или «VK»:",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.callback_query(StaffAdminCallback.filter(F.action == "social_delete"))
+async def delete_social_link(
+    callback: CallbackQuery,
+    callback_data: StaffAdminCallback,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    member = await authorization_service.get_staff_member(
+        staff_context, callback_data.staff_member_id
+    )
+    links = list(public_links_from_mapping(member.social_links))
+    index = callback_data.target_staff_member_id
+    if index < 0 or index >= len(links):
+        await callback.answer("Список уже изменился. Откройте его заново.", show_alert=True)
+        return
+    del links[index]
+    await authorization_service.set_staff_social_links(
+        staff_context,
+        member.id,
+        {link.label: link.url for link in links},
+        correlation_id=correlation_id,
+    )
+    if isinstance(callback.message, Message):
+        await _show_social_links(callback.message, authorization_service, staff_context, member.id)
+    await callback.answer("Контакт удалён.")
+
+
 @router.callback_query(StaffAdminCallback.filter(F.action == "service_toggle"))
 async def toggle_staff_service(
     callback: CallbackQuery,
@@ -267,7 +366,30 @@ async def save_profile_edit(
     try:
         staff_member_id = int(str(data["staff_member_id"]))
         field = str(data["profile_field"])
-        if field == "photo":
+        if field == "social_label":
+            label = (message.text or "").strip()
+            PublicLink(label=label, url="https://example.test")
+            await state.update_data(profile_field="social_url", social_label=label)
+            await message.answer(
+                "Теперь пришлите HTTPS-ссылку для этой кнопки:",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        if field == "social_url":
+            new_link = PublicLink(
+                label=str(data.get("social_label", "")),
+                url=message.text or "",
+            )
+            member = await authorization_service.get_staff_member(staff_context, staff_member_id)
+            links = dict(member.social_links)
+            links[new_link.label] = new_link.url
+            await authorization_service.set_staff_social_links(
+                staff_context,
+                staff_member_id,
+                links,
+                correlation_id=correlation_id,
+            )
+        elif field == "photo":
             if not message.photo:
                 await message.answer("Нужно отправить фотографию, не файл и не текст.")
                 return
@@ -278,12 +400,13 @@ async def save_profile_edit(
             )
         else:
             patch = StaffProfilePatch(**{field: message.text or ""})
-        await authorization_service.update_staff_profile(
-            staff_context,
-            staff_member_id,
-            patch,
-            correlation_id=correlation_id,
-        )
+        if field not in {"social_label", "social_url"}:
+            await authorization_service.update_staff_profile(
+                staff_context,
+                staff_member_id,
+                patch,
+                correlation_id=correlation_id,
+            )
     except (DomainError, ValidationError, KeyError, ValueError) as exc:
         await message.answer(f"Не удалось сохранить профиль: {exc}")
         return

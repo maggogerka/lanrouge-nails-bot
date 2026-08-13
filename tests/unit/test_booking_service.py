@@ -158,6 +158,12 @@ def build_uow(
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.businesses.get = AsyncMock(
+        return_value=SimpleNamespace(
+            address="ул. Тестовая, 1",
+            map_url="https://example.com/map",
+        )
+    )
     unit_of_work.features.get = AsyncMock(
         return_value=BusinessFeatureFlags(
             business_id=1,

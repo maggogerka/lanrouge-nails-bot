@@ -28,9 +28,6 @@ class RepeatBookingService:
                     "Пока нет завершённой записи, которую можно повторить."
                 )
             service = await uow.services.get(previous.service_id)
-            settings = await uow.settings.get()
-            if settings is None:
-                raise RuntimeError("Business settings are missing")
             return RepeatBookingOffer(
                 previous_appointment_id=previous.id,
                 service_id=previous.service_id,
@@ -40,7 +37,7 @@ class RepeatBookingService:
                 previous_price=previous.price_snapshot,
                 current_price=service.price if service is not None else None,
                 service_active=bool(service is not None and service.is_active),
-                master_telegram_url=settings.master_telegram_url,
+                master_telegram_url=previous.master_contact_url_snapshot,
             )
 
     async def opt_out(

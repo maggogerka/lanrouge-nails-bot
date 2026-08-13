@@ -4,6 +4,9 @@
 
 ### Added
 
+- separate business address/map editing, friendly timezone selection and up to five support links;
+- up to five per-master social/contact links with the selected master's direct contact in bookings;
+- immutable address, map and master-contact snapshots for new appointments;
 - client service and master cards with photos and direct booking actions;
 - compact staff profile administration with booking visibility, service assignments and media;
 - direct Telegram client-chat links in appointment details;
@@ -15,6 +18,9 @@
 
 ### Changed
 
+- solo/salon presentation is derived from active bookable specialists; manual mode and duplicate
+  specialist controls were removed from the business settings UI;
+- unfinished Loyalty and Mini App switches and the obsolete master-info admin screen are hidden;
 - navigation now recovers from active and stale FSM forms;
 - Telegram contact sharing is accepted without treating contact-only messages as navigation;
 - consent and booking copy is gender-neutral, and the primary booking action has a clear emoji;

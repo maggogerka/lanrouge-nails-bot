@@ -76,14 +76,11 @@ def reminder_keyboard(delivery: NotificationDelivery) -> InlineKeyboardMarkup:
         and delivery.offset_minutes == 1440
     ):
         return confirm_visit_keyboard(delivery.appointment_id)
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📍 Открыть на карте", url=delivery.map_url)],
-            [
-                InlineKeyboardButton(
-                    text="Написать мастеру",
-                    url=delivery.master_telegram_url,
-                )
-            ],
-        ]
-    )
+    rows: list[list[InlineKeyboardButton]] = []
+    if delivery.map_url:
+        rows.append([InlineKeyboardButton(text="📍 Открыть на карте", url=delivery.map_url)])
+    if delivery.master_telegram_url:
+        rows.append(
+            [InlineKeyboardButton(text="💬 Написать мастеру", url=delivery.master_telegram_url)]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
