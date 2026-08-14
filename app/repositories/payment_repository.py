@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models.appointment import Appointment
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
+from app.database.models.user import User
 from app.domain.enums import PaymentMode, PaymentStatus, RefundStatus
 from app.repositories.scoped import TenantScopedRepository
 
@@ -109,6 +110,63 @@ class PaymentRepository(TenantScopedRepository):
                 Appointment.staff_member_id == staff_member_id,
             )
         return list(await self._session.scalars(statement))
+
+    async def list_recent_with_context(
+        self,
+        *,
+        statuses: Collection[PaymentStatus],
+        staff_member_id: int | None = None,
+        limit: int = 50,
+    ) -> list[tuple[Payment, Appointment, User]]:
+        """Return one bounded, tenant-scoped staff-panel projection query."""
+
+        if not statuses:
+            return []
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        statement = (
+            select(Payment, Appointment, User)
+            .join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            )
+            .join(User, User.id == Appointment.client_id)
+            .where(
+                Payment.business_id == self.business_id,
+                Payment.status.in_(statuses),
+            )
+            .order_by(Payment.created_at.desc(), Payment.id.desc())
+            .limit(limit)
+        )
+        if staff_member_id is not None:
+            statement = statement.where(Appointment.staff_member_id == staff_member_id)
+        rows = await self._session.execute(statement)
+        return [(row[0], row[1], row[2]) for row in rows.all()]
+
+    async def get_with_context(
+        self,
+        payment_id: int,
+        *,
+        staff_member_id: int | None = None,
+    ) -> tuple[Payment, Appointment, User] | None:
+        statement = (
+            select(Payment, Appointment, User)
+            .join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            )
+            .join(User, User.id == Appointment.client_id)
+            .where(
+                Payment.id == payment_id,
+                Payment.business_id == self.business_id,
+            )
+        )
+        if staff_member_id is not None:
+            statement = statement.where(Appointment.staff_member_id == staff_member_id)
+        row = (await self._session.execute(statement)).one_or_none()
+        return (row[0], row[1], row[2]) if row is not None else None
 
     async def add_refund(self, refund: Refund) -> Refund:
         self._require_business(refund.business_id)

@@ -23,6 +23,11 @@
 
 ### Changed
 
+- upcoming appointment cards no longer fail when a client has no public Telegram username;
+- prepayments are split into active operations and history, with appointment/client context and
+  contextual approval, rejection, contact and refund actions;
+- appointment reminder settings use documented presets and bounded custom schedules;
+- review and broadcast switches are managed only through the central bot-features screen;
 - masters now open service-neutral availability; a compatible workstation is selected atomically
   only when a client books or reschedules, with an appointment-level PostgreSQL overlap guard and
   one business/date allocation lock shared by different services;

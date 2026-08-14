@@ -27,7 +27,7 @@ def render_reminder(delivery: NotificationDelivery) -> str:
         return (
             "<b>Предоплата ожидает проверки</b>\n"
             f"Запись №{delivery.appointment_id} · {escape(delivery.service_name)}.\n"
-            "Откройте раздел «Оплата» в панели управления."
+            "Откройте раздел «Предоплаты» в панели управления."
         )
     if delivery.notification_type is NotificationType.REVIEW_REQUEST:
         return (

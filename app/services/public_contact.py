@@ -29,4 +29,7 @@ async def resolve_staff_contact_url(
         return None
     if user.username:
         return f"https://t.me/{user.username}"
-    return f"tg://user?id={user.telegram_id}"
+    # Telegram can reject tg://user?id buttons for users with restricted
+    # privacy, which makes the whole message fail. Without a public username
+    # there is no universally valid profile URL.
+    return None

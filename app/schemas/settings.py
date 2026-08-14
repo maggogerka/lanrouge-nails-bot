@@ -152,6 +152,6 @@ class BusinessSettingsPatch(BaseModel):
             raise ValueError("setting must not be null")
         if field == "reminder_offsets_minutes":
             offsets = self.reminder_offsets_minutes or []
-            if not offsets or len(offsets) != len(set(offsets)):
-                raise ValueError("reminder offsets must be a non-empty unique list")
+            if not offsets or len(offsets) > 5 or len(offsets) != len(set(offsets)):
+                raise ValueError("reminder offsets must contain 1-5 unique values")
         return self

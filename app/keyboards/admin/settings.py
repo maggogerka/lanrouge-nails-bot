@@ -30,7 +30,7 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
             "default_window_duration_minutes",
         ),
         (f"↔️ Интервал между окнами · {settings.minimum_gap_minutes} мин.", "minimum_gap_minutes"),
-        ("🔔 Настроить напоминания", "reminder_offsets_minutes"),
+        ("🔔 Напоминания о записи", "reminders"),
         (f"🛡 Лимит клиента · {settings.future_booking_limit_max}", "future_booking_limit_max"),
         (
             f"🗓 Горизонт антиспама · {settings.future_booking_limit_horizon_days} дн.",
@@ -70,24 +70,6 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=(
-                        "✅ Отзывы включены" if settings.reviews_enabled else "⛔ Отзывы выключены"
-                    ),
-                    callback_data=SettingsCallback(action="toggle_reviews").pack(),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "✅ Рассылки включены"
-                        if settings.broadcasts_enabled
-                        else "⛔ Рассылки выключены"
-                    ),
-                    callback_data=SettingsCallback(action="toggle_broadcasts").pack(),
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text=("✅ Суббота" if settings.allow_saturday else "⛔ Суббота"),
                     callback_data=SettingsCallback(action="toggle_saturday").pack(),
                 ),
@@ -105,3 +87,40 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reminder_settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ За 1 день, 3 часа и 1 час",
+                    callback_data=SettingsCallback(action="reminders_default").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="За 1 день и 2 часа",
+                    callback_data=SettingsCallback(action="reminders_day_two_hours").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="За 3 часа и 1 час",
+                    callback_data=SettingsCallback(action="reminders_three_one").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Свой график (до 5 уведомлений)",
+                    callback_data=SettingsCallback(action="reminders_custom").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К настройкам",
+                    callback_data=SettingsCallback(action="view").pack(),
+                )
+            ],
+        ]
+    )

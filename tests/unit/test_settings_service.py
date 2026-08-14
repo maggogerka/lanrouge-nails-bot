@@ -43,6 +43,9 @@ def test_reminder_offsets_must_be_unique_and_non_empty() -> None:
     with pytest.raises(ValidationError, match="unique"):
         BusinessSettingsPatch(reminder_offsets_minutes=[60, 60])
 
+    with pytest.raises(ValidationError, match="1-5"):
+        BusinessSettingsPatch(reminder_offsets_minutes=[1, 2, 3, 4, 5, 6])
+
 
 @pytest.mark.parametrize(
     ("field", "value"),

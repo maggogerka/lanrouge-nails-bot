@@ -67,13 +67,12 @@ def test_admin_appointment_render_escapes_contact_values() -> None:
     assert "+7&lt;999&gt;" in rendered
 
 
-def test_admin_can_open_client_chat_even_without_username() -> None:
+def test_admin_card_omits_privacy_restricted_user_link_without_username() -> None:
     appointment = admin_appointment().model_copy(update={"client_username": None})
     keyboard = admin_appointment_details_keyboard(appointment)
-    contact = keyboard.inline_keyboard[0][0]
 
-    assert contact.text == "💬 Написать клиенту"
-    assert str(contact.url) == "tg://user?id=123456"
+    assert all(button.url is None for row in keyboard.inline_keyboard for button in row)
+    assert "Telegram ID: <code>123456</code>" in render_admin_appointment(appointment)
 
 
 def test_appointment_and_settings_callbacks_fit_telegram_limit() -> None:
@@ -101,6 +100,9 @@ def test_appointment_and_settings_callbacks_fit_telegram_limit() -> None:
     }
     assert "cancellation_deadline_hours" in actions
     assert "reschedule_deadline_hours" in actions
+    assert "reminders" in actions
+    assert "toggle_reviews" not in actions
+    assert "toggle_broadcasts" not in actions
 
 
 def test_admin_upcoming_keyboard_is_grouped_as_calendar_agenda() -> None:

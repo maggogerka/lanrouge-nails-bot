@@ -121,14 +121,12 @@ def admin_appointment_details_keyboard(
     appointment: AdminAppointmentView,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    # Telegram rejects tg://user?id links when the client has restricted
+    # profile-link access (BUTTON_USER_PRIVACY_RESTRICTED), which makes the
+    # entire appointment card fail to render. A public username is the only
+    # safe inline-button target; phone and numeric ID remain visible in text.
     contact_url = (
-        f"https://t.me/{appointment.client_username}"
-        if appointment.client_username
-        else (
-            f"tg://user?id={appointment.client_telegram_id}"
-            if appointment.client_telegram_id
-            else None
-        )
+        f"https://t.me/{appointment.client_username}" if appointment.client_username else None
     )
     if contact_url:
         rows.append([InlineKeyboardButton(text="💬 Написать клиенту", url=contact_url)])

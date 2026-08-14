@@ -1,16 +1,190 @@
 """Explicit payment review and manual approval controls."""
 
+from zoneinfo import ZoneInfo
+
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import ManualPaymentStatus, PaymentMode, PaymentStatus
-from app.schemas.payment import PaymentView, RefundView
+from app.schemas.payment import PaymentAdminSection, PaymentAdminView, PaymentView, RefundView
 
 
 class PaymentAdminCallback(CallbackData, prefix="payadm"):
     action: str
     payment_id: int = 0
     mode: str = "none"
+
+
+def payment_admin_home_keyboard(
+    *,
+    active_count: int,
+    history_count: int,
+    can_configure: bool,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"⏳ Действующие · {active_count}",
+                callback_data=PaymentAdminCallback(action="active").pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"✅ История · {history_count}",
+                callback_data=PaymentAdminCallback(action="history").pack(),
+            )
+        ],
+    ]
+    if can_configure:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⚙️ Настройки предоплаты",
+                    callback_data=PaymentAdminCallback(action="settings").pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔄 Обновить",
+                callback_data=PaymentAdminCallback(action="list").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_admin_list_keyboard(
+    payments: tuple[PaymentAdminView, ...],
+    section: PaymentAdminSection,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for payment in payments:
+        local = payment.appointment_start_at.astimezone(ZoneInfo(payment.timezone))
+        marker = "⏳" if section is PaymentAdminSection.ACTIVE else "✅"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{marker} {local:%d.%m %H:%M} · {payment.client_name} · "
+                        f"{payment.amount:.2f} {payment.currency}"
+                    )[:64],
+                    callback_data=PaymentAdminCallback(
+                        action="view",
+                        payment_id=payment.id,
+                        mode=section.value,
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ К разделу «Предоплаты»",
+                callback_data=PaymentAdminCallback(action="list").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_admin_details_keyboard(
+    payment: PaymentAdminView,
+    *,
+    section: PaymentAdminSection,
+    can_manage: bool,
+    can_reject: bool,
+    can_refund: bool,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if payment.client_username:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать клиенту",
+                    url=f"https://t.me/{payment.client_username}",
+                )
+            ]
+        )
+    manual_actionable = (
+        payment.provider is PaymentMode.MANUAL
+        and payment.status is PaymentStatus.PENDING
+        and payment.manual_status
+        in {ManualPaymentStatus.CLIENT_REPORTED, ManualPaymentStatus.REVIEW_PENDING}
+    )
+    if can_manage and manual_actionable:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить получение денег",
+                    callback_data=PaymentAdminCallback(
+                        action="approve_prompt", payment_id=payment.id
+                    ).pack(),
+                )
+            ]
+        )
+    if can_reject and manual_actionable:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Отклонить предоплату",
+                    callback_data=PaymentAdminCallback(
+                        action="reject_prompt", payment_id=payment.id
+                    ).pack(),
+                )
+            ]
+        )
+    if can_refund and payment.status in {
+        PaymentStatus.SUCCEEDED,
+        PaymentStatus.PARTIALLY_REFUNDED,
+    }:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="↩️ Оформить возврат остатка",
+                    callback_data=PaymentAdminCallback(
+                        action="refund_prompt", payment_id=payment.id
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=(
+                    "⬅️ К действующим" if section is PaymentAdminSection.ACTIVE else "⬅️ К истории"
+                ),
+                callback_data=PaymentAdminCallback(action=section.value).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_admin_settings_keyboard(
+    *,
+    can_edit_instructions: bool,
+    can_edit_timers: bool,
+    can_change_settings: bool,
+) -> InlineKeyboardMarkup:
+    base = payments_keyboard(
+        (),
+        can_manage=False,
+        can_edit_instructions=can_edit_instructions,
+        can_edit_timers=can_edit_timers,
+        can_change_settings=can_change_settings,
+    )
+    rows = list(base.inline_keyboard[:-1])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ К разделу «Предоплаты»",
+                callback_data=PaymentAdminCallback(action="list").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def payments_keyboard(

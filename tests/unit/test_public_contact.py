@@ -57,3 +57,18 @@ async def test_master_bound_telegram_is_safe_fallback() -> None:
     )
 
     assert await resolve_staff_contact_url(session, member) == "https://t.me/master_name"
+
+
+@pytest.mark.asyncio
+async def test_private_telegram_identity_does_not_create_rejected_deep_link() -> None:
+    session = MagicMock()
+    session.get = AsyncMock(return_value=SimpleNamespace(username=None, telegram_id=42))
+    member = StaffMember(
+        business_id=1,
+        display_name="Master",
+        role=StaffRole.MASTER,
+        settings={},
+        user_id=7,
+    )
+
+    assert await resolve_staff_contact_url(session, member) is None

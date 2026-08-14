@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.domain.enums import NotificationType
 from app.domain.errors import AuthorizationError, EntityNotFoundError, FeatureDisabledError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.authorization import StaffContext, StaffPermission
@@ -61,6 +62,19 @@ class FeatureFlagService:
             if flags is None:
                 raise EntityNotFoundError("Business feature settings are missing")
             setattr(flags, feature.value, enabled)
+            if feature in {FeatureName.REVIEWS, FeatureName.BROADCASTS}:
+                settings = await unit_of_work.settings.get(for_update=True)
+                if settings is None:
+                    raise EntityNotFoundError("Business settings are missing")
+                if feature is FeatureName.REVIEWS:
+                    settings.reviews_enabled = enabled
+                    if not enabled:
+                        await unit_of_work.notifications.cancel_unsent_by_type(
+                            NotificationType.REVIEW_REQUEST
+                        )
+                else:
+                    settings.broadcasts_enabled = enabled
+                await unit_of_work.session.flush()
             await unit_of_work.features.flush()
             await unit_of_work.audit.add(
                 actor_user_id=actor.user_id,

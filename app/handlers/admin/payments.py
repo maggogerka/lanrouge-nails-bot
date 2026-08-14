@@ -1,13 +1,14 @@
 """Payment list and confirmed human boundary for manual receipts."""
 
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.domain.enums import PaymentMode
+from app.domain.enums import PaymentMode, PaymentStatus
 from app.domain.errors import DomainError
 from app.domain.payments import PaymentStateError
 from app.keyboards.admin.main import ADMIN_PAYMENTS_TEXT
@@ -17,33 +18,73 @@ from app.keyboards.admin.payments import (
     manual_instruction_preview_keyboard,
     manual_refund_confirmation,
     manual_rejection_reason_keyboard,
+    payment_admin_details_keyboard,
+    payment_admin_home_keyboard,
+    payment_admin_list_keyboard,
+    payment_admin_settings_keyboard,
     payment_mode_confirmation,
-    payments_keyboard,
     refund_confirmation,
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.schemas.authorization import StaffContext, StaffPermission
-from app.schemas.payment import PaymentView
+from app.schemas.payment import PaymentAdminSection, PaymentAdminView
 from app.services.payment_admin_service import PaymentAdministrationService
 from app.states.payments import PaymentSettingsForm
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.payments")
 
 
-def _render(payment: PaymentView) -> str:
+def _render(payment: PaymentAdminView) -> str:
+    zone = ZoneInfo(payment.timezone)
+    appointment_at = payment.appointment_start_at.astimezone(zone)
+    created_at = payment.created_at.astimezone(zone)
+    expires_at = (
+        payment.expires_at.astimezone(zone).strftime("%d.%m.%Y %H:%M")
+        if payment.expires_at is not None
+        else "—"
+    )
+    paid_at = (
+        payment.paid_at.astimezone(zone).strftime("%d.%m.%Y %H:%M")
+        if payment.paid_at is not None
+        else "—"
+    )
+    username = f"@{escape(payment.client_username)}" if payment.client_username else "—"
+    phone = escape(payment.client_phone) if payment.client_phone else "—"
+    telegram_id = str(payment.client_telegram_id) if payment.client_telegram_id else "—"
+    status = {
+        "created": "создаётся",
+        "pending": "ожидает оплаты/проверки",
+        "succeeded": "подтверждена",
+        "cancelled": "отменена",
+        "failed": "отклонена или не прошла",
+        "refund_pending": "возврат выполняется",
+        "partially_refunded": "частично возвращена",
+        "refunded": "полностью возвращена",
+    }.get(payment.status.value, payment.status.value)
     manual_line = (
-        f"Ручной статус: {payment.manual_status.value}\n"
+        f"Ручная проверка: {payment.manual_status.value}\n"
         if payment.manual_status is not None
         else ""
     )
     return (
-        f"<b>Платёж #{payment.id}</b>\n"
-        f"Запись: #{payment.appointment_id}\n"
-        f"Режим: {payment.provider.value}\n"
+        f"<b>Предоплата #{payment.id}</b>\n\n"
+        f"Дата записи: {appointment_at:%d.%m.%Y %H:%M}\n"
+        f"Услуга: {escape(payment.service_name)}\n"
+        f"Мастер: {escape(payment.master_name)}\n"
+        f"Клиент: {escape(payment.client_name)}\n"
+        f"Телефон: {phone}\n"
+        f"Telegram: {username}\n"
+        f"Telegram ID: <code>{telegram_id}</code>\n\n"
         f"Сумма: {payment.amount:.2f} {payment.currency}\n"
-        f"Статус: {payment.status.value}\n"
+        f"Статус: {status}\n"
+        f"Способ: {payment.provider.value}\n"
         f"{manual_line}"
-        f"Возвращено: {payment.refunded_amount:.2f} {payment.currency}"
+        f"Создана: {created_at:%d.%m.%Y %H:%M}\n"
+        f"Резерв до: {expires_at}\n"
+        f"Подтверждена: {paid_at}\n"
+        f"Возвращено: {payment.refunded_amount:.2f} {payment.currency}\n"
+        f"Запись: #{payment.appointment_id}"
     )
 
 
@@ -52,23 +93,31 @@ async def _show(
     service: PaymentAdministrationService,
     actor: StaffContext,
 ) -> None:
-    payments = await service.list_recent(actor)
+    active = await service.list_panel(actor, PaymentAdminSection.ACTIVE, limit=100)
+    history = await service.list_panel(actor, PaymentAdminSection.HISTORY, limit=100)
     settings = await service.get_settings(actor)
     await message.answer(
-        f"<b>Оплата</b>\nРежим: {settings.mode.value}\n"
-        f"Резерв: {settings.reservation_ttl_minutes} мин.\n"
+        f"<b>Предоплаты</b>\n\nРежим: {settings.mode.value}\n"
+        f"Время на оплату: {settings.reservation_ttl_minutes} мин.\n"
         f"Инструкция ручной оплаты: "
-        f"{'настроена' if settings.manual_payment_instructions else 'не настроена'}\n"
-        + (f"Последние операции: {len(payments)}" if payments else "Предоплат пока нет."),
-        reply_markup=payments_keyboard(
-            payments,
-            can_manage=actor.has_permission(StaffPermission.APPROVE_PREPAYMENTS),
-            can_reject=actor.has_permission(StaffPermission.REJECT_PREPAYMENTS),
-            can_refund=actor.has_permission(StaffPermission.REFUND_PAYMENTS),
-            can_edit_instructions=actor.has_permission(StaffPermission.EDIT_PAYMENT_INSTRUCTIONS),
-            can_edit_timers=actor.has_permission(StaffPermission.EDIT_PAYMENT_TIMERS),
-            can_change_settings=actor.has_permission(StaffPermission.CHANGE_PAYMENT_SETTINGS),
+        f"{'настроена' if settings.manual_payment_instructions else 'не настроена'}\n\n"
+        "Действующие предоплаты и завершённые операции находятся в отдельных списках.",
+        reply_markup=payment_admin_home_keyboard(
+            active_count=len(active),
+            history_count=len(history),
+            can_configure=_can_configure(actor),
         ),
+    )
+
+
+def _can_configure(actor: StaffContext) -> bool:
+    return any(
+        actor.has_permission(permission)
+        for permission in {
+            StaffPermission.EDIT_PAYMENT_INSTRUCTIONS,
+            StaffPermission.EDIT_PAYMENT_TIMERS,
+            StaffPermission.CHANGE_PAYMENT_SETTINGS,
+        }
     )
 
 
@@ -97,6 +146,71 @@ async def refresh_payments(
     await callback.answer()
 
 
+@router.callback_query(PaymentAdminCallback.filter(F.action.in_({"active", "history"})))
+async def show_payment_section(
+    callback: CallbackQuery,
+    callback_data: PaymentAdminCallback,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    await state.clear()
+    section = PaymentAdminSection(callback_data.action)
+    try:
+        payments = await payment_admin_service.list_panel(staff_context, section, limit=100)
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    title = (
+        "Действующие предоплаты" if section is PaymentAdminSection.ACTIVE else "История предоплат"
+    )
+    text = f"<b>{title}</b>\n\n"
+    text += (
+        "Выберите предоплату по дате записи и клиенту."
+        if payments
+        else "В этом разделе пока нет операций."
+    )
+    if isinstance(callback.message, Message):
+        await edit_text_safely(
+            callback.message,
+            text,
+            reply_markup=payment_admin_list_keyboard(payments, section),
+        )
+    await callback.answer()
+
+
+@router.callback_query(PaymentAdminCallback.filter(F.action == "settings"))
+async def show_payment_settings(
+    callback: CallbackQuery,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        settings = await payment_admin_service.get_settings(staff_context)
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await edit_text_safely(
+            callback.message,
+            "<b>Настройки предоплаты</b>\n\n"
+            f"Режим: {settings.mode.value}\n"
+            f"Время на оплату: {settings.reservation_ttl_minutes} мин.\n"
+            "Инструкция ручной оплаты: "
+            f"{'настроена' if settings.manual_payment_instructions else 'не настроена'}",
+            reply_markup=payment_admin_settings_keyboard(
+                can_edit_instructions=staff_context.has_permission(
+                    StaffPermission.EDIT_PAYMENT_INSTRUCTIONS
+                ),
+                can_edit_timers=staff_context.has_permission(StaffPermission.EDIT_PAYMENT_TIMERS),
+                can_change_settings=staff_context.has_permission(
+                    StaffPermission.CHANGE_PAYMENT_SETTINGS
+                ),
+            ),
+        )
+    await callback.answer()
+
+
 @router.callback_query(PaymentAdminCallback.filter(F.action == "view"))
 async def view_payment(
     callback: CallbackQuery,
@@ -104,13 +218,36 @@ async def view_payment(
     payment_admin_service: PaymentAdministrationService,
     staff_context: StaffContext,
 ) -> None:
-    payments = await payment_admin_service.list_recent(staff_context, limit=100)
-    payment = next((item for item in payments if item.id == callback_data.payment_id), None)
-    if payment is None:
-        await callback.answer("Платёж не найден.", show_alert=True)
+    try:
+        payment = await payment_admin_service.get_panel_payment(
+            staff_context, callback_data.payment_id
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
         return
+    try:
+        section = PaymentAdminSection(callback_data.mode)
+    except ValueError:
+        # Old messages created before the active/history split have mode="none".
+        # Keep those buttons usable instead of exposing a validation error.
+        section = (
+            PaymentAdminSection.ACTIVE
+            if payment.status
+            in {PaymentStatus.CREATED, PaymentStatus.PENDING, PaymentStatus.REFUND_PENDING}
+            else PaymentAdminSection.HISTORY
+        )
     if isinstance(callback.message, Message):
-        await callback.message.answer(_render(payment))
+        await edit_text_safely(
+            callback.message,
+            _render(payment),
+            reply_markup=payment_admin_details_keyboard(
+                payment,
+                section=section,
+                can_manage=staff_context.has_permission(StaffPermission.APPROVE_PREPAYMENTS),
+                can_reject=staff_context.has_permission(StaffPermission.REJECT_PREPAYMENTS),
+                can_refund=staff_context.has_permission(StaffPermission.REFUND_PAYMENTS),
+            ),
+        )
         receipt = await payment_admin_service.get_manual_receipt(
             staff_context, callback_data.payment_id
         )
@@ -145,7 +282,7 @@ async def approve_manual_payment(
     correlation_id: str,
 ) -> None:
     try:
-        payment = await payment_admin_service.approve_manual(
+        await payment_admin_service.approve_manual(
             staff_context,
             callback_data.payment_id,
             correlation_id=correlation_id,
@@ -154,7 +291,19 @@ async def approve_manual_payment(
         await callback.answer(str(exc), show_alert=True)
         return
     if isinstance(callback.message, Message):
-        await callback.message.answer(_render(payment))
+        payment = await payment_admin_service.get_panel_payment(
+            staff_context, callback_data.payment_id
+        )
+        await callback.message.answer(
+            _render(payment),
+            reply_markup=payment_admin_details_keyboard(
+                payment,
+                section=PaymentAdminSection.HISTORY,
+                can_manage=False,
+                can_reject=False,
+                can_refund=staff_context.has_permission(StaffPermission.REFUND_PAYMENTS),
+            ),
+        )
     await callback.answer("Ручная оплата подтверждена, запись активирована.")
 
 

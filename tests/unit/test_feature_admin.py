@@ -39,6 +39,11 @@ def uow_for(flags: FeatureSnapshot) -> MagicMock:
     row = SimpleNamespace(**flags.model_dump())
     unit_of_work.features.get = AsyncMock(return_value=row)
     unit_of_work.features.flush = AsyncMock()
+    unit_of_work.settings.get = AsyncMock(
+        return_value=SimpleNamespace(reviews_enabled=True, broadcasts_enabled=False)
+    )
+    unit_of_work.notifications.cancel_unsent_by_type = AsyncMock()
+    unit_of_work.session.flush = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
@@ -60,6 +65,26 @@ async def test_owner_toggle_is_persisted_and_audited() -> None:
     unit_of_work.audit.add.assert_awaited_once()
     assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "corr-feature"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("feature", "field"),
+    [
+        (FeatureName.REVIEWS, "reviews_enabled"),
+        (FeatureName.BROADCASTS, "broadcasts_enabled"),
+    ],
+)
+async def test_feature_screen_is_single_source_for_legacy_runtime_flags(
+    feature: FeatureName,
+    field: str,
+) -> None:
+    unit_of_work = uow_for(snapshot())
+    service = FeatureFlagService(lambda: unit_of_work)  # type: ignore[arg-type]
+
+    await service.set_enabled(actor(), feature, True)
+
+    assert getattr(await unit_of_work.settings.get(), field) is True
 
 
 @pytest.mark.asyncio

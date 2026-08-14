@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Any
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
@@ -137,6 +138,25 @@ class PaymentView(BaseModel):
     reviewed_at: datetime | None = None
     rejection_reason: str | None = None
     has_receipt: bool = False
+
+
+class PaymentAdminSection(StrEnum):
+    ACTIVE = "active"
+    HISTORY = "history"
+
+
+class PaymentAdminView(PaymentView):
+    """Payment plus safe appointment/client context for the staff panel."""
+
+    created_at: datetime
+    appointment_start_at: datetime
+    timezone: str
+    service_name: str
+    master_name: str
+    client_name: str
+    client_phone: str | None = None
+    client_username: str | None = None
+    client_telegram_id: int | None = None
 
 
 class ManualReceiptDraft(BaseModel):

@@ -54,8 +54,8 @@ async def report_manual_payment(
             try:
                 await bot.send_message(
                     recipient.telegram_id,
-                    f"Клиент сообщил об оплате платежа #{outcome.payment.id}. "
-                    "Откройте раздел «Оплата» для проверки.",
+                    f"Клиент сообщил о предоплате #{outcome.payment.id}. "
+                    "Откройте раздел «Предоплаты» для проверки.",
                 )
             except TelegramAPIError:
                 continue

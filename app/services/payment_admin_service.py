@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.database.models import AppointmentStatusHistory
+from app.database.models import Appointment, AppointmentStatusHistory, Payment, User
 from app.domain.appointments import ensure_appointment_transition
 from app.domain.enums import (
     AppointmentStatus,
@@ -23,7 +23,14 @@ from app.domain.payments import PaymentStateError, aware_utc, require_payment_tr
 from app.domain.reservations import ensure_reservation_transition
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.authorization import StaffContext, StaffPermission
-from app.schemas.payment import PaymentSettingsView, PaymentView, RefundCreate, RefundView
+from app.schemas.payment import (
+    PaymentAdminSection,
+    PaymentAdminView,
+    PaymentSettingsView,
+    PaymentView,
+    RefundCreate,
+    RefundView,
+)
 from app.services.authorization_service import AuthorizationService
 from app.services.payment_coordinator import (
     ManualPaymentApprovalCoordinator,
@@ -32,6 +39,11 @@ from app.services.payment_coordinator import (
 )
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
+
+_ACTIVE_PAYMENT_STATUSES = frozenset(
+    {PaymentStatus.CREATED, PaymentStatus.PENDING, PaymentStatus.REFUND_PENDING}
+)
+_HISTORY_PAYMENT_STATUSES = frozenset(PaymentStatus) - _ACTIVE_PAYMENT_STATUSES
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +247,86 @@ class PaymentAdministrationService:
                 limit=limit,
             )
             return tuple(PaymentView.model_validate(row) for row in rows)
+
+    async def list_panel(
+        self,
+        actor: StaffContext,
+        section: PaymentAdminSection,
+        *,
+        limit: int = 50,
+    ) -> tuple[PaymentAdminView, ...]:
+        live_actor = await self._authorization.authorize(
+            business_id=actor.business_id,
+            telegram_id=actor.telegram_id,
+            permission=StaffPermission.VIEW_PREPAYMENTS,
+        )
+        statuses = (
+            _ACTIVE_PAYMENT_STATUSES
+            if section is PaymentAdminSection.ACTIVE
+            else _HISTORY_PAYMENT_STATUSES
+        )
+        async with self._unit_of_work_factory() as unit_of_work:
+            if unit_of_work.business_id != live_actor.business_id:
+                raise RuntimeError("payment unit of work tenant mismatch")
+            settings = await unit_of_work.settings.get()
+            if settings is None:
+                raise EntityNotFoundError("Настройки бизнеса не найдены.")
+            rows = await unit_of_work.payments.list_recent_with_context(
+                statuses=statuses,
+                staff_member_id=(
+                    live_actor.staff_member_id if live_actor.role is StaffRole.MASTER else None
+                ),
+                limit=limit,
+            )
+            return tuple(
+                self._admin_view(payment, appointment, client, settings.timezone)
+                for payment, appointment, client in rows
+            )
+
+    async def get_panel_payment(
+        self,
+        actor: StaffContext,
+        payment_id: int,
+    ) -> PaymentAdminView:
+        live_actor = await self._authorization.authorize(
+            business_id=actor.business_id,
+            telegram_id=actor.telegram_id,
+            permission=StaffPermission.VIEW_PREPAYMENTS,
+        )
+        async with self._unit_of_work_factory() as unit_of_work:
+            if unit_of_work.business_id != live_actor.business_id:
+                raise RuntimeError("payment unit of work tenant mismatch")
+            row = await unit_of_work.payments.get_with_context(
+                payment_id,
+                staff_member_id=(
+                    live_actor.staff_member_id if live_actor.role is StaffRole.MASTER else None
+                ),
+            )
+            settings = await unit_of_work.settings.get()
+            if row is None or settings is None:
+                raise EntityNotFoundError("Предоплата не найдена.")
+            return self._admin_view(*row, settings.timezone)
+
+    @staticmethod
+    def _admin_view(
+        payment: Payment,
+        appointment: Appointment,
+        client: User,
+        timezone: str,
+    ) -> PaymentAdminView:
+        base = PaymentView.model_validate(payment)
+        return PaymentAdminView(
+            **base.model_dump(),
+            created_at=payment.created_at,
+            appointment_start_at=appointment.scheduled_start_at,
+            timezone=timezone,
+            service_name=appointment.service_name_snapshot,
+            master_name=appointment.master_name_snapshot,
+            client_name=client.first_name or "—",
+            client_phone=client.phone,
+            client_username=client.username,
+            client_telegram_id=client.telegram_id,
+        )
 
     async def approve_manual(
         self,
