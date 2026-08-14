@@ -225,6 +225,7 @@ async def test_payment_panel_keyboards_split_sections_and_avoid_private_user_url
     )
     assert all(button.url is None for row in details.inline_keyboard for button in row)
     callbacks = [button.callback_data or "" for row in details.inline_keyboard for button in row]
+    assert any("message_client" in value for value in callbacks)
     assert any("approve_prompt" in value for value in callbacks)
     assert any("reject_prompt" in value for value in callbacks)
 

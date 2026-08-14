@@ -273,6 +273,72 @@ async def prompt_manual_approval(
     await callback.answer()
 
 
+@router.callback_query(PaymentAdminCallback.filter(F.action == "message_client"))
+async def begin_client_message(
+    callback: CallbackQuery,
+    callback_data: PaymentAdminCallback,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        payment = await payment_admin_service.get_panel_payment(
+            staff_context, callback_data.payment_id
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.set_state(PaymentSettingsForm.client_message)
+    await state.update_data(client_message_payment_id=payment.id)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            f"Введите сообщение для клиента {escape(payment.client_name)}. "
+            "Бот доставит его от имени бизнеса. До 1000 символов.",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(PaymentSettingsForm.client_message)
+async def send_client_message(
+    message: Message,
+    state: FSMContext,
+    payment_admin_service: PaymentAdministrationService,
+    staff_context: StaffContext,
+    bot: Bot,
+) -> None:
+    text = (message.text or "").strip()
+    if not 1 <= len(text) <= 1000:
+        await message.answer("Введите текст сообщения длиной от 1 до 1000 символов.")
+        return
+    data = await state.get_data()
+    payment_id = data.get("client_message_payment_id")
+    if not isinstance(payment_id, int) or payment_id <= 0:
+        await state.clear()
+        await message.answer("Карточка предоплаты устарела. Откройте её заново.")
+        return
+    try:
+        payment = await payment_admin_service.get_panel_payment(staff_context, payment_id)
+        if payment.client_telegram_id is None:
+            raise PaymentStateError("У клиента нет доступного Telegram ID.")
+        await bot.send_message(
+            payment.client_telegram_id,
+            "<b>Сообщение по вашей записи</b>\n\n" + escape(text),
+        )
+    except (DomainError, PaymentStateError) as exc:
+        await state.clear()
+        await message.answer(str(exc))
+        return
+    except TelegramAPIError:
+        await state.clear()
+        await message.answer(
+            "Telegram не смог доставить сообщение. Возможно, клиент заблокировал бота."
+        )
+        return
+    await state.clear()
+    await message.answer("Сообщение клиенту отправлено.")
+
+
 @router.callback_query(PaymentAdminCallback.filter(F.action == "approve_confirm"))
 async def approve_manual_payment(
     callback: CallbackQuery,

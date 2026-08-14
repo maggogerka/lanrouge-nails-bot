@@ -98,12 +98,14 @@ def payment_admin_details_keyboard(
     can_refund: bool,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if payment.client_username:
+    if payment.client_telegram_id:
         rows.append(
             [
                 InlineKeyboardButton(
                     text="💬 Написать клиенту",
-                    url=f"https://t.me/{payment.client_username}",
+                    callback_data=PaymentAdminCallback(
+                        action="message_client", payment_id=payment.id
+                    ).pack(),
                 )
             ]
         )

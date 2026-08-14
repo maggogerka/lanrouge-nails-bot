@@ -8,6 +8,7 @@ class PaymentSettingsForm(StatesGroup):
     manual_instructions_preview = State()
     rejection_reason = State()
     reservation_ttl = State()
+    client_message = State()
 
 
 class ManualReceiptUpload(StatesGroup):
