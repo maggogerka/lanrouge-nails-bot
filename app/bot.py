@@ -64,6 +64,7 @@ from app.services import (
     SubscriptionService,
     VendorSupportService,
     WaitlistService,
+    WorkstationService,
 )
 from app.services.payment_coordinator import ManualPaymentApprovalCoordinator, RefundCoordinator
 from app.services.subscription_service import DatabaseSubscriptionStatusProvider
@@ -95,6 +96,10 @@ def create_dispatcher(
     availability_service = AvailabilityService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         runtime_admin_ids,
+    )
+    workstation_service = WorkstationService(
+        lambda: SqlAlchemyUnitOfWork(database.sessions),
+        authorization_service,
     )
     consent_service = ConsentService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
@@ -236,6 +241,7 @@ def create_dispatcher(
         authorization_service=authorization_service,
         service_catalog=service_catalog,
         availability_service=availability_service,
+        workstation_service=workstation_service,
         consent_service=consent_service,
         acquisition_service=acquisition_service,
         acquisition_admin_service=acquisition_admin_service,

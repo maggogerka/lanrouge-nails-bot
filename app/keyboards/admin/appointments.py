@@ -81,7 +81,9 @@ def admin_appointment_list_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{marker} {local:%H:%M} · {appointment.client_name} "
+                        f"{marker} {local:%H:%M} · "
+                        f"{appointment.master_name or 'мастер не указан'} · "
+                        f"{appointment.client_name} "
                         f"· {appointment.service_name}"
                     )[:64],
                     callback_data=AdminAppointmentCallback(

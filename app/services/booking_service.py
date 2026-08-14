@@ -268,6 +268,8 @@ class BookingService:
 
             candidates = []
             for window in windows:
+                if window.service_id != service.id or window.workstation_id is None:
+                    continue
                 if window.staff_member_id not in eligible_masters:
                     continue
                 master_pause = getattr(
@@ -379,6 +381,8 @@ class BookingService:
                 if window is None or window.status is not AvailabilityWindowStatus.OPEN:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 if window.business_id != unit_of_work.business_id:
+                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
+                if window.service_id != values.service_id or window.workstation_id is None:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 if (
                     values.staff_member_id is not None

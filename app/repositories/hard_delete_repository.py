@@ -24,6 +24,7 @@ from app.database.models import (
     StaffServiceAssignment,
     WaitlistEntry,
     WaitlistNotification,
+    WorkstationService,
 )
 from app.domain.enums import AvailabilityWindowStatus
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
@@ -70,7 +71,6 @@ class HardDeleteRepository(TenantScopedRepository):
         )
         rows = list(appointment_rows.all())
         appointment_ids = [int(row.id) for row in rows]
-        window_ids = [int(row.window_id) for row in rows]
 
         waitlist_condition = WaitlistEntry.service_id == service_id
         if appointment_ids:
@@ -117,26 +117,29 @@ class HardDeleteRepository(TenantScopedRepository):
 
         await self._delete_appointments(appointment_ids)
 
-        if window_ids:
-            await self._session.execute(
-                update(AvailabilityWindow)
-                .where(
-                    AvailabilityWindow.business_id == self.business_id,
-                    AvailabilityWindow.id.in_(window_ids),
-                    AvailabilityWindow.status.in_(
-                        {
-                            AvailabilityWindowStatus.RESERVED,
-                            AvailabilityWindowStatus.BOOKED,
-                        }
-                    ),
-                )
-                .values(status=AvailabilityWindowStatus.CLOSED)
+        await self._session.execute(
+            update(AvailabilityWindow)
+            .where(
+                AvailabilityWindow.business_id == self.business_id,
+                AvailabilityWindow.service_id == service_id,
             )
+            .values(
+                status=AvailabilityWindowStatus.CLOSED,
+                service_id=None,
+                workstation_id=None,
+            )
+        )
 
         await self._session.execute(
             delete(StaffServiceAssignment).where(
                 StaffServiceAssignment.business_id == self.business_id,
                 StaffServiceAssignment.service_id == service_id,
+            )
+        )
+        await self._session.execute(
+            delete(WorkstationService).where(
+                WorkstationService.business_id == self.business_id,
+                WorkstationService.service_id == service_id,
             )
         )
         await self._session.execute(

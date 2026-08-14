@@ -23,7 +23,7 @@ def public_master_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text="✨ Записаться к мастеру",
+                    text="✨ Записаться",
                     callback_data=PublicMasterCallback(
                         action="book",
                         staff_member_id=staff_member_id,

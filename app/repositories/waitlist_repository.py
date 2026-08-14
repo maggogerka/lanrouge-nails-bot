@@ -90,6 +90,7 @@ class WaitlistRepository(TenantScopedRepository):
         *,
         local_date: date,
         local_time: time,
+        service_id: int,
         window_duration_minutes: int,
         now: datetime,
         notified_before: datetime,
@@ -100,6 +101,7 @@ class WaitlistRepository(TenantScopedRepository):
             .join(User, User.id == WaitlistEntry.client_id)
             .where(
                 WaitlistEntry.business_id == self.business_id,
+                WaitlistEntry.service_id == service_id,
                 Service.business_id == self.business_id,
                 WaitlistEntry.status.in_((WaitlistStatus.ACTIVE, WaitlistStatus.MATCHED)),
                 WaitlistEntry.date_from <= local_date,

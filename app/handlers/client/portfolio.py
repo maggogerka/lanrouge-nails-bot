@@ -20,6 +20,7 @@ from app.keyboards.client.portfolio import (
     PortfolioClientCallback,
     external_portfolio_keyboard,
     portfolio_card_keyboard,
+    portfolio_masters_keyboard,
     portfolio_tags_keyboard,
 )
 from app.schemas.booking import ClientActor
@@ -57,14 +58,34 @@ async def show_portfolio(
             ),
         )
         return
-    await _show_page_message(
-        message,
-        portfolio_service,
-        actor_from_telegram(message.from_user),
-        bot,
-        page_number=1,
-        tag_id=0,
+    masters = await portfolio_service.list_published_masters()
+    if not masters:
+        await message.answer("Мастера пока не добавили опубликованные работы.")
+        return
+    await message.answer(
+        "Чьё портфолио хотите посмотреть?",
+        reply_markup=portfolio_masters_keyboard(masters),
     )
+
+
+@router.callback_query(PortfolioClientCallback.filter(F.action == "master"))
+async def select_portfolio_master(
+    callback: CallbackQuery,
+    callback_data: PortfolioClientCallback,
+    portfolio_service: PortfolioService,
+    bot: Bot,
+) -> None:
+    if isinstance(callback.message, Message):
+        await _show_page_message(
+            callback.message,
+            portfolio_service,
+            actor_from_telegram(callback.from_user),
+            bot,
+            page_number=1,
+            tag_id=0,
+            staff_member_id=callback_data.staff_member_id,
+        )
+    await callback.answer()
 
 
 @router.callback_query(PortfolioClientCallback.filter(F.action == "page"))
@@ -82,6 +103,7 @@ async def change_portfolio_page(
             bot,
             page_number=callback_data.page,
             tag_id=callback_data.tag_id,
+            staff_member_id=callback_data.staff_member_id,
         )
     await callback.answer()
 
@@ -89,13 +111,17 @@ async def change_portfolio_page(
 @router.callback_query(PortfolioClientCallback.filter(F.action == "tags"))
 async def show_tag_filters(
     callback: CallbackQuery,
+    callback_data: PortfolioClientCallback,
     portfolio_service: PortfolioService,
 ) -> None:
     tags = await portfolio_service.list_tags()
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "Выберите тег:" if tags else "Активных тегов пока нет.",
-            reply_markup=portfolio_tags_keyboard(tags),
+            reply_markup=portfolio_tags_keyboard(
+                tags,
+                staff_member_id=callback_data.staff_member_id,
+            ),
         )
     await callback.answer()
 
@@ -206,12 +232,14 @@ async def _show_page_message(
     *,
     page_number: int,
     tag_id: int,
+    staff_member_id: int,
 ) -> None:
     try:
         page = await portfolio_service.list_published(
             actor,
             PageRequest(page=page_number, page_size=1),
             tag_id=tag_id or None,
+            staff_member_id=staff_member_id,
         )
     except (DomainError, ValueError) as exc:
         await message.answer(str(exc))
@@ -267,6 +295,7 @@ async def _send_item(
 
 
 def _render_item(item: PortfolioItemView) -> str:
+    master_line = f"Мастер: {escape(item.master_name)}\n" if item.master_name else ""
     service_line = (
         f"Связанная услуга: {escape(item.linked_service_name)}\n"
         if item.linked_service_name
@@ -280,6 +309,7 @@ def _render_item(item: PortfolioItemView) -> str:
     tags_line = " ".join(f"#{escape(tag.name)}" for tag in item.tags)
     return (
         f"<b>{escape(item.title)}</b>\n"
+        f"{master_line}"
         f"{escape(item.description) if item.description else ''}\n"
         f"{service_line}{price_line}{tags_line}"
     ).strip()

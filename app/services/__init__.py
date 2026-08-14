@@ -37,6 +37,7 @@ from app.services.subscription_service import SubscriptionService
 from app.services.vendor_support_service import VendorSupportService
 from app.services.waitlist_delivery_service import WaitlistDeliveryService
 from app.services.waitlist_service import WaitlistService
+from app.services.workstation_service import WorkstationService
 
 __all__ = [
     "AcquisitionAdministrationService",
@@ -75,4 +76,5 @@ __all__ = [
     "VendorSupportService",
     "WaitlistDeliveryService",
     "WaitlistService",
+    "WorkstationService",
 ]

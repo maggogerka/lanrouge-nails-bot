@@ -10,6 +10,7 @@ from app.keyboards.admin.main import (
 )
 from app.keyboards.master.main import (
     MASTER_APPOINTMENTS_TEXT,
+    MASTER_PORTFOLIO_TEXT,
     MASTER_PREPAYMENTS_TEXT,
     MASTER_SCHEDULE_TEXT,
     MASTER_SUPPORT_TEXT,
@@ -37,6 +38,7 @@ def test_master_keyboard_contains_only_self_scoped_sections() -> None:
     assert labels == {
         MASTER_APPOINTMENTS_TEXT,
         MASTER_PREPAYMENTS_TEXT,
+        MASTER_PORTFOLIO_TEXT,
         MASTER_SCHEDULE_TEXT,
         MASTER_SUPPORT_TEXT,
     }

@@ -33,10 +33,11 @@ def window_list_keyboard(
     }
     for window in windows:
         local = window.start_at.astimezone(ZoneInfo(window.timezone))
+        master = f" · {window.master_name}" if window.master_name else ""
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=(f"{status_markers[window.status]} {local:%d.%m %H:%M}"),
+                    text=(f"{status_markers[window.status]} {local:%d.%m %H:%M}{master}")[:64],
                     callback_data=WindowCallback(action="view", window_id=window.id).pack(),
                 )
             ]

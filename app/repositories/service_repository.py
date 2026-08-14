@@ -11,6 +11,7 @@ from app.database.models import (
     Service,
     ServiceAddon,
     StaffServiceAssignment,
+    WorkstationService,
 )
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.repositories.scoped import TenantScopedRepository
@@ -71,12 +72,29 @@ class ServiceRepository(TenantScopedRepository):
         )
         return bool(await self._session.scalar(statement))
 
+    async def has_windows(self, service_id: int) -> bool:
+        from app.database.models import AvailabilityWindow
+
+        statement = select(
+            exists().where(
+                AvailabilityWindow.service_id == service_id,
+                AvailabilityWindow.business_id == self.business_id,
+            )
+        )
+        return bool(await self._session.scalar(statement))
+
     async def delete(self, service: Service) -> None:
         self._require_business(service.business_id)
         await self._session.execute(
             delete(StaffServiceAssignment).where(
                 StaffServiceAssignment.business_id == self.business_id,
                 StaffServiceAssignment.service_id == service.id,
+            )
+        )
+        await self._session.execute(
+            delete(WorkstationService).where(
+                WorkstationService.business_id == self.business_id,
+                WorkstationService.service_id == service.id,
             )
         )
         await self._session.execute(

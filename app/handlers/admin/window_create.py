@@ -26,6 +26,7 @@ from app.keyboards.admin.window_create import (
     window_confirmation_keyboard,
     window_created_keyboard,
     window_master_keyboard,
+    window_service_keyboard,
 )
 from app.keyboards.admin.windows import WindowCallback, stale_window_keyboard
 from app.keyboards.common.date_picker import DatePickerCallback, date_picker_keyboard
@@ -84,6 +85,7 @@ async def begin_window_creation_message(
     message: Message,
     state: FSMContext,
     settings_service: SettingsService,
+    availability_service: AvailabilityService,
     *,
     actor: AdminActor | None = None,
     staff_context: StaffContext | None = None,
@@ -111,8 +113,15 @@ async def begin_window_creation_message(
             )
             return
         await state.update_data(staff_member_id=masters[0].id)
-    settings = await settings_service.get(actor)
-    await _show_date_picker(message, state, settings)
+        await _show_service_picker(
+            message,
+            state,
+            availability_service,
+            actor,
+            masters[0].id,
+        )
+        return
+    await message.answer("Не удалось определить мастера. Откройте создание окна заново.")
 
 
 @router.message(F.text == ADMIN_ADD_WINDOW_TEXT)
@@ -120,6 +129,7 @@ async def begin_window_creation_from_menu(
     message: Message,
     state: FSMContext,
     settings_service: SettingsService,
+    availability_service: AvailabilityService,
     authorization_service: AuthorizationService | None = None,
     staff_context: StaffContext | None = None,
 ) -> None:
@@ -127,6 +137,7 @@ async def begin_window_creation_from_menu(
         message,
         state,
         settings_service,
+        availability_service,
         staff_context=staff_context,
         authorization_service=authorization_service,
     )
@@ -137,6 +148,7 @@ async def begin_window_creation_from_callback(
     callback: CallbackQuery,
     state: FSMContext,
     settings_service: SettingsService,
+    availability_service: AvailabilityService,
     authorization_service: AuthorizationService | None = None,
     staff_context: StaffContext | None = None,
 ) -> None:
@@ -145,6 +157,7 @@ async def begin_window_creation_from_callback(
             callback.message,
             state,
             settings_service,
+            availability_service,
             actor=actor_from_telegram(callback.from_user),
             staff_context=staff_context,
             authorization_service=authorization_service,
@@ -157,7 +170,7 @@ async def select_window_master(
     callback: CallbackQuery,
     callback_data: WindowFormCallback,
     state: FSMContext,
-    settings_service: SettingsService,
+    availability_service: AvailabilityService,
     authorization_service: AuthorizationService,
     staff_context: StaffContext,
 ) -> None:
@@ -173,12 +186,59 @@ async def select_window_master(
         await callback.answer("Мастер больше недоступен.", show_alert=True)
         return
     await state.update_data(staff_member_id=selected.id)
+    services = await availability_service.list_services_for_staff(
+        actor_from_telegram(callback.from_user),
+        selected.id,
+    )
+    if not services:
+        await callback.answer(
+            "У мастера нет услуг для онлайн-записи. Сначала назначьте услуги в его карточке.",
+            show_alert=True,
+        )
+        return
+    await state.set_state(AdminWindowCreate.service)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"Мастер: <b>{escape(selected.display_name)}</b>\n\nВыберите услугу для этого окна:",
+            reply_markup=window_service_keyboard(services),
+        )
+    await callback.answer()
+
+
+@router.callback_query(
+    AdminWindowCreate.service,
+    WindowFormCallback.filter(F.action == "service"),
+)
+async def select_window_service(
+    callback: CallbackQuery,
+    callback_data: WindowFormCallback,
+    state: FSMContext,
+    settings_service: SettingsService,
+    availability_service: AvailabilityService,
+) -> None:
+    data = await state.get_data()
+    try:
+        staff_member_id = int(str(data["staff_member_id"]))
+        service_id = int(callback_data.value)
+        services = await availability_service.list_services_for_staff(
+            actor_from_telegram(callback.from_user),
+            staff_member_id,
+        )
+        selected = next(service for service in services if service.id == service_id)
+    except (DomainError, KeyError, ValueError, StopIteration):
+        await callback.answer("Услуга больше недоступна этому мастеру.", show_alert=True)
+        return
+    await state.update_data(
+        service_id=selected.id,
+        service_name=selected.name,
+        service_duration_max_minutes=selected.duration_max_minutes,
+    )
     settings = await settings_service.get(actor_from_telegram(callback.from_user))
     await state.set_state(AdminWindowCreate.local_date)
     page = _build_date_page(settings)
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            f"Мастер: {escape(selected.display_name)}\n\n" + _date_picker_text(page),
+            f"Услуга: <b>{escape(selected.name)}</b>\n\n" + _date_picker_text(page),
             reply_markup=date_picker_keyboard(page),
         )
     await callback.answer()
@@ -488,8 +548,9 @@ async def handle_window_form_action(
         )
         return
     if action == "another_same" and current_state == AdminWindowCreate.completed.state:
-        selected_date = _state_date(await state.get_data())
-        await state.set_data({"local_date": selected_date.isoformat()})
+        data = await state.get_data()
+        selected_date = _state_date(data)
+        await state.set_data(_repeat_window_data(data, local_date=selected_date))
         await state.set_state(AdminWindowCreate.local_time)
         if isinstance(callback.message, Message):
             await callback.message.edit_text(
@@ -499,7 +560,8 @@ async def handle_window_form_action(
         await callback.answer()
         return
     if action == "another_date" and current_state == AdminWindowCreate.completed.state:
-        await state.set_data({})
+        data = await state.get_data()
+        await state.set_data(_repeat_window_data(data))
         await state.set_state(AdminWindowCreate.local_date)
         page = _build_date_page(settings)
         if isinstance(callback.message, Message):
@@ -570,7 +632,9 @@ async def _preview_selected_time(
         AvailabilityWindowCreate(
             local_date=_state_date(data),
             local_start_time=selected_time,
+            service_id=int(str(data["service_id"])),
             staff_member_id=int(str(data.get("staff_member_id", DEFAULT_STAFF_MEMBER_ID))),
+            duration_minutes=int(str(data["service_duration_max_minutes"])),
             status=AvailabilityWindowStatus.OPEN,
         ),
     )
@@ -714,6 +778,7 @@ def _window_values(data: dict[str, object]) -> AvailabilityWindowCreate:
     return AvailabilityWindowCreate(
         local_date=_state_date(data),
         local_start_time=time.fromisoformat(str(data["local_start_time"])),
+        service_id=int(str(data["service_id"])),
         staff_member_id=int(str(data.get("staff_member_id", DEFAULT_STAFF_MEMBER_ID))),
         duration_minutes=data.get("duration_minutes"),
         admin_comment=data.get("admin_comment"),
@@ -729,8 +794,50 @@ async def _show_date_picker(
     await message.answer(_date_picker_text(page), reply_markup=date_picker_keyboard(page))
 
 
+async def _show_service_picker(
+    message: Message,
+    state: FSMContext,
+    availability_service: AvailabilityService,
+    actor: AdminActor,
+    staff_member_id: int,
+) -> None:
+    services = await availability_service.list_services_for_staff(actor, staff_member_id)
+    if not services:
+        await state.clear()
+        await message.answer(
+            "У мастера нет услуг для онлайн-записи. Сначала назначьте услуги в разделе "
+            "«Мастера и сотрудники»."
+        )
+        return
+    await state.set_state(AdminWindowCreate.service)
+    await message.answer(
+        "Выберите услугу для нового окна:",
+        reply_markup=window_service_keyboard(services),
+    )
+
+
 def _state_date(data: dict[str, object]) -> date:
     return date.fromisoformat(str(data["local_date"]))
+
+
+def _repeat_window_data(
+    data: dict[str, object],
+    *,
+    local_date: date | None = None,
+) -> dict[str, object]:
+    result = {
+        key: data[key]
+        for key in (
+            "staff_member_id",
+            "service_id",
+            "service_name",
+            "service_duration_max_minutes",
+        )
+        if key in data
+    }
+    if local_date is not None:
+        result["local_date"] = local_date.isoformat()
+    return result
 
 
 def _date_picker_text(page: DatePickerPage) -> str:
@@ -758,6 +865,8 @@ def _render_confirmation(preview: AvailabilityWindowPreview) -> str:
     comment = escape(preview.admin_comment) if preview.admin_comment else "—"
     return (
         "<b>Новое открытое окно</b>\n\n"
+        f"Услуга: <b>{escape(preview.service_name)}</b>\n"
+        f"Рабочее место: {escape(preview.workstation_name)}\n"
         f"Дата: {start.day} {_MONTHS[start.month - 1]} {start.year}, "
         f"{_WEEKDAYS[start.weekday()]}\n"
         f"Время: {start:%H:%M}\n"

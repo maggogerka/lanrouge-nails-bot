@@ -26,6 +26,12 @@ class AvailabilityWindow(TimestampMixin, Base):
     staff_member_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("staff_members.id", ondelete="RESTRICT"), nullable=False
     )
+    service_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("services.id", ondelete="RESTRICT")
+    )
+    workstation_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workstations.id", ondelete="RESTRICT")
+    )
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[AvailabilityWindowStatus] = mapped_column(
@@ -50,6 +56,13 @@ class AvailabilityWindow(TimestampMixin, Base):
             using="gist",
             name="ex_availability_windows_active_overlap",
         ),
+        ExcludeConstraint(
+            (workstation_id, "="),
+            (func.tstzrange(start_at, end_at, "[)"), "&&"),
+            where=text("workstation_id IS NOT NULL AND status IN ('open', 'reserved', 'booked')"),
+            using="gist",
+            name="ex_availability_windows_workstation_active_overlap",
+        ),
         Index(
             "ix_availability_windows_business_staff_status_start",
             "business_id",
@@ -58,4 +71,10 @@ class AvailabilityWindow(TimestampMixin, Base):
             "start_at",
         ),
         Index("ix_availability_windows_business_start", "business_id", "start_at"),
+        Index(
+            "ix_availability_windows_business_service_start",
+            "business_id",
+            "service_id",
+            "start_at",
+        ),
     )

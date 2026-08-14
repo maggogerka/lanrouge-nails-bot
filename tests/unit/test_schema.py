@@ -88,6 +88,8 @@ EXPECTED_TABLES = {
     "users",
     "waitlist_entries",
     "waitlist_notifications",
+    "workstation_services",
+    "workstations",
 }
 
 
@@ -171,9 +173,10 @@ def test_active_windows_have_database_overlap_protection() -> None:
         if isinstance(constraint, ExcludeConstraint)
     ]
 
-    assert [constraint.name for constraint in exclusion_constraints] == [
-        "ex_availability_windows_active_overlap"
-    ]
+    assert {constraint.name for constraint in exclusion_constraints} == {
+        "ex_availability_windows_active_overlap",
+        "ex_availability_windows_workstation_active_overlap",
+    }
 
 
 def test_occupied_window_has_partial_unique_index() -> None:

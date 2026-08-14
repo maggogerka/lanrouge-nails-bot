@@ -58,6 +58,7 @@ def appointment_view(
     return AppointmentView(
         id=appointment.id,
         service_name=appointment.service_name_snapshot,
+        master_name=appointment.master_name_snapshot,
         price=appointment.price_snapshot,
         duration_min_minutes=appointment.duration_min_snapshot,
         duration_max_minutes=appointment.duration_max_snapshot,

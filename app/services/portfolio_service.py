@@ -6,8 +6,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from app.database.models import PortfolioItem, PortfolioItemTag, PortfolioMedia, PortfolioTag
-from app.domain.enums import PortfolioDisplayMode, PortfolioStatus
-from app.domain.errors import EntityNotFoundError, PortfolioStateError
+from app.domain.enums import PortfolioDisplayMode, PortfolioStatus, StaffRole
+from app.domain.errors import AuthorizationError, EntityNotFoundError, PortfolioStateError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.booking import ClientActor
 from app.schemas.pagination import PageRequest
@@ -16,11 +16,13 @@ from app.schemas.portfolio import (
     PortfolioDisplayConfig,
     PortfolioDisplayUpdate,
     PortfolioItemView,
+    PortfolioMasterView,
     PortfolioMediaView,
     PortfolioPage,
     PortfolioTagView,
 )
 from app.schemas.service import AdminActor
+from app.security import get_staff_context
 from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -38,7 +40,7 @@ class PortfolioService:
         self._admin_telegram_ids = admin_telegram_ids
 
     async def get_max_media(self, actor: AdminActor) -> int:
-        ensure_admin(actor, self._admin_telegram_ids)
+        self._management_scope(actor)
         async with self._unit_of_work_factory() as unit_of_work:
             settings = await unit_of_work.settings.get()
             if settings is None:
@@ -107,7 +109,7 @@ class PortfolioService:
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> PortfolioItemView:
-        ensure_admin(actor, self._admin_telegram_ids)
+        self._management_scope(actor, target_staff_member_id=values.staff_member_id)
         current_time = self._aware_now(now)
         async with self._unit_of_work_factory() as unit_of_work:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
@@ -118,14 +120,28 @@ class PortfolioService:
                 raise PortfolioStateError(
                     f"Для одной работы разрешено не более {settings.portfolio_max_media} фото."
                 )
+            master = await unit_of_work.staff.get_by_id(
+                unit_of_work.business_id,
+                values.staff_member_id,
+                for_update=True,
+            )
+            if master is None or not master.is_active or not master.is_bookable:
+                raise EntityNotFoundError("Выбранный мастер больше недоступен.")
             if values.linked_service_id is not None:
                 service = await unit_of_work.services.get(values.linked_service_id)
                 if service is None:
                     raise EntityNotFoundError("Выбранная услуга больше не существует.")
+                assignment = await unit_of_work.service_assignments.get_assignment(
+                    unit_of_work.business_id,
+                    values.staff_member_id,
+                    values.linked_service_id,
+                )
+                if assignment is None or not assignment.is_active:
+                    raise PortfolioStateError("Связанная услуга не назначена выбранному мастеру.")
             item = await unit_of_work.portfolio.add(
                 PortfolioItem(
                     business_id=unit_of_work.business_id,
-                    staff_member_id=1,
+                    staff_member_id=values.staff_member_id,
                     title=values.title,
                     description=values.description,
                     linked_service_id=values.linked_service_id,
@@ -167,6 +183,7 @@ class PortfolioService:
                     "media_count": len(values.media),
                     "tag_count": len(tag_ids),
                     "linked_service_id": values.linked_service_id,
+                    "staff_member_id": values.staff_member_id,
                 },
                 correlation_id=correlation_id,
             )
@@ -180,13 +197,14 @@ class PortfolioService:
         *,
         status: PortfolioStatus | None = None,
     ) -> PortfolioPage:
-        ensure_admin(actor, self._admin_telegram_ids)
+        staff_member_id = self._management_scope(actor)
         async with self._unit_of_work_factory() as unit_of_work:
             items, total = await unit_of_work.portfolio.list_page(
                 status=status,
                 tag_id=None,
                 limit=page.page_size,
                 offset=page.offset,
+                staff_member_id=staff_member_id,
             )
             return PortfolioPage(
                 items=[await self._view(unit_of_work, item) for item in items],
@@ -196,11 +214,11 @@ class PortfolioService:
             )
 
     async def get_admin(self, actor: AdminActor, item_id: int) -> PortfolioItemView:
-        ensure_admin(actor, self._admin_telegram_ids)
         async with self._unit_of_work_factory() as unit_of_work:
             item = await unit_of_work.portfolio.get(item_id)
             if item is None:
                 raise EntityNotFoundError("Работа больше не существует.")
+            self._management_scope(actor, target_staff_member_id=item.staff_member_id)
             return await self._view(unit_of_work, item)
 
     async def list_published(
@@ -209,6 +227,7 @@ class PortfolioService:
         page: PageRequest,
         *,
         tag_id: int | None = None,
+        staff_member_id: int | None = None,
     ) -> PortfolioPage:
         del actor
         async with self._unit_of_work_factory() as unit_of_work:
@@ -222,6 +241,7 @@ class PortfolioService:
                 tag_id=tag_id,
                 limit=page.page_size,
                 offset=page.offset,
+                staff_member_id=staff_member_id,
             )
             return PortfolioPage(
                 items=[await self._view(unit_of_work, item) for item in items],
@@ -229,6 +249,18 @@ class PortfolioService:
                 page=page.page,
                 page_size=page.page_size,
             )
+
+    async def list_published_masters(self) -> list[PortfolioMasterView]:
+        async with self._unit_of_work_factory() as unit_of_work:
+            rows = await unit_of_work.portfolio.list_published_masters()
+            return [
+                PortfolioMasterView(
+                    staff_member_id=row.id,
+                    display_name=row.display_name,
+                    telegram_photo_file_id=row.telegram_photo_file_id,
+                )
+                for row in rows
+            ]
 
     async def get_published(self, actor: ClientActor, item_id: int) -> PortfolioItemView:
         del actor
@@ -252,12 +284,12 @@ class PortfolioService:
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> PortfolioItemView:
-        ensure_admin(actor, self._admin_telegram_ids)
         async with self._unit_of_work_factory() as unit_of_work:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             item = await unit_of_work.portfolio.get(item_id, for_update=True)
             if item is None:
                 raise EntityNotFoundError("Работа больше не существует.")
+            self._management_scope(actor, target_staff_member_id=item.staff_member_id)
             media = await unit_of_work.portfolio.list_media(item.id)
             if status is PortfolioStatus.PUBLISHED and not media:
                 raise PortfolioStateError("Нельзя опубликовать работу без фотографии.")
@@ -326,6 +358,10 @@ class PortfolioService:
             if item.linked_service_id is not None
             else None
         )
+        master = await unit_of_work.staff.get_by_id(
+            unit_of_work.business_id,
+            item.staff_member_id,
+        )
         return PortfolioItemView(
             id=item.id,
             title=item.title,
@@ -338,6 +374,8 @@ class PortfolioService:
             published_at=item.published_at,
             media=[PortfolioMediaView.model_validate(value) for value in media],
             tags=[PortfolioTagView.model_validate(value) for value in tags],
+            staff_member_id=item.staff_member_id,
+            master_name=master.display_name if master is not None else None,
         )
 
     @staticmethod
@@ -367,3 +405,24 @@ class PortfolioService:
                 getattr(settings, "external_portfolio_button_text", None) or "Открыть портфолио"
             ),
         )
+
+    def _management_scope(
+        self,
+        actor: AdminActor,
+        *,
+        target_staff_member_id: int | None = None,
+    ) -> int | None:
+        context = get_staff_context()
+        if (
+            context is not None
+            and context.telegram_id == actor.telegram_id
+            and context.role is StaffRole.MASTER
+        ):
+            if (
+                target_staff_member_id is not None
+                and target_staff_member_id != context.staff_member_id
+            ):
+                raise AuthorizationError("Мастер может изменять только своё портфолио.")
+            return context.staff_member_id
+        ensure_admin(actor, self._admin_telegram_ids)
+        return target_staff_member_id

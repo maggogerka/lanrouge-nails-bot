@@ -69,6 +69,10 @@ def entry(status: WaitlistStatus = WaitlistStatus.ACTIVE) -> WaitlistEntry:
 def window(status: AvailabilityWindowStatus = AvailabilityWindowStatus.OPEN):
     return AvailabilityWindow(
         id=7,
+        business_id=1,
+        staff_member_id=1,
+        service_id=3,
+        workstation_id=1,
         start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
         end_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
         status=status,

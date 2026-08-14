@@ -105,10 +105,32 @@ async def test_add_window_callback_authorizes_clicking_admin_not_bot_message_aut
             availability_date_picker_days=31,
         )
     )
+    authorization_service = SimpleNamespace(
+        list_staff=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    id=4,
+                    display_name="Мастер",
+                    is_active=True,
+                    is_bookable=True,
+                ),
+            )
+        )
+    )
+    availability_service = SimpleNamespace(
+        list_services_for_staff=AsyncMock(return_value=[SimpleNamespace(id=8, name="Маникюр")])
+    )
 
-    await begin_window_creation_from_callback(callback, state, settings_service)
+    await begin_window_creation_from_callback(
+        callback,
+        state,
+        settings_service,
+        availability_service,
+        authorization_service=authorization_service,
+        staff_context=SimpleNamespace(),
+    )
 
-    actor = settings_service.get.await_args.args[0]
+    actor = availability_service.list_services_for_staff.await_args.args[0]
     assert actor.telegram_id == 101
     callback.message.answer.assert_awaited_once()
     callback.answer.assert_awaited_once()

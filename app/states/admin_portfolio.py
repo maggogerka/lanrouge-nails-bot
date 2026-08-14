@@ -4,6 +4,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AdminPortfolioCreate(StatesGroup):
+    master = State()
     media = State()
     title = State()
     description = State()

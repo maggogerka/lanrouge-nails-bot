@@ -37,7 +37,7 @@ def test_master_card_has_direct_booking_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_direct_master_booking_preserves_preferred_master() -> None:
+async def test_master_card_opens_generic_booking_flow() -> None:
     callback = MagicMock(spec=CallbackQuery)
     callback.from_user = User(id=12, is_bot=False, first_name="Тест")
     callback.message = MagicMock(spec=Message)
@@ -47,9 +47,7 @@ async def test_direct_master_booking_preserves_preferred_master() -> None:
     state.clear = AsyncMock()
     state.set_state = AsyncMock()
     state.update_data = AsyncMock()
-    booking = SimpleNamespace(
-        list_active_services_for_master=AsyncMock(return_value=[service_view()])
-    )
+    booking = SimpleNamespace(list_active_services=AsyncMock(return_value=[service_view()]))
 
     await book_with_master(
         callback,
@@ -58,7 +56,7 @@ async def test_direct_master_booking_preserves_preferred_master() -> None:
         booking,
     )
 
-    state.update_data.assert_awaited_with(preferred_staff_member_id=9)
+    state.update_data.assert_awaited_with(preferred_staff_member_id=None)
     callback.message.answer.assert_awaited()
 
 

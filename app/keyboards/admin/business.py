@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import BusinessType
 from app.schemas.public_links import PublicLink
+from app.schemas.workstation import WorkstationView
 
 
 class BusinessProfileCallback(CallbackData, prefix="biz"):
@@ -24,6 +25,12 @@ class BusinessTimezoneCallback(CallbackData, prefix="biztz"):
     timezone: str
 
 
+class WorkstationCallback(CallbackData, prefix="wst"):
+    action: str
+    workstation_id: int = 0
+    service_id: int = 0
+
+
 def business_profile_keyboard(
     *,
     business_type: BusinessType | None = None,
@@ -37,6 +44,7 @@ def business_profile_keyboard(
         (("✍️ Короткое описание", "short"), ("🖼 Логотип", "logo")),
         (("☎️ Телефон салона", "phone"), ("📍 Адрес и карта", "address_menu")),
         (("🕐 Часовой пояс", "timezone_menu"),),
+        (("🪑 Рабочие места", "workstations"),),
         (("🔒 Политика", "privacy"), ("📄 Оферта", "terms")),
         (("🛟 Источники поддержки", "support_sources"),),
         (("💼 CRM-подписка", "subscription"),),
@@ -94,6 +102,69 @@ def business_support_keyboard(links: tuple[PublicLink, ...]) -> InlineKeyboardMa
                 )
             ]
         )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def workstation_list_keyboard(
+    workstations: tuple[WorkstationView, ...],
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if item.is_active else '📦'} {item.name[:40]}",
+                callback_data=WorkstationCallback(
+                    action="view",
+                    workstation_id=item.id,
+                ).pack(),
+            )
+        ]
+        for item in workstations
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Создать рабочее место",
+                callback_data=WorkstationCallback(action="create").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def workstation_details_keyboard(item: WorkstationView) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=("✅ " if service.enabled else "⬜ ") + service.service_name[:38],
+                callback_data=WorkstationCallback(
+                    action="service_off" if service.enabled else "service_on",
+                    workstation_id=item.id,
+                    service_id=service.service_id,
+                ).pack(),
+            )
+        ]
+        for service in item.services
+        if service.service_active
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="📦 Архивировать" if item.is_active else "♻️ Восстановить",
+                    callback_data=WorkstationCallback(
+                        action="archive" if item.is_active else "restore",
+                        workstation_id=item.id,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К рабочим местам",
+                    callback_data=WorkstationCallback(action="list").pack(),
+                )
+            ],
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -5,7 +5,13 @@ from __future__ import annotations
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import PortfolioItem, PortfolioItemTag, PortfolioMedia, PortfolioTag
+from app.database.models import (
+    PortfolioItem,
+    PortfolioItemTag,
+    PortfolioMedia,
+    PortfolioTag,
+    StaffMember,
+)
 from app.domain.enums import PortfolioStatus
 from app.repositories.scoped import TenantScopedRepository
 
@@ -38,10 +44,13 @@ class PortfolioRepository(TenantScopedRepository):
         tag_id: int | None,
         limit: int,
         offset: int,
+        staff_member_id: int | None = None,
     ) -> tuple[list[PortfolioItem], int]:
         filters = [PortfolioItem.business_id == self.business_id]
         if status is not None:
             filters.append(PortfolioItem.status == status)
+        if staff_member_id is not None:
+            filters.append(PortfolioItem.staff_member_id == staff_member_id)
         items = select(PortfolioItem)
         count = select(func.count(PortfolioItem.id))
         if tag_id is not None:
@@ -67,6 +76,23 @@ class PortfolioRepository(TenantScopedRepository):
         count = count.where(*filters)
         rows = list((await self._session.scalars(items)).all())
         return rows, int((await self._session.scalar(count)) or 0)
+
+    async def list_published_masters(self) -> list[StaffMember]:
+        rows = await self._session.scalars(
+            select(StaffMember)
+            .join(PortfolioItem, PortfolioItem.staff_member_id == StaffMember.id)
+            .where(
+                StaffMember.business_id == self.business_id,
+                StaffMember.is_active.is_(True),
+                StaffMember.is_bookable.is_(True),
+                StaffMember.archived_at.is_(None),
+                PortfolioItem.business_id == self.business_id,
+                PortfolioItem.status == PortfolioStatus.PUBLISHED,
+            )
+            .distinct()
+            .order_by(StaffMember.sort_order, StaffMember.display_name, StaffMember.id)
+        )
+        return list(rows.all())
 
     async def list_media(self, item_id: int) -> list[PortfolioMedia]:
         result = await self._session.scalars(

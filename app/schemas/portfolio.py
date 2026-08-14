@@ -26,6 +26,7 @@ class PortfolioCreate(BaseModel):
     sort_order: Annotated[int, Field(ge=-100000, le=100000)] = 0
     media: Annotated[list[PortfolioMediaInput], Field(min_length=1, max_length=10)]
     tag_names: Annotated[list[str], Field(max_length=10)] = Field(default_factory=list)
+    staff_member_id: Annotated[int, Field(gt=0)] = 1
 
     @field_validator("title", "description", mode="before")
     @classmethod
@@ -78,6 +79,14 @@ class PortfolioItemView(BaseModel):
     published_at: datetime | None
     media: list[PortfolioMediaView]
     tags: list[PortfolioTagView]
+    staff_member_id: int = 1
+    master_name: str | None = None
+
+
+class PortfolioMasterView(BaseModel):
+    staff_member_id: int
+    display_name: str
+    telegram_photo_file_id: str | None = None
 
 
 class PortfolioPage(BaseModel):

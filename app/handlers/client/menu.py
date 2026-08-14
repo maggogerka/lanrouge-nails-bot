@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.domain.errors import DomainError
-from app.handlers.client.booking_browse import show_service_cards
+from app.handlers.client.booking_browse import show_service_cards, start_booking
 from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.main import (
     CLIENT_BOOK_TEXT,
@@ -116,24 +116,13 @@ async def book_with_master(
     state: FSMContext,
     booking_service: BookingService,
 ) -> None:
-    try:
-        services = await booking_service.list_active_services_for_master(
-            actor_from_telegram(callback.from_user),
-            callback_data.staff_member_id,
-        )
-    except DomainError as exc:
-        await callback.answer(str(exc), show_alert=True)
-        return
-    if not services:
-        await callback.answer("У мастера пока нет доступных услуг.", show_alert=True)
-        return
-    await state.clear()
+    del callback_data
     if isinstance(callback.message, Message):
-        await show_service_cards(
+        await start_booking(
             callback.message,
             state,
-            services,
-            preferred_staff_member_id=callback_data.staff_member_id,
+            booking_service,
+            actor=actor_from_telegram(callback.from_user),
         )
     await callback.answer()
 

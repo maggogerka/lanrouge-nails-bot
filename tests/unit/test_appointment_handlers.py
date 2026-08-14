@@ -20,6 +20,7 @@ def admin_appointment() -> AdminAppointmentView:
     return AdminAppointmentView(
         id=11,
         service_name="Консультация <premium>",
+        master_name="Руслана",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
         duration_max_minutes=180,
@@ -108,6 +109,16 @@ def test_admin_upcoming_keyboard_is_grouped_as_calendar_agenda() -> None:
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
 
     assert labels[0] == "📅 Чт, 23 июля · 1 запись"
-    assert "10:00 · Анна & Ко · Консультация <premium>" in labels[1]
+    assert "10:00 · Руслана · Анна & Ко · Консультация <premium>" in labels[1]
     assert labels[2] == "📅 Пт, 24 июля · 1 запись"
     assert labels[-1] == "🔄 Обновить календарь"
+
+
+def test_pending_manual_payment_appointment_details_render_without_crash() -> None:
+    appointment = admin_appointment().model_copy(
+        update={"status": AppointmentStatus.PENDING_MANUAL_CONFIRMATION}
+    )
+
+    rendered = render_admin_appointment(appointment)
+
+    assert "ожидает проверки предоплаты" in rendered

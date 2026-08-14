@@ -341,9 +341,11 @@ class ServiceCatalog:
         async with self._unit_of_work_factory() as unit_of_work:
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             service = await self._get_required(unit_of_work, service_id, for_update=True)
-            if await unit_of_work.services.has_appointments(
-                service_id
-            ) or await unit_of_work.services.has_addons(service_id):
+            if (
+                await unit_of_work.services.has_appointments(service_id)
+                or await unit_of_work.services.has_addons(service_id)
+                or await unit_of_work.services.has_windows(service_id)
+            ):
                 raise ServiceInUseError(
                     "Услуга уже использовалась или содержит дополнения "
                     "и может быть только архивирована."

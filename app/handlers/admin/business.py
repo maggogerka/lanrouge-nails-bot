@@ -23,10 +23,13 @@ from app.keyboards.admin.business import (
     BusinessProfileCallback,
     BusinessSupportCallback,
     BusinessTimezoneCallback,
+    WorkstationCallback,
     business_address_keyboard,
     business_profile_keyboard,
     business_support_keyboard,
     business_timezone_keyboard,
+    workstation_details_keyboard,
+    workstation_list_keyboard,
 )
 from app.keyboards.admin.main import ADMIN_BUSINESS_SETTINGS_TEXT
 from app.keyboards.admin.services import cancel_keyboard
@@ -34,9 +37,11 @@ from app.keyboards.common.optional_input import is_optional_skip, optional_input
 from app.schemas.authorization import StaffContext
 from app.schemas.business import BusinessAdminView, BusinessProfileUpdate
 from app.schemas.public_links import PublicLink, public_links_from_mapping
+from app.schemas.workstation import WorkstationCreate, WorkstationView
 from app.services.business_service import BusinessAdministrationService
 from app.services.subscription_service import SubscriptionService
-from app.states.business import BusinessProfileStates
+from app.services.workstation_service import WorkstationService
+from app.states.business import BusinessProfileStates, BusinessWorkstationStates
 
 router = Router(name="admin.business")
 
@@ -161,6 +166,141 @@ async def show_timezone_settings(callback: CallbackQuery) -> None:
             reply_markup=business_timezone_keyboard(),
         )
     await callback.answer()
+
+
+@router.callback_query(BusinessProfileCallback.filter(F.action == "workstations"))
+@router.callback_query(WorkstationCallback.filter(F.action == "list"))
+async def show_workstations(
+    callback: CallbackQuery,
+    workstation_service: WorkstationService,
+    staff_context: StaffContext,
+) -> None:
+    items = await workstation_service.list_all(staff_context)
+    text = (
+        "<b>Рабочие места</b>\n\n"
+        "Рабочее место — физический стол или кабинет. Одновременно может быть "
+        "занято только одно окно на каждом месте. Отметьте услуги, которые можно "
+        "выполнять на нём."
+    )
+    if not items:
+        text += "\n\nРабочих мест пока нет. Создайте первое, затем назначьте ему услуги."
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            text,
+            reply_markup=workstation_list_keyboard(items),
+        )
+    await callback.answer()
+
+
+@router.callback_query(WorkstationCallback.filter(F.action == "create"))
+async def begin_workstation_creation(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.set_state(BusinessWorkstationStates.waiting_name)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Введите понятное название рабочего места, например «Маникюрный стол 1» "
+            "или «Кабинет педикюра»:"
+        )
+    await callback.answer()
+
+
+@router.message(BusinessWorkstationStates.waiting_name)
+async def save_workstation(
+    message: Message,
+    state: FSMContext,
+    workstation_service: WorkstationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        item = await workstation_service.create(
+            staff_context,
+            WorkstationCreate(name=message.text or ""),
+            correlation_id=correlation_id,
+        )
+    except (DomainError, ValidationError, ValueError) as exc:
+        await message.answer(f"Не удалось создать рабочее место: {escape(str(exc))}")
+        return
+    await state.clear()
+    await message.answer(
+        _render_workstation(item),
+        reply_markup=workstation_details_keyboard(item),
+    )
+
+
+@router.callback_query(WorkstationCallback.filter(F.action == "view"))
+async def show_workstation(
+    callback: CallbackQuery,
+    callback_data: WorkstationCallback,
+    workstation_service: WorkstationService,
+    staff_context: StaffContext,
+) -> None:
+    try:
+        item = await workstation_service.get(staff_context, callback_data.workstation_id)
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render_workstation(item),
+            reply_markup=workstation_details_keyboard(item),
+        )
+    await callback.answer()
+
+
+@router.callback_query(WorkstationCallback.filter(F.action.in_({"service_on", "service_off"})))
+async def toggle_workstation_service(
+    callback: CallbackQuery,
+    callback_data: WorkstationCallback,
+    workstation_service: WorkstationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        item = await workstation_service.set_service_enabled(
+            staff_context,
+            callback_data.workstation_id,
+            callback_data.service_id,
+            enabled=callback_data.action == "service_on",
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render_workstation(item),
+            reply_markup=workstation_details_keyboard(item),
+        )
+    await callback.answer("Настройка услуг сохранена.")
+
+
+@router.callback_query(WorkstationCallback.filter(F.action.in_({"archive", "restore"})))
+async def toggle_workstation_status(
+    callback: CallbackQuery,
+    callback_data: WorkstationCallback,
+    workstation_service: WorkstationService,
+    staff_context: StaffContext,
+    correlation_id: str,
+) -> None:
+    try:
+        item = await workstation_service.set_active(
+            staff_context,
+            callback_data.workstation_id,
+            active=callback_data.action == "restore",
+            correlation_id=correlation_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            _render_workstation(item),
+            reply_markup=workstation_details_keyboard(item),
+        )
+    await callback.answer("Статус рабочего места обновлён.")
 
 
 @router.callback_query(BusinessTimezoneCallback.filter())
@@ -487,3 +627,15 @@ async def _subscription_summary(
         rows.append("⚠️ Срок подписки заканчивается или требуется оплата.")
     rows.append("Оплата услуг клиентами учитывается отдельно от CRM-подписки.")
     return "\n".join(rows)
+
+
+def _render_workstation(item: WorkstationView) -> str:
+    enabled = [service.service_name for service in item.services if service.enabled]
+    services = ", ".join(escape(name) for name in enabled) or "не выбраны"
+    status = "активно" if item.is_active else "в архиве"
+    return (
+        f"<b>🪑 {escape(item.name)}</b>\n"
+        f"Статус: {status}\n"
+        f"Доступные услуги: {services}\n\n"
+        "Нажмите на услугу ниже, чтобы разрешить или запретить её на этом месте."
+    )

@@ -16,6 +16,7 @@ class AppointmentView(BaseModel):
 
     id: int
     service_name: str
+    master_name: str | None = None
     price: Decimal
     duration_min_minutes: int
     duration_max_minutes: int

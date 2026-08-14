@@ -49,6 +49,10 @@ class WindowInUseError(DomainError):
     """A window with booking history cannot be physically removed."""
 
 
+class WorkstationStateError(DomainError):
+    """A workstation mutation conflicts with services or active windows."""
+
+
 class PrivacyConsentRequiredError(DomainError):
     """A client action requires explicit privacy consent."""
 

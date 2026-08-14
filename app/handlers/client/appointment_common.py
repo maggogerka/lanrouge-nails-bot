@@ -7,6 +7,8 @@ from app.handlers.client.booking_common import format_duration_range
 from app.schemas.appointment import AppointmentView
 
 _STATUS_LABELS = {
+    "pending_payment": "ожидает оплаты",
+    "pending_manual_confirmation": "ожидает проверки предоплаты",
     "confirmed": "подтверждена",
     "client_confirmed": "визит подтверждён",
     "completed": "завершена",
@@ -14,6 +16,10 @@ _STATUS_LABELS = {
     "cancelled_by_admin": "отменена мастером",
     "no_show": "неявка",
     "rescheduled": "перенесена",
+    "payment_expired": "резерв оплаты истёк",
+    "refund_pending": "возврат обрабатывается",
+    "partially_refunded": "частичный возврат",
+    "refunded": "деньги возвращены",
 }
 
 
@@ -23,13 +29,16 @@ def render_appointment(appointment: AppointmentView) -> str:
         appointment.duration_min_minutes,
         appointment.duration_max_minutes,
     )
+    master_line = f"Мастер: {escape(appointment.master_name)}\n" if appointment.master_name else ""
+    status = _STATUS_LABELS.get(appointment.status.value, appointment.status.value)
     return (
         f"<b>{escape(appointment.service_name)}</b>\n"
+        f"{master_line}"
         f"Дата: {local:%d.%m.%Y}\n"
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{duration}\n"
         f"Стоимость: {appointment.price:.2f} ₽\n"
         f"Адрес: {escape(appointment.address)}\n"
-        f"Статус: {_STATUS_LABELS[appointment.status.value]}"
+        f"Статус: {status}"
     )

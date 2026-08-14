@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -16,22 +17,25 @@ from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.booking import (
     BookingAddonCallback,
     BookingCallback,
+    BookingDateCallback,
     addons_keyboard,
+    booking_date_calendar_keyboard,
     booking_navigation_keyboard,
-    dates_keyboard,
     masters_keyboard,
     service_card_keyboard,
     services_keyboard,
     windows_keyboard,
 )
 from app.keyboards.client.main import CLIENT_BOOK_TEXT
-from app.schemas.booking import BookingMasterOptions, ClientActor
+from app.schemas.booking import BookingAvailability, BookingMasterOptions, ClientActor
 from app.schemas.service import ServiceView
 from app.services.booking_service import BookingService
+from app.services.date_picker_service import DatePickerPage, DatePickerService
 from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
 
 router = Router(name="client.booking_browse")
+date_picker_service = DatePickerService()
 
 
 def should_show_master_selection(
@@ -387,7 +391,11 @@ async def _show_dates(
     back_action = _selection_back_action(data)
     await state.set_state(BookingFlow.date)
     if isinstance(callback.message, Message):
-        keyboard = dates_keyboard(dates, back_action=back_action)
+        keyboard = booking_date_calendar_keyboard(
+            _booking_calendar_page(availability),
+            set(dates),
+            back_action=back_action,
+        )
         if callback.message.photo:
             await callback.message.answer("Выберите дату:", reply_markup=keyboard)
         else:
@@ -468,6 +476,103 @@ async def select_date(
     await callback.answer()
 
 
+@router.callback_query(BookingFlow.date, BookingDateCallback.filter())
+async def handle_booking_calendar(
+    callback: CallbackQuery,
+    callback_data: BookingDateCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    if callback_data.action in {"off", "noop"}:
+        await callback.answer(
+            "На эту дату свободного времени нет. Выберите отмеченную дату.",
+            show_alert=callback_data.action == "off",
+        )
+        return
+    data = await state.get_data()
+    try:
+        service_id = int(str(data["service_id"]))
+        staff_member_id = (
+            int(str(data["staff_member_id"])) if data.get("staff_member_id") is not None else None
+        )
+        availability = await booking_service.list_availability(
+            actor_from_telegram(callback.from_user),
+            service_id,
+            addon_ids=_addon_ids(data),
+            staff_member_id=staff_member_id,
+        )
+        selected = date.fromisoformat(callback_data.value)
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    available = set(available_dates(availability.windows))
+    if callback_data.action == "page":
+        try:
+            page = _booking_calendar_page(availability, requested_start=selected)
+        except (DomainError, ValueError) as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "Выберите отмеченную дату:",
+                reply_markup=booking_date_calendar_keyboard(
+                    page,
+                    available,
+                    back_action=_selection_back_action(data),
+                ),
+            )
+        await callback.answer()
+        return
+    if callback_data.action != "pick" or selected not in available:
+        await callback.answer("На эту дату свободного времени уже нет.", show_alert=True)
+        return
+    await _show_windows_for_date(
+        callback,
+        state,
+        booking_service,
+        data,
+        selected,
+    )
+
+
+async def _show_windows_for_date(
+    callback: CallbackQuery,
+    state: FSMContext,
+    booking_service: BookingService,
+    data: dict[str, object],
+    local_date: date,
+) -> None:
+    try:
+        service_id = int(str(data["service_id"]))
+        staff_member_id = (
+            int(str(data["staff_member_id"])) if data.get("staff_member_id") is not None else None
+        )
+        availability = await booking_service.list_availability(
+            actor_from_telegram(callback.from_user),
+            service_id,
+            addon_ids=_addon_ids(data),
+            staff_member_id=staff_member_id,
+            local_date=local_date,
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if not availability.windows:
+        await callback.answer(
+            "На эту дату больше нет свободного времени.",
+            show_alert=True,
+        )
+        return
+    await state.update_data(local_date=local_date.isoformat())
+    await state.set_state(BookingFlow.window)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"Выберите время на {local_date:%d.%m.%Y}:",
+            reply_markup=windows_keyboard(availability.windows, local_date),
+        )
+    await callback.answer()
+
+
 @router.callback_query(BookingCallback.filter(F.action == "back_dates"))
 async def return_to_dates(
     callback: CallbackQuery,
@@ -494,8 +599,9 @@ async def return_to_dates(
         back_action = _selection_back_action(data)
         await callback.message.edit_text(
             "Выберите дату:",
-            reply_markup=dates_keyboard(
-                available_dates(availability.windows),
+            reply_markup=booking_date_calendar_keyboard(
+                _booking_calendar_page(availability),
+                set(available_dates(availability.windows)),
                 back_action=back_action,
             ),
         )
@@ -556,3 +662,23 @@ def _selection_back_action(data: dict[str, object]) -> str:
     if data.get("addons_shown"):
         return "back_addons"
     return "back_services"
+
+
+def _booking_calendar_page(
+    availability: BookingAvailability,
+    *,
+    requested_start: date | None = None,
+) -> DatePickerPage:
+    dates = available_dates(availability.windows)
+    if not dates:
+        raise ValueError("Свободных дат больше нет.")
+    today = datetime.now(UTC).astimezone(ZoneInfo(availability.timezone)).date()
+    latest = max(dates)
+    return date_picker_service.build_page(
+        today=today,
+        requested_start=requested_start or today,
+        booking_horizon_days=max(0, (latest - today).days),
+        allow_saturday=True,
+        allow_sunday=True,
+        page_size=21,
+    )

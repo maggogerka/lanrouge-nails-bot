@@ -49,6 +49,7 @@ from app.database.models.service_assignment import ServiceCategory, StaffService
 from app.database.models.settings import BusinessSettings
 from app.database.models.user import User
 from app.database.models.waitlist import WaitlistEntry, WaitlistNotification
+from app.database.models.workstation import Workstation, WorkstationService
 
 __all__ = [
     "AcquisitionSource",
@@ -100,4 +101,6 @@ __all__ = [
     "UserClientTag",
     "WaitlistEntry",
     "WaitlistNotification",
+    "Workstation",
+    "WorkstationService",
 ]

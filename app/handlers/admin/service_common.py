@@ -31,6 +31,7 @@ def render_service(service: ServiceView) -> str:
     description = escape(service.description) if service.description else "—"
     return (
         f"<b>{escape(service.name)}</b>\n"
+        f"ID услуги: <code>{service.id}</code>\n"
         f"Статус: {status}\n"
         f"Описание: {description}\n"
         f"Стоимость: {service.price:.2f} ₽\n"

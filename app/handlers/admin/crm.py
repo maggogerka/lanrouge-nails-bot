@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -27,8 +28,10 @@ from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.crm import ClientCardView, ClientNoteCreate, ClientTagCreate
 from app.schemas.pagination import PageRequest
 from app.schemas.service import AdminActor
+from app.services.availability_service import AvailabilityService
 from app.services.booking_service import BookingService
 from app.services.crm_service import CrmService
+from app.services.service_catalog import ServiceCatalog
 from app.states.admin_crm import AdminCrmFlow
 
 router = Router(name="admin.crm")
@@ -432,19 +435,70 @@ async def begin_manual_booking(
     callback: CallbackQuery,
     callback_data: CrmCallback,
     state: FSMContext,
+    service_catalog: ServiceCatalog,
 ) -> None:
+    services = await service_catalog.list_services(actor_from_telegram(callback.from_user))
     await state.set_state(AdminCrmFlow.manual_booking)
     await state.update_data(client_id=callback_data.client_id)
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "Введите внутренние ID услуги и открытого окна через пробел, например: 3 17. "
-            "Они доступны в административных разделах услуг и окон."
-        )
+        if not services:
+            await state.clear()
+            await callback.message.answer("Активных услуг пока нет. Сначала создайте услугу.")
+        else:
+            lines = ["<b>Шаг 1 из 2 — выберите услугу</b>"]
+            lines.extend(
+                f"ID <code>{service.id}</code> — {escape(service.name)}" for service in services
+            )
+            lines.append("\nОтправьте только ID услуги:")
+            await callback.message.answer("\n".join(lines))
     await callback.answer()
 
 
 @router.message(AdminCrmFlow.manual_booking)
 async def create_manual_booking(
+    message: Message,
+    state: FSMContext,
+    service_catalog: ServiceCatalog,
+    availability_service: AvailabilityService,
+) -> None:
+    if message.from_user is None:
+        return
+    try:
+        service_id = int((message.text or "").strip())
+        service = await service_catalog.get_service(
+            actor_from_telegram(message.from_user),
+            service_id,
+        )
+        schedule = await availability_service.list_windows(
+            actor_from_telegram(message.from_user),
+            include_archived=False,
+        )
+    except (DomainError, KeyError, TypeError, ValueError) as exc:
+        await message.answer(str(exc) or "Введите один числовой ID услуги.")
+        return
+    windows = [
+        window
+        for window in schedule.windows
+        if window.status.value == "open" and window.service_id == service.id
+    ]
+    if not windows:
+        await message.answer(
+            "Для этой услуги нет свободных открытых окон. Создайте окно и повторите."
+        )
+        return
+    await state.update_data(service_id=service.id)
+    await state.set_state(AdminCrmFlow.manual_booking_window)
+    lines = [f"<b>Шаг 2 из 2 — окно для «{escape(service.name)}»</b>"]
+    for window in windows:
+        local = window.start_at.astimezone(ZoneInfo(window.timezone))
+        master = escape(window.master_name or "мастер не указан")
+        lines.append(f"ID <code>{window.id}</code> — {local:%d.%m.%Y %H:%M}, {master}")
+    lines.append("\nОтправьте только ID окна:")
+    await message.answer("\n".join(lines))
+
+
+@router.message(AdminCrmFlow.manual_booking_window)
+async def create_manual_booking_window(
     message: Message,
     state: FSMContext,
     booking_service: BookingService,
@@ -453,10 +507,10 @@ async def create_manual_booking(
 ) -> None:
     if message.from_user is None:
         return
-    parts = (message.text or "").split()
     data = await state.get_data()
     try:
-        service_id, window_id = (int(value) for value in parts)
+        window_id = int((message.text or "").strip())
+        service_id = int(data["service_id"])
         receipt = await booking_service.book_for_client(
             actor_from_telegram(message.from_user),
             client_id=int(data["client_id"]),
@@ -468,11 +522,7 @@ async def create_manual_booking(
         if not staff_context.has_permission(StaffPermission.OVERRIDE_BOOKING_LIMIT):
             await message.answer(str(exc))
             return
-        await state.update_data(
-            service_id=service_id,
-            window_id=window_id,
-            client_id=int(data["client_id"]),
-        )
+        await state.update_data(window_id=window_id)
         await state.set_state(AdminCrmFlow.manual_booking_override)
         await message.answer(
             f"У клиента уже {exc.current} будущих записей при лимите {exc.maximum}.",
@@ -480,7 +530,7 @@ async def create_manual_booking(
         )
         return
     except (DomainError, KeyError, TypeError, ValueError) as exc:
-        await message.answer(str(exc) or "Введите ровно два числовых ID через пробел.")
+        await message.answer(str(exc) or "Введите один числовой ID открытого окна.")
         return
     await state.clear()
     await message.answer(f"Запись №{receipt.appointment_id} создана.")

@@ -4,6 +4,11 @@
 
 ### Added
 
+- business workstations with per-service assignment and collision-safe capacity allocation for
+  simultaneous multi-master windows;
+- a calendar-first client booking flow and master-labelled time slots;
+- per-master portfolio management with owner-wide access and master self-service isolation;
+- a guarded local database reset script with an automatic PostgreSQL backup by default;
 - separate business address/map editing, friendly timezone selection and up to five support links;
 - up to five per-master social/contact links with the selected master's direct contact in bookings;
 - immutable address, map and master-contact snapshots for new appointments;
@@ -18,6 +23,13 @@
 
 ### Changed
 
+- appointment and availability cards now expose stable IDs and master/resource context, while CRM
+  manual booking asks for a service and matching window in two validated steps;
+- service duration and workstation availability are validated before a window can be opened, and
+  booking revalidates the selected service/resource before confirmation;
+- portfolio visibility no longer removes its administration entry, so a hidden portfolio can be
+  enabled again;
+- appointment status rendering handles payment and refund states without a generic callback error;
 - solo/salon presentation is derived from active bookable specialists; manual mode and duplicate
   specialist controls were removed from the business settings UI;
 - unfinished Loyalty and Mini App switches and the obsolete master-info admin screen are hidden;

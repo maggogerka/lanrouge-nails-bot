@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import AvailabilityWindow, BusinessSettings
+from app.database.models import AvailabilityWindow, BusinessSettings, Service, Workstation
 from app.domain.enums import AvailabilityWindowStatus
 from app.domain.errors import AuthorizationError, WindowInUseError
 from app.schemas.availability import AvailabilityWindowCreate
@@ -50,6 +51,33 @@ def build_uow() -> MagicMock:
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=5))
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    catalog_service = Service(
+        id=1,
+        business_id=1,
+        name="Маникюр",
+        price=Decimal("1000"),
+        duration_min_minutes=60,
+        duration_max_minutes=120,
+        prepayment_amount=Decimal("0"),
+        is_active=True,
+        online_booking_enabled=True,
+    )
+    workstation = Workstation(id=1, business_id=1, name="Стол 1", is_active=True)
+    unit_of_work.services.get = AsyncMock(return_value=catalog_service)
+    unit_of_work.staff.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(
+            id=1,
+            display_name="Мастер",
+            is_active=True,
+            is_bookable=True,
+        )
+    )
+    unit_of_work.service_assignments.get_assignment = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, online_booking_enabled=True)
+    )
+    unit_of_work.workstations.lock_service_date = AsyncMock()
+    unit_of_work.workstations.allocate_available = AsyncMock(return_value=workstation)
+    unit_of_work.workstations.get = AsyncMock(return_value=workstation)
     unit_of_work.windows.list_upcoming = AsyncMock(return_value=[])
     unit_of_work.windows.list_active_between = AsyncMock(return_value=[])
     unit_of_work.windows.lock_local_date = AsyncMock()
@@ -70,6 +98,7 @@ def create_values(
     return AvailabilityWindowCreate(
         local_date=date(2026, 7, 23),
         local_start_time=time(10),
+        service_id=1,
         admin_comment="do not expose this text",
         status=status,
     )
@@ -80,6 +109,8 @@ def persisted_window(status: AvailabilityWindowStatus) -> AvailabilityWindow:
         id=7,
         business_id=1,
         staff_member_id=1,
+        service_id=1,
+        workstation_id=1,
         start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
         end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
         status=status,

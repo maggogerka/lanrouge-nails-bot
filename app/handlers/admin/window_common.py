@@ -52,9 +52,16 @@ def render_window(window: AvailabilityWindowView) -> str:
     start = window.start_at.astimezone(zone)
     end = window.end_at.astimezone(zone)
     comment = escape(window.admin_comment) if window.admin_comment else "—"
+    master = escape(window.master_name or "не указан")
+    service = escape(window.service_name or "старое окно без услуги")
+    workstation = escape(window.workstation_name or "не назначено")
     return (
-        f"<b>{start:%d.%m.%Y}</b>\n"
+        f"<b>Окно ID: <code>{window.id}</code></b>\n"
+        f"Дата: {start:%d.%m.%Y}\n"
         f"Время: {start:%H:%M}–{end:%H:%M}\n"
+        f"Мастер: {master}\n"
+        f"Услуга: {service}\n"
+        f"Рабочее место: {workstation}\n"
         f"Статус: {_STATUS_LABELS[window.status]}\n"
         f"Внутренний комментарий: {comment}"
     )

@@ -6,6 +6,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import PortfolioDisplayMode, PortfolioStatus
+from app.schemas.authorization import StaffMemberView
 from app.schemas.portfolio import PortfolioDisplayConfig, PortfolioItemView
 from app.schemas.service import ServiceView
 
@@ -26,6 +27,26 @@ def portfolio_admin_menu() -> InlineKeyboardMarkup:
             [_button("🗄 Архив", "archived")],
             [_button("⚙️ Режим показа", "display")],
         ]
+    )
+
+
+def portfolio_master_keyboard(
+    masters: tuple[StaffMemberView, ...],
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💅 {master.display_name[:40]}",
+                    callback_data=PortfolioAdminCallback(
+                        action="target_master",
+                        object_id=master.id,
+                    ).pack(),
+                )
+            ]
+            for master in masters
+        ]
+        + [[_button("❌ Отменить", "cancel")]]
     )
 
 

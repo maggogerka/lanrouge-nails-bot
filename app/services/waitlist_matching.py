@@ -20,13 +20,18 @@ async def enqueue_waitlist_matches(
 ) -> int:
     """Queue every eligible request once; booking itself remains first-come-first-served."""
 
-    if window.status is not AvailabilityWindowStatus.OPEN or window.start_at <= now:
+    if (
+        window.status is not AvailabilityWindowStatus.OPEN
+        or window.start_at <= now
+        or window.service_id is None
+    ):
         return 0
     local = window.start_at.astimezone(ZoneInfo(settings.timezone))
     duration = int((window.end_at - window.start_at).total_seconds() // 60)
     entries = await unit_of_work.waitlist.list_matching(
         local_date=local.date(),
         local_time=local.time().replace(tzinfo=None),
+        service_id=window.service_id,
         window_duration_minutes=duration,
         now=now,
         notified_before=now - timedelta(minutes=settings.waitlist_notification_cooldown_minutes),

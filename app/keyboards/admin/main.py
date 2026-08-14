@@ -58,7 +58,7 @@ def admin_main_keyboard(
     if management:
         rows.append(management)
     optional = []
-    if visible.portfolio_visible and _can(context, StaffPermission.MANAGE_SERVICES):
+    if visible.portfolio_management_visible and _can(context, StaffPermission.MANAGE_SERVICES):
         optional.append(KeyboardButton(text=ADMIN_PORTFOLIO_TEXT))
     if visible.waitlist_visible and _can(context, StaffPermission.MANAGE_ALL_APPOINTMENTS):
         optional.append(KeyboardButton(text=ADMIN_WAITLIST_TEXT))

@@ -22,11 +22,13 @@ from app.keyboards.admin.portfolio import (
     portfolio_details_keyboard,
     portfolio_display_keyboard,
     portfolio_list_keyboard,
+    portfolio_master_keyboard,
     portfolio_preview_keyboard,
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.client.portfolio import external_portfolio_keyboard
 from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
+from app.schemas.authorization import StaffContext
 from app.schemas.pagination import PageRequest
 from app.schemas.portfolio import (
     PortfolioCreate,
@@ -35,8 +37,9 @@ from app.schemas.portfolio import (
     PortfolioItemView,
     PortfolioMediaInput,
 )
+from app.services.authorization_service import AuthorizationService
+from app.services.availability_service import AvailabilityService
 from app.services.portfolio_service import PortfolioService
-from app.services.service_catalog import ServiceCatalog
 from app.states.admin_portfolio import AdminPortfolioCreate, AdminPortfolioSettings
 
 router = Router(name="admin.portfolio")
@@ -284,12 +287,62 @@ async def show_portfolio_tags(
 
 
 @router.callback_query(PortfolioAdminCallback.filter(F.action == "add"))
-async def begin_portfolio_creation(callback: CallbackQuery, state: FSMContext) -> None:
+async def begin_portfolio_creation(
+    callback: CallbackQuery,
+    state: FSMContext,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
     await state.clear()
-    await state.set_state(AdminPortfolioCreate.media)
-    await state.update_data(media=[])
+    members = await authorization_service.list_staff(staff_context)
+    masters = tuple(member for member in members if member.is_active and member.is_bookable)
+    if not masters:
+        await callback.answer(
+            "Сначала включите «Принимать записи» хотя бы у одного мастера.",
+            show_alert=True,
+        )
+        return
+    await state.set_state(AdminPortfolioCreate.master)
     if isinstance(callback.message, Message):
         await callback.message.answer(
+            "Для какого мастера добавить работу?",
+            reply_markup=portfolio_master_keyboard(masters),
+        )
+    await callback.answer()
+
+
+@router.callback_query(
+    AdminPortfolioCreate.master,
+    PortfolioAdminCallback.filter(F.action == "target_master"),
+)
+async def select_portfolio_master(
+    callback: CallbackQuery,
+    callback_data: PortfolioAdminCallback,
+    state: FSMContext,
+    authorization_service: AuthorizationService,
+    staff_context: StaffContext,
+) -> None:
+    members = await authorization_service.list_staff(staff_context)
+    selected = next(
+        (
+            member
+            for member in members
+            if member.id == callback_data.object_id and member.is_active and member.is_bookable
+        ),
+        None,
+    )
+    if selected is None:
+        await callback.answer("Мастер больше недоступен.", show_alert=True)
+        return
+    await state.set_state(AdminPortfolioCreate.media)
+    await state.update_data(
+        staff_member_id=selected.id,
+        master_name=selected.display_name,
+        media=[],
+    )
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            f"Портфолио мастера <b>{escape(selected.display_name)}</b>.\n"
             "Отправьте фотографии работы по одной. Когда закончите, нажмите «Фото загружены».",
             reply_markup=media_collection_keyboard(),
         )
@@ -358,7 +411,7 @@ async def capture_portfolio_title(message: Message, state: FSMContext) -> None:
 async def capture_portfolio_description(
     message: Message,
     state: FSMContext,
-    service_catalog: ServiceCatalog,
+    availability_service: AvailabilityService,
 ) -> None:
     if message.from_user is None:
         return
@@ -368,7 +421,11 @@ async def capture_portfolio_description(
         await message.answer("Описание не должно превышать 2000 символов.")
         return
     await state.update_data(description=description)
-    services = await service_catalog.list_services(actor_from_telegram(message.from_user))
+    data = await state.get_data()
+    services = await availability_service.list_services_for_staff(
+        actor_from_telegram(message.from_user),
+        int(data["staff_member_id"]),
+    )
     await state.set_state(AdminPortfolioCreate.linked_service)
     await message.answer(
         "Свяжите дизайн с услугой или выберите «Без связи»:",
@@ -478,6 +535,7 @@ async def save_portfolio_work(
             sort_order=data["sort_order"],
             media=[PortfolioMediaInput.model_validate(value) for value in data["media"]],
             tag_names=data.get("tag_names", []),
+            staff_member_id=data["staff_member_id"],
         )
         item = await portfolio_service.create(
             actor_from_telegram(callback.from_user),
@@ -519,6 +577,7 @@ def _render_item(item: PortfolioItemView) -> str:
     design_line = f"Доплата: {item.design_price:.2f} ₽\n" if item.design_price is not None else ""
     return (
         f"<b>{escape(item.title)}</b>\n"
+        f"Мастер: {escape(item.master_name or 'не указан')}\n"
         f"Статус: {status}\n"
         f"Описание: {escape(item.description) if item.description else '—'}\n"
         f"Услуга: {escape(item.linked_service_name) if item.linked_service_name else '—'}\n"

@@ -13,3 +13,7 @@ class BusinessProfileStates(StatesGroup):
 class BusinessWelcomeStates(StatesGroup):
     waiting_text = State()
     waiting_photo = State()
+
+
+class BusinessWorkstationStates(StatesGroup):
+    waiting_name = State()

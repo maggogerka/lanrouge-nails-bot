@@ -37,6 +37,7 @@ class MenuService:
                 masters_visible=has_bookable_master,
                 portfolio_visible=bool(flags.portfolio)
                 and mode is not PortfolioDisplayMode.DISABLED,
+                portfolio_management_visible=bool(flags.portfolio),
                 reviews_visible=bool(flags.reviews) and bool(settings.reviews_enabled),
                 notifications_visible=bool(flags.reminders or flags.repeat_booking),
                 repeat_booking_visible=bool(flags.repeat_booking),

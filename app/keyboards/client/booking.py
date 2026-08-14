@@ -16,6 +16,7 @@ from aiogram.types import (
 from app.keyboards.client.payments import manual_payment_report_button
 from app.schemas.booking import BookableMasterView, BookingWindowView
 from app.schemas.service import ServiceAddonView, ServiceView
+from app.services.date_picker_service import DatePickerPage
 
 BOOKING_BACK_TEXT = "⬅️ Назад"
 BOOKING_CANCEL_TEXT = "❌ Отменить оформление"
@@ -39,6 +40,11 @@ class BookingAddonCallback(CallbackData, prefix="badd"):
 
     action: str
     addon_id: int = 0
+
+
+class BookingDateCallback(CallbackData, prefix="bcal"):
+    action: str
+    value: str
 
 
 def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
@@ -165,6 +171,40 @@ def dates_keyboard(
         ]
         for local_date in dates
     ]
+    rows.extend(_inline_navigation(back_action))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def booking_date_calendar_keyboard(
+    page: DatePickerPage,
+    available_dates: set[date],
+    *,
+    back_action: str,
+) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=("✅ " if day.local_date in available_dates else "· ") + day.label,
+            callback_data=BookingDateCallback(
+                action="pick" if day.local_date in available_dates else "off",
+                value=day.local_date.isoformat(),
+            ).pack(),
+        )
+        for day in page.days
+    ]
+    rows = [buttons[index : index + 3] for index in range(0, len(buttons), 3)]
+    rows.append(
+        [
+            _booking_calendar_nav("◀️", page.previous_start),
+            InlineKeyboardButton(
+                text="📍 Сегодня",
+                callback_data=BookingDateCallback(
+                    action="pick" if page.today in available_dates else "off",
+                    value=page.today.isoformat(),
+                ).pack(),
+            ),
+            _booking_calendar_nav("▶️", page.next_start),
+        ]
+    )
     rows.extend(_inline_navigation(back_action))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -299,3 +339,13 @@ def _inline_navigation(action: str, object_id: int = 0) -> list[list[InlineKeybo
             )
         ],
     ]
+
+
+def _booking_calendar_nav(text: str, value: date | None) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=BookingDateCallback(
+            action="page" if value is not None else "noop",
+            value=value.isoformat() if value is not None else "-",
+        ).pack(),
+    )

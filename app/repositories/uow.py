@@ -32,6 +32,7 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.waitlist_repository import WaitlistRepository
 from app.repositories.window_repository import WindowRepository
+from app.repositories.workstation_repository import WorkstationRepository
 
 
 class SqlAlchemyUnitOfWork:
@@ -53,6 +54,7 @@ class SqlAlchemyUnitOfWork:
         self.service_assignments = ServiceAssignmentRepository(self.session)
         self.schedules = ScheduleRepository(self.session)
         self.windows = WindowRepository(self.session, business_id)
+        self.workstations = WorkstationRepository(self.session, business_id)
         self.settings = SettingsRepository(self.session, business_id)
         self.staff = StaffRepository(self.session)
         self.subscriptions = SubscriptionRepository(self.session, business_id)

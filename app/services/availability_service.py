@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
-from app.database.models import AvailabilityWindow, BusinessSettings
+from app.database.models import AvailabilityWindow, BusinessSettings, Service, Workstation
 from app.domain.availability import (
     ExistingInterval,
     WindowRules,
@@ -16,7 +16,12 @@ from app.domain.availability import (
     validate_capacity_and_spacing,
 )
 from app.domain.enums import AvailabilityWindowStatus
-from app.domain.errors import EntityNotFoundError, WindowInUseError, WindowStateError
+from app.domain.errors import (
+    EntityNotFoundError,
+    WindowInUseError,
+    WindowStateError,
+    WindowValidationError,
+)
 from app.domain.tenancy import DEFAULT_STAFF_MEMBER_ID
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.availability import (
@@ -25,7 +30,7 @@ from app.schemas.availability import (
     AvailabilityWindowPreview,
     AvailabilityWindowView,
 )
-from app.schemas.service import AdminActor
+from app.schemas.service import AdminActor, ServiceView
 from app.services.appointment_common import ensure_admin, ensure_owner_admin
 from app.services.waitlist_matching import enqueue_waitlist_matches
 
@@ -60,8 +65,25 @@ class AvailabilityService:
             )
             return AvailabilityWindowList(
                 timezone=settings.timezone,
-                windows=[self._view(window, settings.timezone) for window in windows],
+                windows=[
+                    await self._view(unit_of_work, window, settings.timezone) for window in windows
+                ],
             )
+
+    async def list_services_for_staff(
+        self,
+        actor: AdminActor,
+        staff_member_id: int,
+    ) -> list[ServiceView]:
+        """Return services a selected master can actually accept."""
+
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            rows = await unit_of_work.service_assignments.list_bookable_services_for_staff(
+                unit_of_work.business_id,
+                staff_member_id,
+            )
+            return [ServiceView.model_validate(service) for _, service in rows]
 
     async def get_window(
         self,
@@ -72,7 +94,7 @@ class AvailabilityService:
         async with self._unit_of_work_factory() as unit_of_work:
             settings = await self._settings(unit_of_work)
             window = await self._window(unit_of_work, window_id)
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def create_window(
         self,
@@ -104,19 +126,26 @@ class AvailabilityService:
             )
 
             if values.status is AvailabilityWindowStatus.OPEN:
-                await self._lock_and_validate_active_interval(
+                service, workstation = await self._lock_and_validate_active_interval(
                     unit_of_work,
                     settings,
                     local_date=values.local_date,
                     start_at=start_at,
                     end_at=end_at,
                     staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
+                    service_id=values.service_id,
                 )
+            else:
+                service = await self._active_service(unit_of_work, values.service_id)
+                self._validate_service_duration(service, start_at=start_at, end_at=end_at)
+                workstation = None
 
             window = await unit_of_work.windows.add(
                 AvailabilityWindow(
                     business_id=unit_of_work.business_id,
                     staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
+                    service_id=service.id,
+                    workstation_id=workstation.id if workstation is not None else None,
                     start_at=start_at,
                     end_at=end_at,
                     status=values.status,
@@ -141,7 +170,7 @@ class AvailabilityService:
                     correlation_id=correlation_id,
                 )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def preview_window(
         self,
@@ -171,17 +200,26 @@ class AvailabilityService:
                 rules=self._rules(settings),
             )
             if values.status is AvailabilityWindowStatus.OPEN:
-                await self._lock_and_validate_active_interval(
+                service, workstation = await self._lock_and_validate_active_interval(
                     unit_of_work,
                     settings,
                     local_date=values.local_date,
                     start_at=start_at,
                     end_at=end_at,
                     staff_member_id=values.staff_member_id or DEFAULT_STAFF_MEMBER_ID,
+                    service_id=values.service_id,
                 )
+            else:
+                service = await self._active_service(unit_of_work, values.service_id)
+                self._validate_service_duration(service, start_at=start_at, end_at=end_at)
+                workstation = await self._first_compatible_workstation(unit_of_work, service.id)
             return AvailabilityWindowPreview(
                 start_at=start_at,
                 end_at=end_at,
+                service_id=service.id,
+                service_name=service.name,
+                workstation_id=workstation.id,
+                workstation_name=workstation.name,
                 duration_minutes=duration,
                 admin_comment=values.admin_comment,
                 timezone=settings.timezone,
@@ -211,7 +249,7 @@ class AvailabilityService:
                 correlation_id=correlation_id,
             )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def reopen_window(
         self,
@@ -237,13 +275,19 @@ class AvailabilityService:
                 now=current_time,
                 rules=self._rules(settings),
             )
-            await self._lock_and_validate_active_interval(
+            if window.service_id is None or window.workstation_id is None:
+                raise WindowStateError(
+                    "Это старое окно не связано с услугой и рабочим местом. Создайте новое."
+                )
+            await self._validate_specific_active_interval(
                 unit_of_work,
                 settings,
                 local_date=local_date,
                 start_at=window.start_at,
                 end_at=window.end_at,
                 staff_member_id=window.staff_member_id,
+                service_id=window.service_id,
+                workstation_id=window.workstation_id,
                 exclude_id=window.id,
             )
             window.status = AvailabilityWindowStatus.OPEN
@@ -263,7 +307,7 @@ class AvailabilityService:
                 correlation_id=correlation_id,
             )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def delete_unused_window(
         self,
@@ -334,8 +378,33 @@ class AvailabilityService:
         start_at: datetime,
         end_at: datetime,
         staff_member_id: int = DEFAULT_STAFF_MEMBER_ID,
+        service_id: int,
         exclude_id: int | None = None,
-    ) -> None:
+    ) -> tuple[Service, Workstation]:
+        service = await self._active_service(unit_of_work, service_id)
+        self._validate_service_duration(service, start_at=start_at, end_at=end_at)
+        assignment = await unit_of_work.service_assignments.get_assignment(
+            unit_of_work.business_id,
+            staff_member_id,
+            service_id,
+            for_update=True,
+        )
+        master = await unit_of_work.staff.get_by_id(
+            unit_of_work.business_id,
+            staff_member_id,
+            for_update=True,
+        )
+        if (
+            master is None
+            or not master.is_active
+            or not master.is_bookable
+            or assignment is None
+            or not assignment.is_active
+            or not assignment.online_booking_enabled
+        ):
+            raise WindowValidationError(
+                "Мастер не принимает выбранную услугу. Сначала назначьте её в карточке мастера."
+            )
         await unit_of_work.windows.lock_local_date(local_date, staff_member_id=staff_member_id)
         day_start, day_end = utc_day_bounds(local_date, settings.timezone)
         existing = await unit_of_work.windows.list_active_between(
@@ -352,6 +421,92 @@ class AvailabilityService:
             max_windows_per_day=settings.max_appointments_per_day,
             minimum_gap_minutes=settings.minimum_gap_minutes,
         )
+        await unit_of_work.workstations.lock_service_date(service_id, local_date)
+        workstation = await unit_of_work.workstations.allocate_available(
+            service_id,
+            start_at=start_at,
+            end_at=end_at,
+            exclude_window_id=exclude_id,
+        )
+        if workstation is None:
+            raise WindowValidationError(
+                "На это время нет свободного рабочего места для выбранной услуги. "
+                "Выберите другое время или добавьте ещё одно рабочее место."
+            )
+        return service, workstation
+
+    async def _validate_specific_active_interval(
+        self,
+        unit_of_work: SqlAlchemyUnitOfWork,
+        settings: BusinessSettings,
+        *,
+        local_date: date,
+        start_at: datetime,
+        end_at: datetime,
+        staff_member_id: int,
+        service_id: int,
+        workstation_id: int,
+        exclude_id: int,
+    ) -> None:
+        service, allocated = await self._lock_and_validate_active_interval(
+            unit_of_work,
+            settings,
+            local_date=local_date,
+            start_at=start_at,
+            end_at=end_at,
+            staff_member_id=staff_member_id,
+            service_id=service_id,
+            exclude_id=exclude_id,
+        )
+        del service
+        if allocated.id == workstation_id:
+            return
+        if not await unit_of_work.workstations.is_available(
+            workstation_id,
+            service_id,
+            start_at=start_at,
+            end_at=end_at,
+            exclude_window_id=exclude_id,
+        ):
+            raise WindowValidationError(
+                "Рабочее место этого окна уже занято или больше не поддерживает услугу."
+            )
+
+    @staticmethod
+    async def _active_service(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        service_id: int,
+    ) -> Service:
+        service = await unit_of_work.services.get(service_id, for_update=True)
+        if service is None or not service.is_active or service.archived_at is not None:
+            raise WindowValidationError("Выбранная услуга больше недоступна.")
+        return service
+
+    @staticmethod
+    def _validate_service_duration(
+        service: Service,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> None:
+        available_minutes = int((end_at - start_at).total_seconds() // 60)
+        if service.duration_max_minutes > available_minutes:
+            raise WindowValidationError(
+                f"Услуга длится до {service.duration_max_minutes} мин., а окно — "
+                f"только {available_minutes} мин. Увеличьте длительность окна."
+            )
+
+    @staticmethod
+    async def _first_compatible_workstation(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        service_id: int,
+    ) -> Workstation:
+        workstations = await unit_of_work.workstations.list_active_for_service(service_id)
+        if not workstations:
+            raise WindowValidationError(
+                "Для этой услуги не настроено рабочее место. Откройте настройки бизнеса."
+            )
+        return workstations[0]
 
     async def _audit_status(
         self,
@@ -406,9 +561,33 @@ class AvailabilityService:
         )
 
     @staticmethod
-    def _view(window: AvailabilityWindow, timezone: str) -> AvailabilityWindowView:
+    async def _view(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        window: AvailabilityWindow,
+        timezone: str,
+    ) -> AvailabilityWindowView:
+        master = await unit_of_work.staff.get_by_id(
+            unit_of_work.business_id,
+            window.staff_member_id,
+        )
+        service = (
+            await unit_of_work.services.get(window.service_id)
+            if window.service_id is not None
+            else None
+        )
+        workstation = (
+            await unit_of_work.workstations.get(window.workstation_id)
+            if window.workstation_id is not None
+            else None
+        )
         return AvailabilityWindowView(
             id=window.id,
+            staff_member_id=window.staff_member_id,
+            master_name=master.display_name if master is not None else None,
+            service_id=window.service_id,
+            service_name=service.name if service is not None else None,
+            workstation_id=window.workstation_id,
+            workstation_name=workstation.name if workstation is not None else None,
             start_at=window.start_at,
             end_at=window.end_at,
             status=window.status,
@@ -422,6 +601,8 @@ class AvailabilityService:
             "start_at": window.start_at.isoformat(),
             "end_at": window.end_at.isoformat(),
             "status": window.status.value,
+            "service_id": window.service_id,
+            "workstation_id": window.workstation_id,
             "has_admin_comment": window.admin_comment is not None,
         }
 
