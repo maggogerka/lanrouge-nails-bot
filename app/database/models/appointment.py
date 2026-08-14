@@ -56,6 +56,20 @@ class Appointment(TimestampMixin, Base):
             using="gist",
             name="ex_appointments_staff_active_overlap",
         ),
+        ExcludeConstraint(
+            (column("workstation_id"), "="),
+            (
+                func.tstzrange(column("scheduled_start_at"), column("scheduled_end_at"), "[)"),
+                "&&",
+            ),
+            where=text(
+                "workstation_id IS NOT NULL AND "
+                "status IN ('pending_payment', 'pending_manual_confirmation', "
+                "'confirmed', 'client_confirmed')"
+            ),
+            using="gist",
+            name="ex_appointments_workstation_active_overlap",
+        ),
         Index("ix_appointments_business_client_status", "business_id", "client_id", "status"),
         Index(
             "ix_appointments_business_staff_start",
@@ -64,6 +78,12 @@ class Appointment(TimestampMixin, Base):
             "scheduled_start_at",
         ),
         Index("ix_appointments_window", "window_id"),
+        Index(
+            "ix_appointments_business_workstation_start",
+            "business_id",
+            "workstation_id",
+            "scheduled_start_at",
+        ),
         Index("ix_appointments_design_reference", "design_reference_id"),
         Index(
             "uq_appointments_occupied_window",
@@ -97,6 +117,10 @@ class Appointment(TimestampMixin, Base):
         BigInteger,
         ForeignKey("services.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    workstation_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("workstations.id", ondelete="RESTRICT"),
     )
     design_reference_id: Mapped[int | None] = mapped_column(
         BigInteger,

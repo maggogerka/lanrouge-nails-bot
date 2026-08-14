@@ -73,7 +73,7 @@ async def test_service_mapping_cannot_be_removed_while_future_window_uses_it() -
     authorization = SimpleNamespace(authorize=AsyncMock(return_value=owner()))
     service = WorkstationService(lambda: unit_of_work, authorization)  # type: ignore[arg-type]
 
-    with pytest.raises(WorkstationStateError, match="будущие окна"):
+    with pytest.raises(WorkstationStateError, match="будущие записи"):
         await service.set_service_enabled(
             owner(),
             7,

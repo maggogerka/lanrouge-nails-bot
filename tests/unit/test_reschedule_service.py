@@ -14,9 +14,11 @@ from app.database.models import (
     AppointmentAddonSnapshot,
     AvailabilityWindow,
     BusinessSettings,
+    Service,
     StaffMember,
     StaffServiceAssignment,
     User,
+    Workstation,
 )
 from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus, StaffRole
 from app.domain.errors import BookingConflictError, CancellationDeadlineError
@@ -36,6 +38,7 @@ def settings() -> BusinessSettings:
         master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
+        reschedule_deadline_hours=24,
         max_appointments_per_day=2,
         default_window_duration_minutes=210,
         minimum_gap_minutes=60,
@@ -149,6 +152,33 @@ def build_uow(
             is_active=True,
         )
     )
+    assigned_service = Service(
+        id=3,
+        business_id=1,
+        name="Консультация",
+        price=Decimal("2500.00"),
+        duration_min_minutes=120,
+        duration_max_minutes=180,
+        is_active=True,
+    )
+    unit_of_work.service_assignments.list_bookable_assignments = AsyncMock(
+        return_value=[
+            (
+                unit_of_work.service_assignments.get_assignment.return_value,
+                assigned_service,
+                unit_of_work.staff.get_by_id.return_value,
+            )
+        ]
+    )
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(
+        return_value=[
+            (unit_of_work.service_assignments.get_assignment.return_value, assigned_service)
+        ]
+    )
+    workstation = Workstation(id=4, business_id=1, name="Стол 1", is_active=True)
+    unit_of_work.workstations.lock_allocation_date = AsyncMock()
+    unit_of_work.workstations.allocate_available = AsyncMock(return_value=workstation)
+    unit_of_work.workstations.has_available = AsyncMock(return_value=True)
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
     unit_of_work.notifications.add_all = AsyncMock()
     unit_of_work.reference_media.move_active = AsyncMock(return_value=2)
@@ -156,13 +186,14 @@ def build_uow(
     unit_of_work.service_addons.add_snapshots = AsyncMock(return_value=[])
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
+    unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work, appointment, old_window, new_window
 
 
 @pytest.mark.asyncio
 async def test_client_reschedule_inside_deadline_is_blocked() -> None:
-    unit_of_work, _, _, _ = build_uow(old_hours=35)
+    unit_of_work, _, _, _ = build_uow(old_hours=23)
     service = RescheduleService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
 
     with pytest.raises(CancellationDeadlineError):
@@ -202,6 +233,7 @@ async def test_reschedule_atomically_switches_windows_and_preserves_snapshot() -
     assert new_window.status is AvailabilityWindowStatus.BOOKED
     created = unit_of_work.appointments.add.await_args.args[0]
     assert created.rescheduled_from_id == 11
+    assert created.workstation_id == 4
     assert created.price_snapshot == Decimal("2500.00")
     cloned = unit_of_work.service_addons.add_snapshots.await_args.args[0]
     assert cloned[0].appointment_id == 12

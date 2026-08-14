@@ -22,7 +22,14 @@ router = Router(name="admin.settings")
 _PROMPTS = {
     "max_appointments_per_day": "Введите максимальное число записей на день (1–20):",
     "booking_horizon_days": "Введите горизонт записи в днях (1–365):",
-    "cancellation_deadline_hours": "Введите дедлайн отмены в часах (1–720):",
+    "cancellation_deadline_hours": (
+        "За сколько часов до визита клиент уже не сможет отменить запись? "
+        "Введите число от 1 до 720, например 24:"
+    ),
+    "reschedule_deadline_hours": (
+        "За сколько часов до визита клиент уже не сможет перенести запись? "
+        "Введите число от 1 до 720, например 24:"
+    ),
     "default_window_duration_minutes": "Введите длительность окна по умолчанию в минутах:",
     "minimum_gap_minutes": "Введите минимальный интервал в минутах (можно 0):",
     "reminder_offsets_minutes": "Введите offsets напоминаний в минутах через запятую:",
@@ -39,7 +46,8 @@ def render_settings(settings: BusinessSettingsView) -> str:
         "<b>Основные настройки</b>\n"
         f"Часовой пояс: {settings.timezone}\n"
         f"Горизонт: {settings.booking_horizon_days} дн.\n"
-        f"Дедлайн отмены/переноса: {settings.cancellation_deadline_hours} ч.\n"
+        f"Дедлайн отмены: {settings.cancellation_deadline_hours} ч. до визита\n"
+        f"Дедлайн переноса: {settings.reschedule_deadline_hours} ч. до визита\n"
         f"Лимит записей на день: {settings.max_appointments_per_day}\n"
         "Антиспам будущих записей: "
         f"{'включён' if settings.future_booking_limit_enabled else 'выключен'}\n"

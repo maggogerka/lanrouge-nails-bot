@@ -48,6 +48,7 @@ def settings_view() -> BusinessSettingsView:
         master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
+        reschedule_deadline_hours=24,
         max_appointments_per_day=2,
         default_window_duration_minutes=210,
         minimum_gap_minutes=60,
@@ -92,6 +93,14 @@ def test_appointment_and_settings_callbacks_fit_telegram_limit() -> None:
     assert len(admin.encode()) <= 64
     assert len(setting.encode()) <= 64
     assert settings_keyboard(settings_view()).inline_keyboard
+    actions = {
+        SettingsCallback.unpack(button.callback_data).action
+        for row in settings_keyboard(settings_view()).inline_keyboard
+        for button in row
+        if button.callback_data is not None
+    }
+    assert "cancellation_deadline_hours" in actions
+    assert "reschedule_deadline_hours" in actions
 
 
 def test_admin_upcoming_keyboard_is_grouped_as_calendar_agenda() -> None:

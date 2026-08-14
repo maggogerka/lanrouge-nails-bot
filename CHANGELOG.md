@@ -23,10 +23,16 @@
 
 ### Changed
 
+- masters now open service-neutral availability; a compatible workstation is selected atomically
+  only when a client books or reschedules, with an appointment-level PostgreSQL overlap guard and
+  one business/date allocation lock shared by different services;
+- cancellation and reschedule deadlines are independently configurable, and reschedule choices
+  include only open windows with an eligible master, sufficient duration and current resources;
+- administrator appointment cards expose complete booking, contact, resource and payment context;
 - appointment and availability cards now expose stable IDs and master/resource context, while CRM
   manual booking asks for a service and matching window in two validated steps;
-- service duration and workstation availability are validated before a window can be opened, and
-  booking revalidates the selected service/resource before confirmation;
+- a new window must fit at least one configured master service; exact service duration and
+  workstation capacity are revalidated under locks when a client confirms a booking;
 - portfolio visibility no longer removes its administration entry, so a hidden portfolio can be
   enabled again;
 - appointment status rendering handles payment and refund states without a generic callback error;

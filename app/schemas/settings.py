@@ -20,6 +20,7 @@ class BusinessSettingsView(BaseModel):
     master_telegram_url: str
     booking_horizon_days: int
     cancellation_deadline_hours: int
+    reschedule_deadline_hours: int = 24
     max_appointments_per_day: int
     default_window_duration_minutes: int
     minimum_gap_minutes: int
@@ -61,6 +62,11 @@ class BusinessSettingsView(BaseModel):
     def default_future_limit_enabled(cls, value: object) -> object:
         return True if value is None else value
 
+    @field_validator("reschedule_deadline_hours", mode="before")
+    @classmethod
+    def default_reschedule_deadline(cls, value: object) -> object:
+        return 24 if value is None else value
+
     @field_validator("future_booking_limit_max", mode="before")
     @classmethod
     def default_future_limit_max(cls, value: object) -> object:
@@ -80,6 +86,7 @@ class BusinessSettingsView(BaseModel):
 class BusinessSettingsPatch(BaseModel):
     booking_horizon_days: Annotated[int, Field(gt=0, le=365)] | None = None
     cancellation_deadline_hours: Annotated[int, Field(gt=0, le=24 * 30)] | None = None
+    reschedule_deadline_hours: Annotated[int, Field(gt=0, le=24 * 30)] | None = None
     max_appointments_per_day: Annotated[int, Field(gt=0, le=20)] | None = None
     default_window_duration_minutes: Annotated[int, Field(gt=0, le=24 * 60)] | None = None
     minimum_gap_minutes: Annotated[int, Field(ge=0, le=24 * 60)] | None = None

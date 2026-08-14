@@ -8,11 +8,6 @@ from typing import Final
 from app.domain.enums import AppointmentStatus
 from app.domain.errors import AppointmentStateError, CancellationDeadlineError
 
-CLIENT_CHANGE_BLOCKED_MESSAGE = (
-    "До записи осталось меньше 36 часов. Самостоятельная отмена или перенос уже "
-    "недоступны. Пожалуйста, напишите мастеру и обсудите обстоятельства лично."
-)
-
 ACTIVE_APPOINTMENT_STATUSES: Final[frozenset[AppointmentStatus]] = frozenset(
     {
         AppointmentStatus.CONFIRMED,
@@ -123,4 +118,25 @@ def ensure_client_change_deadline(
     if start_at.tzinfo is None or now.tzinfo is None:
         raise ValueError("appointment timestamps must be timezone-aware")
     if start_at - now < timedelta(hours=deadline_hours):
-        raise CancellationDeadlineError(CLIENT_CHANGE_BLOCKED_MESSAGE)
+        raise CancellationDeadlineError(
+            f"До записи осталось меньше {deadline_hours} ч. Самостоятельная отмена уже "
+            "недоступна. Пожалуйста, напишите мастеру."
+        )
+
+
+def ensure_client_reschedule_deadline(
+    *,
+    start_at: datetime,
+    now: datetime,
+    deadline_hours: int,
+) -> None:
+    """Apply the independently configured self-service reschedule deadline."""
+
+    if start_at.tzinfo is None or now.tzinfo is None:
+        raise ValueError("appointment timestamps must be timezone-aware")
+    if start_at - now < timedelta(hours=deadline_hours):
+        raise CancellationDeadlineError(
+            f"До записи осталось меньше {deadline_hours} ч. Самостоятельный перенос уже "
+            "недоступен. Вы можете отменить запись, если срок отмены ещё не наступил, "
+            "или написать мастеру."
+        )

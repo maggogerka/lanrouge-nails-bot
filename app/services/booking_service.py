@@ -268,8 +268,6 @@ class BookingService:
 
             candidates = []
             for window in windows:
-                if window.service_id != service.id or window.workstation_id is None:
-                    continue
                 if window.staff_member_id not in eligible_masters:
                     continue
                 master_pause = getattr(
@@ -298,6 +296,10 @@ class BookingService:
                 if (
                     terms.duration_max_minutes * 60
                     <= (window.end_at - window.start_at).total_seconds()
+                ) and await unit_of_work.workstations.has_available(
+                    service.id,
+                    start_at=window.start_at,
+                    end_at=window.end_at,
                 ):
                     candidates.append(window)
 
@@ -381,8 +383,6 @@ class BookingService:
                 if window is None or window.status is not AvailabilityWindowStatus.OPEN:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 if window.business_id != unit_of_work.business_id:
-                    raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
-                if window.service_id != values.service_id or window.workstation_id is None:
                     raise BookingConflictError(_WINDOW_TAKEN_MESSAGE)
                 if (
                     values.staff_member_id is not None
@@ -486,6 +486,17 @@ class BookingService:
                 )
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
+                await unit_of_work.workstations.lock_allocation_date(local_date)
+                workstation = await unit_of_work.workstations.allocate_available(
+                    service.id,
+                    start_at=window.start_at,
+                    end_at=window.end_at,
+                )
+                if workstation is None:
+                    raise BookingConflictError(
+                        "На это время рабочее место для услуги уже занято. "
+                        "Выберите другое открытое окно."
+                    )
                 if len(values.reference_media) > settings.booking_reference_max_media:
                     raise BookingUnavailableError(
                         "Превышено допустимое количество фотографий-референсов."
@@ -517,6 +528,7 @@ class BookingService:
                         client_id=client.id,
                         window_id=window.id,
                         service_id=service.id,
+                        workstation_id=workstation.id,
                         design_reference_id=design.id if design is not None else None,
                         design_title_snapshot=design.title if design is not None else None,
                         service_name_snapshot=service.name,
@@ -699,6 +711,7 @@ class BookingService:
                     changes={
                         "window_id": window.id,
                         "service_id": service.id,
+                        "workstation_id": workstation.id,
                         "status": appointment_status.value,
                         "has_client_comment": values.client_comment is not None,
                         "design_reference_id": design.id if design is not None else None,
@@ -1198,6 +1211,33 @@ class BookingService:
             correlation_id=correlation_id,
             allow_self_booking_blocked=True,
             _booking_limit_override=override,
+        )
+
+    async def list_availability_for_client(
+        self,
+        actor: AdminActor,
+        *,
+        client_id: int,
+        service_id: int,
+        now: datetime | None = None,
+    ) -> BookingAvailability:
+        """Reuse public availability rules for the administrator CRM flow."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await unit_of_work.users.get_by_id(client_id)
+            if client is None:
+                raise BookingUnavailableError("Клиент больше не существует.")
+            client_actor = ClientActor(
+                telegram_id=client.telegram_id,
+                username=client.username,
+                first_name=client.first_name,
+                last_name=client.last_name,
+            )
+        return await self.list_availability(
+            client_actor,
+            service_id,
+            now=now,
         )
 
     @staticmethod

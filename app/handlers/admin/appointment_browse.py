@@ -107,7 +107,8 @@ async def _show_details(
         await callback.answer(str(exc), show_alert=True)
         return None
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
+        await edit_text_safely(
+            callback.message,
             render_admin_appointment(appointment),
             reply_markup=admin_appointment_details_keyboard(appointment),
         )

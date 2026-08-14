@@ -13,7 +13,6 @@ from aiogram.types import (
     Message,
 )
 
-from app.domain.appointments import CLIENT_CHANGE_BLOCKED_MESSAGE
 from app.domain.errors import CancellationDeadlineError, DomainError
 from app.handlers.client.appointment_common import render_appointment
 from app.handlers.client.booking_common import available_dates, render_booking_receipt
@@ -266,8 +265,8 @@ async def cancel_my_appointment(
             callback_data.appointment_id,
             correlation_id=correlation_id,
         )
-    except CancellationDeadlineError:
-        await _show_deadline_message(callback, presentation_service)
+    except CancellationDeadlineError as exc:
+        await _show_deadline_message(callback, presentation_service, str(exc))
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -287,8 +286,8 @@ async def begin_my_reschedule(
             actor_from_telegram(callback.from_user),
             callback_data.appointment_id,
         )
-    except CancellationDeadlineError:
-        await _show_deadline_message(callback, presentation_service)
+    except CancellationDeadlineError as exc:
+        await _show_deadline_message(callback, presentation_service, str(exc))
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -378,8 +377,8 @@ async def confirm_my_reschedule(
             callback_data.object_id,
             correlation_id=correlation_id,
         )
-    except CancellationDeadlineError:
-        await _show_deadline_message(callback, presentation_service)
+    except CancellationDeadlineError as exc:
+        await _show_deadline_message(callback, presentation_service, str(exc))
         return
     except DomainError as exc:
         await callback.answer(str(exc), show_alert=True)
@@ -398,11 +397,12 @@ async def confirm_my_reschedule(
 async def _show_deadline_message(
     callback: CallbackQuery,
     presentation_service: PresentationService,
+    message: str,
 ) -> None:
     if isinstance(callback.message, Message):
         business = await presentation_service.get_business()
         await callback.message.edit_text(
-            CLIENT_CHANGE_BLOCKED_MESSAGE,
+            message,
             reply_markup=business_links_keyboard(business),
         )
     await callback.answer("Самостоятельное изменение уже недоступно.", show_alert=True)

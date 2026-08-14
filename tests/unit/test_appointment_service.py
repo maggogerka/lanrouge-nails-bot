@@ -96,6 +96,8 @@ def window(*, hours_until: int = 36) -> AvailabilityWindow:
     start_at = NOW + timedelta(hours=hours_until)
     return AvailabilityWindow(
         id=7,
+        business_id=1,
+        staff_member_id=1,
         start_at=start_at,
         end_at=start_at + timedelta(minutes=210),
         status=AvailabilityWindowStatus.BOOKED,
@@ -134,6 +136,7 @@ def build_uow(
     unit_of_work.reference_media.set_expiry_for_appointment = AsyncMock(return_value=0)
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work

@@ -7,7 +7,6 @@ class AdminWindowCreate(StatesGroup):
     """Button-first window draft with explicit confirmation."""
 
     master = State()
-    service = State()
     local_date = State()
     local_time = State()
     manual_time = State()

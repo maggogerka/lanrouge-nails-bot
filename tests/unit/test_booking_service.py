@@ -19,6 +19,7 @@ from app.database.models import (
     StaffMember,
     StaffServiceAssignment,
     User,
+    Workstation,
 )
 from app.database.models.commerce import BusinessPaymentSettings
 from app.domain.enums import (
@@ -108,8 +109,8 @@ def window(
         id=window_id,
         business_id=1,
         staff_member_id=staff_member_id,
-        service_id=3,
-        workstation_id=1,
+        service_id=None,
+        workstation_id=None,
         start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
         end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
         status=status,
@@ -206,6 +207,10 @@ def build_uow(
     unit_of_work.service_assignments.list_bookable_assignments = AsyncMock(
         return_value=[(target_assignment, target_service, target_master)]
     )
+    workstation = Workstation(id=1, business_id=1, name="Стол 1", is_active=True)
+    unit_of_work.workstations.has_available = AsyncMock(return_value=True)
+    unit_of_work.workstations.lock_allocation_date = AsyncMock()
+    unit_of_work.workstations.allocate_available = AsyncMock(return_value=workstation)
     unit_of_work.services.get = AsyncMock(return_value=target_service)
     unit_of_work.services.list_active = AsyncMock(return_value=[target_service])
     unit_of_work.service_addons.list_active = AsyncMock(return_value=[])
@@ -605,6 +610,30 @@ async def test_daily_capacity_is_rechecked_under_date_lock() -> None:
 
 
 @pytest.mark.asyncio
+async def test_window_is_hidden_when_service_has_no_free_workstation() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.workstations.has_available.return_value = False
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    availability = await booking.list_availability(actor(), 3, now=NOW)
+
+    assert availability.windows == []
+
+
+@pytest.mark.asyncio
+async def test_workstation_is_rechecked_and_locked_during_booking() -> None:
+    unit_of_work = build_uow()
+    unit_of_work.workstations.allocate_available.return_value = None
+    booking = BookingService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(BookingConflictError, match="рабочее место"):
+        await booking.book(actor(), request(), now=NOW)
+
+    unit_of_work.workstations.lock_allocation_date.assert_awaited_once()
+    unit_of_work.appointments.add.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_successful_booking_snapshots_service_and_schedules_only_future_jobs() -> None:
     service = catalog_service()
     target_window = window()
@@ -617,6 +646,7 @@ async def test_successful_booking_snapshots_service_and_schedules_only_future_jo
     assert receipt.appointment_id == 11
     assert receipt.master_name == "Основной мастер"
     assert appointment.service_name_snapshot == "Консультация с покрытием"
+    assert appointment.workstation_id == 1
     assert appointment.price_snapshot == Decimal("2500.00")
     assert target_window.status is AvailabilityWindowStatus.BOOKED
     jobs = unit_of_work.notifications.add_all.await_args.args[0]

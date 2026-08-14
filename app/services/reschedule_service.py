@@ -20,7 +20,7 @@ from app.database.models import (
 from app.domain.appointments import (
     ensure_active_appointment,
     ensure_appointment_transition,
-    ensure_client_change_deadline,
+    ensure_client_reschedule_deadline,
 )
 from app.domain.availability import utc_day_bounds
 from app.domain.booking import validate_bookable_date, validate_service_fits_window
@@ -76,10 +76,10 @@ class RescheduleService:
             settings = await self._settings(unit_of_work)
             old_window = await self._window(unit_of_work, appointment.window_id)
             ensure_active_appointment(appointment.status)
-            ensure_client_change_deadline(
+            ensure_client_reschedule_deadline(
                 start_at=old_window.start_at,
                 now=current_time,
-                deadline_hours=settings.cancellation_deadline_hours,
+                deadline_hours=settings.reschedule_deadline_hours or 24,
             )
             return await self._options(
                 unit_of_work,
@@ -215,10 +215,10 @@ class RescheduleService:
                     raise AppointmentStateError("Старое окно уже находится в другом состоянии.")
                 if client_actor is not None:
                     ensure_owner(appointment, client)
-                    ensure_client_change_deadline(
+                    ensure_client_reschedule_deadline(
                         start_at=old_window.start_at,
                         now=current_time,
-                        deadline_hours=settings.cancellation_deadline_hours,
+                        deadline_hours=settings.reschedule_deadline_hours or 24,
                     )
                     changed_by_user_id = client.id
                 else:
@@ -277,8 +277,29 @@ class RescheduleService:
                 )
                 if daily_count >= settings.max_appointments_per_day:
                     raise BookingLimitError("На эту дату больше нет мест.")
+                await unit_of_work.workstations.lock_allocation_date(new_local_date)
+                workstation = await unit_of_work.workstations.allocate_available(
+                    appointment.service_id,
+                    start_at=new_window.start_at,
+                    end_at=new_window.end_at,
+                    exclude_appointment_id=appointment.id,
+                )
+                if workstation is None:
+                    raise BookingConflictError(
+                        "На это время нет свободного рабочего места для услуги. "
+                        "Выберите другое открытое окно."
+                    )
 
                 addon_snapshots = await unit_of_work.service_addons.list_snapshots(appointment.id)
+                previous_status = appointment.status
+                ensure_appointment_transition(previous_status, AppointmentStatus.RESCHEDULED)
+                appointment.status = AppointmentStatus.RESCHEDULED
+                old_window.status = (
+                    AvailabilityWindowStatus.OPEN
+                    if old_window.start_at > current_time
+                    else AvailabilityWindowStatus.CLOSED
+                )
+                await unit_of_work.session.flush()
                 new_appointment = await unit_of_work.appointments.add(
                     Appointment(
                         business_id=unit_of_work.business_id,
@@ -286,6 +307,7 @@ class RescheduleService:
                         client_id=appointment.client_id,
                         window_id=new_window.id,
                         service_id=appointment.service_id,
+                        workstation_id=workstation.id,
                         design_reference_id=appointment.design_reference_id,
                         design_title_snapshot=appointment.design_title_snapshot,
                         rescheduled_from_id=appointment.id,
@@ -325,14 +347,6 @@ class RescheduleService:
                 ]
                 if new_addon_snapshots:
                     await unit_of_work.service_addons.add_snapshots(new_addon_snapshots)
-                previous_status = appointment.status
-                ensure_appointment_transition(previous_status, AppointmentStatus.RESCHEDULED)
-                appointment.status = AppointmentStatus.RESCHEDULED
-                old_window.status = (
-                    AvailabilityWindowStatus.OPEN
-                    if old_window.start_at > current_time
-                    else AvailabilityWindowStatus.CLOSED
-                )
                 new_window.status = AvailabilityWindowStatus.BOOKED
                 moved_reference_count = await unit_of_work.reference_media.move_active(
                     appointment.id,
@@ -445,10 +459,17 @@ class RescheduleService:
         query_start, _ = utc_day_bounds(today, settings.timezone)
         _, query_end = utc_day_bounds(horizon_last, settings.timezone)
         windows = await unit_of_work.windows.list_open_between(max(now, query_start), query_end)
+        assignment_rows = await unit_of_work.service_assignments.list_bookable_assignments(
+            unit_of_work.business_id,
+            appointment.service_id,
+        )
+        eligible_master_ids = {master.id for _, _, master in assignment_rows}
         counts: dict[date, int] = {}
         available: list[BookingWindowView] = []
         for window in windows:
             if window.id == old_window.id:
+                continue
+            if window.staff_member_id not in eligible_master_ids:
                 continue
             if (
                 appointment.duration_max_snapshot * 60
@@ -469,12 +490,25 @@ class RescheduleService:
                 )
             if counts[local_date] >= settings.max_appointments_per_day:
                 continue
+            if not await unit_of_work.workstations.has_available(
+                appointment.service_id,
+                start_at=window.start_at,
+                end_at=window.end_at,
+                exclude_appointment_id=appointment.id,
+            ):
+                continue
             available.append(
                 BookingWindowView(
                     id=window.id,
                     start_at=window.start_at,
                     end_at=window.end_at,
                     timezone=settings.timezone,
+                    staff_member_id=window.staff_member_id,
+                    master_name=next(
+                        master.display_name
+                        for _, _, master in assignment_rows
+                        if master.id == window.staff_member_id
+                    ),
                 )
             )
         return RescheduleAvailability(

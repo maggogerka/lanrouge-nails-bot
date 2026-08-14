@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
-from app.domain.enums import StaffRole
+from app.domain.enums import PaymentMode, StaffRole
 from app.domain.errors import AppointmentNotFoundError, AuthorizationError
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
 from app.schemas.service import AdminActor
@@ -72,6 +73,10 @@ def appointment_view(
         can_self_manage=(
             window.start_at - now >= timedelta(hours=settings.cancellation_deadline_hours)
         ),
+        can_reschedule=(
+            window.start_at - now
+            >= timedelta(hours=getattr(settings, "reschedule_deadline_hours", None) or 24)
+        ),
     )
 
 
@@ -81,6 +86,8 @@ def admin_appointment_view(
     client: User,
     settings: BusinessSettings,
     now: datetime,
+    *,
+    workstation_name: str | None = None,
 ) -> AdminAppointmentView:
     common = appointment_view(appointment, window, settings, now)
     return AdminAppointmentView(
@@ -89,4 +96,9 @@ def admin_appointment_view(
         client_phone=client.phone,
         client_username=client.username,
         client_telegram_id=client.telegram_id,
+        client_comment=appointment.client_comment,
+        workstation_name=workstation_name,
+        prepayment_amount=appointment.prepayment_snapshot or Decimal("0"),
+        payment_mode=appointment.payment_mode_snapshot or PaymentMode.DISABLED,
+        reservation_expires_at=appointment.reservation_expires_at,
     )

@@ -229,7 +229,9 @@ async def dismiss_own_prepayment(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(MasterScheduleCallback.filter())
+@router.callback_query(
+    MasterScheduleCallback.filter(F.action.in_({"pause_1", "pause_7", "resume"}))
+)
 async def change_own_schedule_pause(
     callback: CallbackQuery,
     callback_data: MasterScheduleCallback,

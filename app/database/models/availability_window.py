@@ -56,13 +56,6 @@ class AvailabilityWindow(TimestampMixin, Base):
             using="gist",
             name="ex_availability_windows_active_overlap",
         ),
-        ExcludeConstraint(
-            (workstation_id, "="),
-            (func.tstzrange(start_at, end_at, "[)"), "&&"),
-            where=text("workstation_id IS NOT NULL AND status IN ('open', 'reserved', 'booked')"),
-            using="gist",
-            name="ex_availability_windows_workstation_active_overlap",
-        ),
         Index(
             "ix_availability_windows_business_staff_status_start",
             "business_id",

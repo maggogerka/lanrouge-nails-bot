@@ -15,10 +15,24 @@ from app.domain.enums import (
     StaffRole,
 )
 from app.domain.errors import AppointmentStateError, AuthorizationError
+from app.keyboards.master.workspace import MasterScheduleCallback, master_schedule_actions
 from app.schemas.authorization import StaffContext
 from app.services.master_workspace_service import MasterWorkspaceService
 
 NOW = datetime(2026, 8, 10, 9, tzinfo=UTC)
+
+
+def test_master_schedule_offers_self_scoped_free_window_creation() -> None:
+    keyboard = master_schedule_actions(is_paused=False)
+
+    callbacks = [
+        MasterScheduleCallback.unpack(button.callback_data)
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data and button.callback_data.startswith("master_schedule:")
+    ]
+
+    assert any(item.action == "add_window" for item in callbacks)
 
 
 def actor(*, business_id: int = 1) -> StaffContext:
@@ -152,6 +166,10 @@ def build_action_uow(
     unit_of_work.notifications.cancel_unsent = AsyncMock()
     unit_of_work.notifications.add_all = AsyncMock()
     unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(
+        return_value=[(SimpleNamespace(), SimpleNamespace(id=3, duration_max_minutes=60))]
+    )
+    unit_of_work.workstations.has_available = AsyncMock(return_value=True)
     return unit_of_work, appointment, window
 
 

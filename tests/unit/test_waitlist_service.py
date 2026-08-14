@@ -99,6 +99,10 @@ def uow() -> MagicMock:
     result.session.flush = AsyncMock()
     result.audit.add = AsyncMock()
     result.features.get = AsyncMock(return_value=SimpleNamespace(waitlist=True))
+    result.service_assignments.list_bookable_services_for_staff = AsyncMock(
+        return_value=[(SimpleNamespace(), service())]
+    )
+    result.workstations.has_available = AsyncMock(return_value=True)
     return result
 
 

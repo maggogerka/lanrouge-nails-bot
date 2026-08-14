@@ -107,7 +107,7 @@ class WorkstationService:
                 now=current,
             ):
                 raise WorkstationStateError(
-                    "Сначала закройте будущие окна этой услуги на рабочем месте."
+                    "Сначала перенесите или отмените будущие записи этой услуги."
                 )
             await unit_of_work.workstations.set_service_enabled(
                 row.id,
@@ -148,7 +148,7 @@ class WorkstationService:
                 now=current,
             ):
                 raise WorkstationStateError(
-                    "Рабочее место занято будущими окнами. Сначала закройте их."
+                    "Рабочее место занято будущими записями. Сначала перенесите или отмените их."
                 )
             row.is_active = active
             row.archived_at = None if active else current

@@ -8,19 +8,14 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
-    AvailabilityWindow,
+    Appointment,
     Service,
     Workstation,
     WorkstationService,
 )
-from app.domain.enums import AvailabilityWindowStatus
+from app.domain.appointments import SCHEDULE_OCCUPYING_STATUSES
 from app.repositories.scoped import TenantScopedRepository
 
-_ACTIVE_WINDOW_STATUSES = (
-    AvailabilityWindowStatus.OPEN,
-    AvailabilityWindowStatus.RESERVED,
-    AvailabilityWindowStatus.BOOKED,
-)
 _RESOURCE_LOCK_NAMESPACE = 0x575354
 
 
@@ -130,13 +125,20 @@ class WorkstationRepository(TenantScopedRepository):
         )
         return list(rows.all())
 
-    async def lock_service_date(self, service_id: int, local_date: date) -> None:
+    async def lock_allocation_date(self, local_date: date) -> None:
+        """Serialize all workstation allocations for a business day.
+
+        A workstation may support several services, so a service-specific lock
+        would allow two concurrent checkouts for different services to race for
+        the same physical place. Use one lock key for all services on that date.
+        """
+
         await self._session.execute(
             select(
                 func.pg_advisory_xact_lock(
                     func.hashtextextended(
                         f"workstation:{_RESOURCE_LOCK_NAMESPACE}:{self.business_id}:"
-                        f"{service_id}:{local_date.isoformat()}",
+                        f"{local_date.isoformat()}",
                         0,
                     )
                 )
@@ -149,21 +151,21 @@ class WorkstationRepository(TenantScopedRepository):
         *,
         start_at: datetime,
         end_at: datetime,
-        exclude_window_id: int | None = None,
+        exclude_appointment_id: int | None = None,
     ) -> Workstation | None:
         overlap = (
-            select(AvailabilityWindow.id)
+            select(Appointment.id)
             .where(
-                AvailabilityWindow.business_id == self.business_id,
-                AvailabilityWindow.workstation_id == Workstation.id,
-                AvailabilityWindow.status.in_(_ACTIVE_WINDOW_STATUSES),
-                AvailabilityWindow.start_at < end_at,
-                AvailabilityWindow.end_at > start_at,
+                Appointment.business_id == self.business_id,
+                Appointment.workstation_id == Workstation.id,
+                Appointment.status.in_(SCHEDULE_OCCUPYING_STATUSES),
+                Appointment.scheduled_start_at < end_at,
+                Appointment.scheduled_end_at > start_at,
             )
             .correlate(Workstation)
         )
-        if exclude_window_id is not None:
-            overlap = overlap.where(AvailabilityWindow.id != exclude_window_id)
+        if exclude_appointment_id is not None:
+            overlap = overlap.where(Appointment.id != exclude_appointment_id)
         statement = (
             select(Workstation)
             .join(
@@ -192,17 +194,17 @@ class WorkstationRepository(TenantScopedRepository):
         *,
         start_at: datetime,
         end_at: datetime,
-        exclude_window_id: int | None = None,
+        exclude_appointment_id: int | None = None,
     ) -> bool:
-        overlap = select(AvailabilityWindow.id).where(
-            AvailabilityWindow.business_id == self.business_id,
-            AvailabilityWindow.workstation_id == workstation_id,
-            AvailabilityWindow.status.in_(_ACTIVE_WINDOW_STATUSES),
-            AvailabilityWindow.start_at < end_at,
-            AvailabilityWindow.end_at > start_at,
+        overlap = select(Appointment.id).where(
+            Appointment.business_id == self.business_id,
+            Appointment.workstation_id == workstation_id,
+            Appointment.status.in_(SCHEDULE_OCCUPYING_STATUSES),
+            Appointment.scheduled_start_at < end_at,
+            Appointment.scheduled_end_at > start_at,
         )
-        if exclude_window_id is not None:
-            overlap = overlap.where(AvailabilityWindow.id != exclude_window_id)
+        if exclude_appointment_id is not None:
+            overlap = overlap.where(Appointment.id != exclude_appointment_id)
         return bool(
             await self._session.scalar(
                 select(
@@ -221,6 +223,46 @@ class WorkstationRepository(TenantScopedRepository):
             )
         )
 
+    async def has_available(
+        self,
+        service_id: int,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        exclude_appointment_id: int | None = None,
+    ) -> bool:
+        """Check resource capacity without reserving it; booking rechecks under locks."""
+
+        overlap = (
+            select(Appointment.id)
+            .where(
+                Appointment.business_id == self.business_id,
+                Appointment.workstation_id == Workstation.id,
+                Appointment.status.in_(SCHEDULE_OCCUPYING_STATUSES),
+                Appointment.scheduled_start_at < end_at,
+                Appointment.scheduled_end_at > start_at,
+            )
+            .correlate(Workstation)
+        )
+        if exclude_appointment_id is not None:
+            overlap = overlap.where(Appointment.id != exclude_appointment_id)
+        return bool(
+            await self._session.scalar(
+                select(
+                    exists().where(
+                        Workstation.business_id == self.business_id,
+                        Workstation.is_active.is_(True),
+                        Workstation.archived_at.is_(None),
+                        WorkstationService.workstation_id == Workstation.id,
+                        WorkstationService.service_id == service_id,
+                        WorkstationService.business_id == self.business_id,
+                        WorkstationService.is_active.is_(True),
+                        ~exists(overlap),
+                    )
+                )
+            )
+        )
+
     async def has_future_active_windows(
         self,
         workstation_id: int,
@@ -229,11 +271,11 @@ class WorkstationRepository(TenantScopedRepository):
         service_id: int | None = None,
     ) -> bool:
         conditions = [
-            AvailabilityWindow.business_id == self.business_id,
-            AvailabilityWindow.workstation_id == workstation_id,
-            AvailabilityWindow.status.in_(_ACTIVE_WINDOW_STATUSES),
-            AvailabilityWindow.end_at > now,
+            Appointment.business_id == self.business_id,
+            Appointment.workstation_id == workstation_id,
+            Appointment.status.in_(SCHEDULE_OCCUPYING_STATUSES),
+            Appointment.scheduled_end_at > now,
         ]
         if service_id is not None:
-            conditions.append(AvailabilityWindow.service_id == service_id)
+            conditions.append(Appointment.service_id == service_id)
         return bool(await self._session.scalar(select(exists().where(*conditions))))

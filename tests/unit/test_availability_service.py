@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database.models import AvailabilityWindow, BusinessSettings, Service, Workstation
-from app.domain.enums import AvailabilityWindowStatus
+from app.domain.enums import AvailabilityWindowStatus, StaffRole
 from app.domain.errors import AuthorizationError, WindowInUseError
+from app.schemas.authorization import StaffContext
 from app.schemas.availability import AvailabilityWindowCreate
 from app.schemas.service import AdminActor
 from app.services.availability_service import AvailabilityService
@@ -50,6 +51,7 @@ def build_uow() -> MagicMock:
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=5))
+    unit_of_work.users.get_by_id = AsyncMock(return_value=SimpleNamespace(id=5))
     unit_of_work.settings.get = AsyncMock(return_value=settings())
     catalog_service = Service(
         id=1,
@@ -75,9 +77,14 @@ def build_uow() -> MagicMock:
     unit_of_work.service_assignments.get_assignment = AsyncMock(
         return_value=SimpleNamespace(is_active=True, online_booking_enabled=True)
     )
-    unit_of_work.workstations.lock_service_date = AsyncMock()
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(
+        return_value=[(SimpleNamespace(), catalog_service)]
+    )
+    unit_of_work.workstations.lock_allocation_date = AsyncMock()
     unit_of_work.workstations.allocate_available = AsyncMock(return_value=workstation)
     unit_of_work.workstations.get = AsyncMock(return_value=workstation)
+    unit_of_work.workstations.list_active_for_service = AsyncMock(return_value=[workstation])
+    unit_of_work.workstations.has_available = AsyncMock(return_value=True)
     unit_of_work.windows.list_upcoming = AsyncMock(return_value=[])
     unit_of_work.windows.list_active_between = AsyncMock(return_value=[])
     unit_of_work.windows.lock_local_date = AsyncMock()
@@ -98,9 +105,20 @@ def create_values(
     return AvailabilityWindowCreate(
         local_date=date(2026, 7, 23),
         local_start_time=time(10),
-        service_id=1,
         admin_comment="do not expose this text",
         status=status,
+    )
+
+
+def master_actor(*, staff_member_id: int = 1) -> StaffContext:
+    return StaffContext(
+        business_id=1,
+        staff_member_id=staff_member_id,
+        user_id=5,
+        telegram_id=202,
+        display_name="Мастер",
+        role=StaffRole.MASTER,
+        is_bookable=True,
     )
 
 
@@ -163,6 +181,8 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
 
     assert created.start_at == datetime(2026, 7, 23, 7, tzinfo=UTC)
     assert created.end_at == datetime(2026, 7, 23, 10, 30, tzinfo=UTC)
+    assert created.service_id is None
+    assert created.workstation_id is None
     unit_of_work.windows.lock_local_date.assert_awaited_once_with(
         date(2026, 7, 23), staff_member_id=1
     )
@@ -176,6 +196,39 @@ async def test_create_open_window_locks_date_audits_and_commits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_master_creates_only_own_free_window() -> None:
+    unit_of_work = build_uow()
+
+    async def add_window(window: AvailabilityWindow) -> AvailabilityWindow:
+        window.id = 9
+        return window
+
+    unit_of_work.windows.add = AsyncMock(side_effect=add_window)
+    service = AvailabilityService(lambda: unit_of_work, frozenset())  # type: ignore[arg-type]
+
+    created = await service.create_window(master_actor(), create_values(), now=NOW)
+
+    assert created.staff_member_id == 1
+    assert created.service_id is None
+    assert created.workstation_id is None
+    unit_of_work.users.get_by_id.assert_awaited_once_with(5)
+    unit_of_work.users.get_or_create_admin.assert_not_awaited()
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_master_cannot_create_window_for_another_staff_member() -> None:
+    factory = MagicMock()
+    service = AvailabilityService(factory, frozenset())
+    values = create_values().model_copy(update={"staff_member_id": 2})
+
+    with pytest.raises(AuthorizationError, match="только для себя"):
+        await service.create_window(master_actor(), values, now=NOW)
+
+    factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_preview_validates_interval_without_writing_or_committing() -> None:
     unit_of_work = build_uow()
     service = AvailabilityService(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
@@ -185,6 +238,7 @@ async def test_preview_validates_interval_without_writing_or_committing() -> Non
     assert preview.start_at == datetime(2026, 7, 23, 7, tzinfo=UTC)
     assert preview.end_at == datetime(2026, 7, 23, 10, 30, tzinfo=UTC)
     assert preview.duration_minutes == 210
+    assert preview.master_name == "Мастер"
     unit_of_work.windows.lock_local_date.assert_awaited_once()
     unit_of_work.audit.add.assert_not_awaited()
     unit_of_work.commit.assert_not_awaited()

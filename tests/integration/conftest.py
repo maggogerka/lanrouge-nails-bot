@@ -50,7 +50,7 @@ async def integration_database() -> AsyncIterator[Database]:
                 "portfolio_item_tags, portfolio_media, portfolio_items, portfolio_tags, "
                 "user_client_tags, client_notes, client_tags, consent_history, "
                 "appointment_status_history, appointments, availability_windows, "
-                "services, users RESTART IDENTITY CASCADE"
+                "workstation_services, workstations, services, users RESTART IDENTITY CASCADE"
             )
         )
     try:

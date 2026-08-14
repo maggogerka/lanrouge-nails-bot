@@ -335,7 +335,11 @@ def admin_reschedule_windows_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=local.strftime("%H:%M"),
+                    text=(
+                        f"{local:%H:%M} · {window.master_name}"
+                        if window.master_name
+                        else local.strftime("%H:%M")
+                    )[:64],
                     callback_data=AdminAppointmentCallback(
                         action="rwindow",
                         appointment_id=appointment_id,

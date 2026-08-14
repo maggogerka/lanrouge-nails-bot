@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.domain.enums import AppointmentStatus
 from app.schemas.appointment import AppointmentView
 from app.schemas.booking import BookingWindowView
 
@@ -53,29 +54,39 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
 
 def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if appointment.can_self_manage:
-        rows.extend(
+    can_reschedule = (
+        appointment.can_self_manage
+        if appointment.can_reschedule is None
+        else appointment.can_reschedule
+    )
+    is_active = appointment.status in {
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.CLIENT_CONFIRMED,
+    }
+    if is_active and can_reschedule:
+        rows.append(
             [
-                [
-                    InlineKeyboardButton(
-                        text="🔄 Перенести",
-                        callback_data=AppointmentCallback(
-                            action="reschedule",
-                            appointment_id=appointment.id,
-                            object_id=0,
-                        ).pack(),
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ Отменить",
-                        callback_data=AppointmentCallback(
-                            action="cancel_prompt",
-                            appointment_id=appointment.id,
-                            object_id=0,
-                        ).pack(),
-                    )
-                ],
+                InlineKeyboardButton(
+                    text="🔄 Перенести",
+                    callback_data=AppointmentCallback(
+                        action="reschedule",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ]
+        )
+    if is_active and appointment.can_self_manage:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить",
+                    callback_data=AppointmentCallback(
+                        action="cancel_prompt",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
             ]
         )
     rows.extend(
@@ -252,7 +263,11 @@ def reschedule_windows_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=local.strftime("%H:%M"),
+                    text=(
+                        f"{local:%H:%M} · {window.master_name}"
+                        if window.master_name
+                        else local.strftime("%H:%M")
+                    )[:64],
                     callback_data=AppointmentCallback(
                         action="rwindow",
                         appointment_id=appointment_id,

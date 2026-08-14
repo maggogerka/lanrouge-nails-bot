@@ -28,7 +28,6 @@ from app.schemas.authorization import StaffContext, StaffPermission
 from app.schemas.crm import ClientCardView, ClientNoteCreate, ClientTagCreate
 from app.schemas.pagination import PageRequest
 from app.schemas.service import AdminActor
-from app.services.availability_service import AvailabilityService
 from app.services.booking_service import BookingService
 from app.services.crm_service import CrmService
 from app.services.service_catalog import ServiceCatalog
@@ -459,7 +458,7 @@ async def create_manual_booking(
     message: Message,
     state: FSMContext,
     service_catalog: ServiceCatalog,
-    availability_service: AvailabilityService,
+    booking_service: BookingService,
 ) -> None:
     if message.from_user is None:
         return
@@ -469,18 +468,15 @@ async def create_manual_booking(
             actor_from_telegram(message.from_user),
             service_id,
         )
-        schedule = await availability_service.list_windows(
+        availability = await booking_service.list_availability_for_client(
             actor_from_telegram(message.from_user),
-            include_archived=False,
+            client_id=int((await state.get_data())["client_id"]),
+            service_id=service.id,
         )
     except (DomainError, KeyError, TypeError, ValueError) as exc:
         await message.answer(str(exc) or "Введите один числовой ID услуги.")
         return
-    windows = [
-        window
-        for window in schedule.windows
-        if window.status.value == "open" and window.service_id == service.id
-    ]
+    windows = availability.windows
     if not windows:
         await message.answer(
             "Для этой услуги нет свободных открытых окон. Создайте окно и повторите."

@@ -175,8 +175,15 @@ def test_active_windows_have_database_overlap_protection() -> None:
 
     assert {constraint.name for constraint in exclusion_constraints} == {
         "ex_availability_windows_active_overlap",
-        "ex_availability_windows_workstation_active_overlap",
     }
+
+    appointment_exclusions = {
+        constraint.name
+        for constraint in Appointment.__table__.constraints
+        if isinstance(constraint, ExcludeConstraint)
+    }
+    assert "ex_appointments_staff_active_overlap" in appointment_exclusions
+    assert "ex_appointments_workstation_active_overlap" in appointment_exclusions
 
 
 def test_occupied_window_has_partial_unique_index() -> None:

@@ -272,12 +272,18 @@ class AppointmentService:
             if client is None:
                 raise RuntimeError("Appointment client is missing")
             settings = await self._settings(unit_of_work)
+            workstation = (
+                await unit_of_work.workstations.get(appointment.workstation_id)
+                if appointment.workstation_id is not None
+                else None
+            )
             return admin_appointment_view(
                 appointment,
                 window,
                 client,
                 settings,
                 current_time,
+                workstation_name=workstation.name if workstation is not None else None,
             )
 
     async def cancel_my(

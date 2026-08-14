@@ -12,14 +12,30 @@ class SettingsCallback(CallbackData, prefix="set"):
 
 def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
     labels = [
-        ("Лимит записей", "max_appointments_per_day"),
-        ("Горизонт записи", "booking_horizon_days"),
-        ("Дедлайн отмены", "cancellation_deadline_hours"),
-        ("Длительность окна", "default_window_duration_minutes"),
-        ("Интервал между окнами", "minimum_gap_minutes"),
-        ("Напоминания", "reminder_offsets_minutes"),
-        ("Лимит будущих записей", "future_booking_limit_max"),
-        ("Горизонт антиспама", "future_booking_limit_horizon_days"),
+        (
+            f"📊 Лимит записей в день · {settings.max_appointments_per_day}",
+            "max_appointments_per_day",
+        ),
+        (f"📅 Горизонт записи · {settings.booking_horizon_days} дн.", "booking_horizon_days"),
+        (
+            f"❌ Отмена не позднее · {settings.cancellation_deadline_hours} ч.",
+            "cancellation_deadline_hours",
+        ),
+        (
+            f"🔄 Перенос не позднее · {settings.reschedule_deadline_hours} ч.",
+            "reschedule_deadline_hours",
+        ),
+        (
+            f"⏱ Окно по умолчанию · {settings.default_window_duration_minutes} мин.",
+            "default_window_duration_minutes",
+        ),
+        (f"↔️ Интервал между окнами · {settings.minimum_gap_minutes} мин.", "minimum_gap_minutes"),
+        ("🔔 Настроить напоминания", "reminder_offsets_minutes"),
+        (f"🛡 Лимит клиента · {settings.future_booking_limit_max}", "future_booking_limit_max"),
+        (
+            f"🗓 Горизонт антиспама · {settings.future_booking_limit_horizon_days} дн.",
+            "future_booking_limit_horizon_days",
+        ),
     ]
     rows = [
         [
@@ -82,7 +98,7 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="Обновить",
+                    text="🔄 Обновить настройки",
                     callback_data=SettingsCallback(action="view").pack(),
                 )
             ],

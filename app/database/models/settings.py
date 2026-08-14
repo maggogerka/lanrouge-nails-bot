@@ -33,6 +33,10 @@ class BusinessSettings(TimestampMixin, Base):
             name="cancellation_deadline_positive",
         ),
         CheckConstraint(
+            "reschedule_deadline_hours > 0",
+            name="reschedule_deadline_positive",
+        ),
+        CheckConstraint(
             "max_appointments_per_day > 0",
             name="max_appointments_per_day_positive",
         ),
@@ -120,6 +124,9 @@ class BusinessSettings(TimestampMixin, Base):
     master_telegram_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     booking_horizon_days: Mapped[int] = mapped_column(Integer, nullable=False)
     cancellation_deadline_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    reschedule_deadline_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=24, server_default="24"
+    )
     max_appointments_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
     default_window_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     minimum_gap_minutes: Mapped[int] = mapped_column(Integer, nullable=False)

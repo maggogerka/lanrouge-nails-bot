@@ -18,6 +18,8 @@ from app.database.models import (
     StaffMember,
     StaffServiceAssignment,
     User,
+    Workstation,
+    WorkstationService,
 )
 from app.domain.enums import AvailabilityWindowStatus, StaffRole, UserRole
 from app.domain.errors import BookingConflictError
@@ -74,6 +76,21 @@ async def seed_booking_case(database: Database) -> None:
                 staff_member_id=master.id,
                 service_id=service.id,
                 online_booking_enabled=True,
+                is_active=True,
+            )
+        )
+        workstation = Workstation(
+            business_id=1,
+            name="Стол 1",
+            is_active=True,
+        )
+        session.add(workstation)
+        await session.flush()
+        session.add(
+            WorkstationService(
+                business_id=1,
+                workstation_id=workstation.id,
+                service_id=service.id,
                 is_active=True,
             )
         )
@@ -134,3 +151,127 @@ async def test_two_concurrent_clients_have_exactly_one_winner(
         assert window.status is AvailabilityWindowStatus.BOOKED
         count = await session.scalar(select(func.count(Appointment.id)))
         assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_masters_cannot_book_one_workstation_at_the_same_time(
+    integration_database: Database,
+) -> None:
+    await seed_booking_case(integration_database)
+    async with integration_database.sessions() as session:
+        second_master = StaffMember(
+            business_id=1,
+            display_name="Второй мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+        session.add(second_master)
+        await session.flush()
+        session.add(
+            StaffServiceAssignment(
+                business_id=1,
+                staff_member_id=second_master.id,
+                service_id=1,
+                online_booking_enabled=True,
+                is_active=True,
+            )
+        )
+        session.add(
+            AvailabilityWindow(
+                business_id=1,
+                staff_member_id=second_master.id,
+                start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
+                end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
+                status=AvailabilityWindowStatus.OPEN,
+                created_by=1,
+            )
+        )
+        await session.commit()
+
+    booking = BookingService(
+        lambda: SqlAlchemyUnitOfWork(integration_database.sessions),
+        frozenset({900}),
+    )
+    first = booking_request("Анна", "+79991234567")
+    second = booking_request("Мария", "+79997654321").model_copy(update={"window_id": 2})
+
+    results = await asyncio.gather(
+        booking.book(ClientActor(telegram_id=101), first, now=NOW),
+        booking.book(ClientActor(telegram_id=202), second, now=NOW),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, BookingReceipt) for result in results) == 1
+    assert sum(isinstance(result, BookingConflictError) for result in results) == 1
+
+
+@pytest.mark.asyncio
+async def test_different_services_still_compete_for_the_same_workstation(
+    integration_database: Database,
+) -> None:
+    await seed_booking_case(integration_database)
+    async with integration_database.sessions() as session:
+        second_master = StaffMember(
+            business_id=1,
+            display_name="Второй мастер",
+            role=StaffRole.MASTER,
+            is_active=True,
+            is_bookable=True,
+        )
+        second_service = Service(
+            business_id=1,
+            name="Другая услуга",
+            price=Decimal("1800.00"),
+            duration_min_minutes=60,
+            duration_max_minutes=120,
+            is_active=True,
+        )
+        session.add_all([second_master, second_service])
+        await session.flush()
+        session.add(
+            StaffServiceAssignment(
+                business_id=1,
+                staff_member_id=second_master.id,
+                service_id=second_service.id,
+                online_booking_enabled=True,
+                is_active=True,
+            )
+        )
+        session.add(
+            WorkstationService(
+                business_id=1,
+                workstation_id=1,
+                service_id=second_service.id,
+                is_active=True,
+            )
+        )
+        session.add(
+            AvailabilityWindow(
+                business_id=1,
+                staff_member_id=second_master.id,
+                start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
+                end_at=datetime(2026, 7, 23, 10, 30, tzinfo=UTC),
+                status=AvailabilityWindowStatus.OPEN,
+                created_by=1,
+            )
+        )
+        await session.commit()
+
+    booking = BookingService(
+        lambda: SqlAlchemyUnitOfWork(integration_database.sessions),
+        frozenset({900}),
+    )
+    first = booking_request("Анна", "+79991234567")
+    second = booking_request("Мария", "+79997654321").model_copy(
+        update={"service_id": 2, "window_id": 2}
+    )
+
+    results = await asyncio.gather(
+        booking.book(ClientActor(telegram_id=101), first, now=NOW),
+        booking.book(ClientActor(telegram_id=202), second, now=NOW),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, BookingReceipt) for result in results) == 1
+    assert sum(isinstance(result, BookingConflictError) for result in results) == 1

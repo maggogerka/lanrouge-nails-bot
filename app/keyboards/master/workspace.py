@@ -28,6 +28,12 @@ def master_schedule_actions(*, is_paused: bool) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
+                text="➕ Открыть свободное окно",
+                callback_data=MasterScheduleCallback(action="add_window").pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text="Приостановить на 1 день",
                 callback_data=MasterScheduleCallback(action="pause_1").pack(),
             ),
@@ -35,7 +41,7 @@ def master_schedule_actions(*, is_paused: bool) -> InlineKeyboardMarkup:
                 text="На 7 дней",
                 callback_data=MasterScheduleCallback(action="pause_7").pack(),
             ),
-        ]
+        ],
     ]
     if is_paused:
         rows.append(

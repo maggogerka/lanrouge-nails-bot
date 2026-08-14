@@ -6,7 +6,6 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.schemas.authorization import StaffMemberView
-from app.schemas.service import ServiceView
 
 
 class WindowFormCallback(CallbackData, prefix="awf"):
@@ -27,24 +26,6 @@ def window_master_keyboard(masters: tuple[StaffMemberView, ...]) -> InlineKeyboa
                 )
             ]
             for master in masters
-        ]
-        + [[_cancel_button()]]
-    )
-
-
-def window_service_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"🛠 {service.name[:42]}",
-                    callback_data=WindowFormCallback(
-                        action="service",
-                        value=str(service.id),
-                    ).pack(),
-                )
-            ]
-            for service in services
         ]
         + [[_cancel_button()]]
     )

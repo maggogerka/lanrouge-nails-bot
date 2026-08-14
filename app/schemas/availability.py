@@ -15,7 +15,6 @@ class AvailabilityWindowCreate(BaseModel):
 
     local_date: date
     local_start_time: time
-    service_id: Annotated[int, Field(gt=0)]
     staff_member_id: Annotated[int, Field(gt=0)] | None = None
     duration_minutes: Annotated[int, Field(gt=0, le=24 * 60)] | None = None
     admin_comment: Annotated[str, Field(max_length=2000)] | None = None
@@ -76,10 +75,8 @@ class AvailabilityWindowPreview(BaseModel):
 
     start_at: datetime
     end_at: datetime
-    service_id: int
-    service_name: str
-    workstation_id: int
-    workstation_name: str
+    staff_member_id: int
+    master_name: str
     duration_minutes: int
     admin_comment: str | None
     timezone: str
