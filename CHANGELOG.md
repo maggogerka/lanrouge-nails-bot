@@ -23,6 +23,7 @@
 - negotiated-price services via an explicit zero price, with automatic fixed-prepayment reset;
 - bounded pagination for growing administrative and client lists.
 - a complete Russian operator guide covering client, master and administrative workflows.
+- separate quick-start, daily master, client and VPS deployment guides.
 
 ### Changed
 
