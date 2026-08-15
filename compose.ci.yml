@@ -1,5 +1,10 @@
 # CI-only runtime overrides. Never use this file for production deployment.
 services:
+  bot:
+    environment:
+      YOOKASSA_RETURN_URL: https://api.test/payment-return
+      YOOKASSA_FISCALIZATION_MODE: external
+
   api:
     environment:
       BOT_TOKEN: 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
@@ -7,6 +12,8 @@ services:
       MINI_APP_ALLOWED_ORIGINS: https://api.test
       API_RATE_LIMIT_SUBJECT_KEY: ci-rate-limit-subject-key-0123456789abcdef
       API_SESSION_SIGNING_KEY: ci-session-signing-key-0123456789abcdef
+      YOOKASSA_RETURN_URL: https://api.test/payment-return
+      YOOKASSA_FISCALIZATION_MODE: external
 
   backup:
     environment:

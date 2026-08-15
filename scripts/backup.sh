@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 set -eu
 
-python -m app.maintenance.backup_restore backup
+python -m app.maintenance.backup_restore backup --require-enabled

@@ -91,6 +91,19 @@ def test_missing_configuration_is_explicitly_disabled(capsys: object) -> None:
     assert json.loads(output)["status"] == "disabled"
 
 
+def test_production_scheduler_requires_backup_to_be_enabled(capsys: object) -> None:
+    assert run_cli(["backup", "--require-enabled"], environment={}) == 2
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert json.loads(output) == {
+        "operation": "backup",
+        "status": "disabled",
+        "started_at": json.loads(output)["started_at"],
+        "finished_at": json.loads(output)["finished_at"],
+        "duration_seconds": 0.0,
+        "error_code": "backup_disabled",
+    }
+
+
 def test_backup_uses_custom_0600_temp_streams_to_restic_and_applies_retention() -> None:
     runner = FakeRunner()
     settings = BackupSettings.from_environment(environment())
@@ -99,6 +112,7 @@ def test_backup_uses_custom_0600_temp_streams_to_restic_and_applies_retention() 
 
     assert result.status is MaintenanceStatus.SUCCEEDED
     assert [call.argv[:2] for call in runner.calls] == [
+        ("psql", "--no-password"),
         ("pg_dump", "--format=custom"),
         ("restic", "backup"),
         ("restic", "forget"),
@@ -107,7 +121,11 @@ def test_backup_uses_custom_0600_temp_streams_to_restic_and_applies_retention() 
     if os.name != "nt":
         assert runner.dump_mode == 0o600
     assert runner.dump_path is not None and not runner.dump_path.exists()
-    dump, backup, retention = runner.calls
+    source_check, dump, backup, retention = runner.calls
+    assert "alembic_version" in source_check.argv[-1]
+    assert "COUNT(*)" in source_check.argv[-1]
+    assert "ELSE 1 / 0" not in source_check.argv[-1]
+    assert source_check.environment["PGDATABASE"] == "app_db"
     assert "--no-password" in dump.argv
     assert backup.stdin_path == runner.dump_path
     assert "--stdin" in backup.argv
@@ -204,6 +222,22 @@ def test_local_repository_requires_explicit_test_environment() -> None:
     )
 
     assert settings.validate_backup().database == "app_db"
+
+
+def test_production_backup_requires_exact_expected_database_name() -> None:
+    missing = BackupSettings.from_environment(environment(APP_ENV="production"))
+    wrong = BackupSettings.from_environment(
+        environment(APP_ENV="production", BACKUP_EXPECTED_DATABASE_NAME="other_db")
+    )
+    valid = BackupSettings.from_environment(
+        environment(APP_ENV="production", BACKUP_EXPECTED_DATABASE_NAME="app_db")
+    )
+
+    with pytest.raises(BackupConfigurationError, match="EXPECTED_DATABASE_NAME"):
+        missing.validate_backup()
+    with pytest.raises(BackupConfigurationError, match="does not match"):
+        wrong.validate_backup()
+    assert valid.validate_backup().database == "app_db"
 
 
 def test_command_failure_has_stable_code_and_never_exposes_process_details() -> None:

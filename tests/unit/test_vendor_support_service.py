@@ -41,7 +41,7 @@ def test_authorized_roles_receive_safe_operational_context(role: StaffRole) -> N
 
     assert "Support &lt;CRM&gt;" in text
     assert "studio-01" in text
-    assert "0.4.2" in text
+    assert "0.4.3" in text
     assert "corr-123" in text
     assert "Не отправляйте токен" in text
     assert url == "https://vendor.example.test/help"

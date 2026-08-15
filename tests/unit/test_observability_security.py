@@ -45,7 +45,7 @@ def test_sentry_initialization_forces_no_pii_and_installs_scrubber() -> None:
     enabled = init_sentry(
         SecretStr("https://public@example.test/1"),
         environment="production",
-        release="v0.4.2",
+        release="v0.4.3",
         traces_sample_rate=0.05,
         sdk=sdk,
     )
@@ -71,7 +71,7 @@ def test_settings_observability_uses_environment_and_package_release() -> None:
     initialize.assert_called_once_with(
         settings.sentry_dsn,
         environment="production",
-        release="v0.4.2",
+        release="v0.4.3",
     )
 
 

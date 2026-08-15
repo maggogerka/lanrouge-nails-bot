@@ -36,6 +36,7 @@ BACKUP_KEEP_DAILY=7
 BACKUP_KEEP_WEEKLY=5
 BACKUP_KEEP_MONTHLY=12
 BACKUP_MAX_AGE_HOURS=26
+BACKUP_EXPECTED_DATABASE_NAME=<database>
 ```
 
 Вместо прямого PostgreSQL-пароля поддерживаются `DATABASE_PASSWORD_FILE` и полный защищённый
@@ -73,33 +74,62 @@ bash scripts/backup-freshness.sh
 
 ## Автоматический запуск на Ubuntu через systemd
 
-В `deploy/systemd/` лежат шаблоны ежедневного backup и ежечасной проверки свежести. Сначала
-откройте оба файла `*.service` и замените `WorkingDirectory=/opt/lanrouge-nails-bot` на абсолютный
-путь вашего checkout, если он отличается. Затем установите units:
+В `deploy/systemd/` лежат шаблоны ежедневного backup, ежечасной проверки свежести и ежемесячного
+restore-test. Все production jobs используют `--require-enabled`: выключенный backup считается
+ошибкой, а не успешным заданием. `psql` также проверяет наличие `public.alembic_version` перед
+`pg_dump`, поэтому пустая/чужая БД не создаёт ложный «успешный» snapshot.
+
+Установите защищённый environment-файл. В нём находятся только точное имя Compose-проекта и
+пути; сами пароли остаются в отдельных secret files:
 
 ```bash
-sudo install -m 0644 deploy/systemd/lanrouge-backup.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/lanrouge-backup.timer /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/lanrouge-backup-freshness.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/lanrouge-backup-freshness.timer /etc/systemd/system/
+sudo install -d -o root -g root -m 0700 /etc/telegram-crm /etc/telegram-crm/secrets
+sudo install -o root -g root -m 0600 deploy/systemd/backup.env.example /etc/telegram-crm/backup.env
+sudoedit /etc/telegram-crm/backup.env
+```
+
+Обязательно задайте уникальный `COMPOSE_PROJECT_NAME`, абсолютный `ENV_FILE` и абсолютные
+`POSTGRES_PASSWORD_SECRET_FILE`/`RESTIC_PASSWORD_SECRET_FILE`. В application `.env` задайте
+`APP_ENV=production`, `BACKUP_ENABLED=true` и точный `BACKUP_EXPECTED_DATABASE_NAME`. Не используйте
+project name другого клиента. Если checkout находится не в `/opt/telegram-crm-bot`, сначала
+исправьте `WorkingDirectory` во всех трёх service templates.
+
+Установите units:
+
+```bash
+sudo install -m 0644 deploy/systemd/telegram-crm-backup*.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/telegram-crm-backup*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now lanrouge-backup.timer lanrouge-backup-freshness.timer
-sudo systemctl list-timers 'lanrouge-backup*'
+sudo systemctl enable --now telegram-crm-backup.timer telegram-crm-backup-freshness.timer telegram-crm-backup-restore-test.timer
+sudo systemctl list-timers 'telegram-crm-backup*'
 ```
 
 `Persistent=true` запускает пропущенную задачу после включения VPS. Сначала выполните обе services
 вручную и убедитесь, что exit code успешный:
 
 ```bash
-sudo systemctl start lanrouge-backup.service
-sudo systemctl start lanrouge-backup-freshness.service
-sudo systemctl status lanrouge-backup.service lanrouge-backup-freshness.service
-sudo journalctl -u lanrouge-backup.service -u lanrouge-backup-freshness.service --since today
+sudo systemctl start telegram-crm-backup.service
+sudo systemctl start telegram-crm-backup-freshness.service
+sudo systemctl status telegram-crm-backup.service telegram-crm-backup-freshness.service
+sudo journalctl -u telegram-crm-backup.service -u telegram-crm-backup-freshness.service --since today
 ```
 
-Не помещайте секреты в `ExecStart` или unit-файлы: Compose монтирует PostgreSQL/restic password
-files. Настройте внешний alert на состояние `failed` любой из services — один systemd без системы
-мониторинга не отправит владельцу уведомление.
+Каждый service содержит `OnFailure=telegram-crm-backup-alert@%n.service`. Установите проверяемый
+root-owned executable `/usr/local/sbin/telegram-crm-backup-alert`, который принимает имя unit
+первым аргументом и отправляет событие во внешний мониторинг без содержимого environment/logs.
+До установки hook не включайте timers: иначе ошибка backup будет видна в systemd, но уведомление
+владельцу не уйдёт. Не помещайте секреты в `ExecStart`, unit или alert payload.
+
+При обновлении со старых unit names сначала установите и вручную проверьте новые units, затем:
+
+```bash
+sudo systemctl disable --now lanrouge-backup.timer lanrouge-backup-freshness.timer
+sudo rm -f /etc/systemd/system/lanrouge-backup.service /etc/systemd/system/lanrouge-backup.timer
+sudo rm -f /etc/systemd/system/lanrouge-backup-freshness.service /etc/systemd/system/lanrouge-backup-freshness.timer
+sudo systemctl daemon-reload
+```
+
+Эта миграция не затрагивает Compose volumes, PostgreSQL или restic snapshots.
 
 Дополнительный обязательный регламент:
 

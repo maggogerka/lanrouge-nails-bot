@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.3] - 2026-08-16
+
+### Fixed
+
+- maximum-length service and master cards are split into valid balanced Telegram HTML messages;
+- service-card navigation handles identical pages, media/text transitions and an empty catalog
+  without stale active controls;
+- YooKassa file secrets are mounted into both `bot` and `api`, while unconfirmed production
+  fiscalization remains fail-closed and does not disable manual prepayments;
+- production backup jobs fail when disabled, reject an unexpected/empty database and use explicit
+  Compose project/environment bindings;
+- irreversible actions use atomic actor/business/object-bound confirmations with a short TTL;
+- retries of composite broadcasts resume after the persisted media phase instead of resending it.
+
+### Operations
+
+- CI now runs automatically for `fix/**` and `release/**` and validates the YooKassa override;
+- neutral `telegram-crm-backup*` systemd units replace legacy branded names, including freshness,
+  monthly restore-test and an `OnFailure` alert hook.
+
 ## [0.4.2] - 2026-08-15
 
 ### Changed

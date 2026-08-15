@@ -114,6 +114,7 @@ class BackupSettings:
     keep_monthly: int = 12
     command_timeout_seconds: int = 3_600
     max_age_hours: int = 26
+    expected_database_name: str = ""
     allow_local_repository_for_tests: bool = False
     process_environment: Mapping[str, str] = field(default_factory=dict, repr=False)
 
@@ -174,6 +175,7 @@ class BackupSettings:
                 default=26,
                 maximum=168,
             ),
+            expected_database_name=source.get("BACKUP_EXPECTED_DATABASE_NAME", "").strip(),
             allow_local_repository_for_tests=allow_local_repository_for_tests,
             process_environment=source,
         )
@@ -195,7 +197,15 @@ class BackupSettings:
             or self.process_environment.get("RESTIC_PASSWORD_FILE", "").strip()
         ):
             raise BackupConfigurationError("restic encryption password is required")
-        return DatabaseTarget.from_url(self.database_url)
+        source = DatabaseTarget.from_url(self.database_url)
+        if self.process_environment.get("APP_ENV", "").strip() == "production":
+            if not self.expected_database_name:
+                raise BackupConfigurationError(
+                    "BACKUP_EXPECTED_DATABASE_NAME is required in production"
+                )
+            if source.database != self.expected_database_name:
+                raise BackupConfigurationError("backup database name does not match expectation")
+        return source
 
     def validate_restore(self) -> tuple[DatabaseTarget, DatabaseTarget]:
         source = self.validate_backup()
@@ -346,6 +356,7 @@ class BackupRestoreService:
         try:
             source = self._settings.validate_backup()
             with _secure_temporary_dump() as dump_path:
+                self._verify_source(source)
                 self._pg_dump(source, dump_path)
                 _require_nonempty_dump(dump_path, error_code="backup_dump_empty")
                 self._restic_backup(dump_path)
@@ -457,6 +468,26 @@ class BackupRestoreService:
                 timeout_seconds=self._settings.command_timeout_seconds,
             ),
             "pg_dump_failed",
+        )
+
+    def _verify_source(self, target: DatabaseTarget) -> None:
+        """Reject an empty/wrong database before creating a misleading snapshot."""
+
+        self._run(
+            CommandSpec(
+                argv=(
+                    "psql",
+                    "--no-password",
+                    "--no-psqlrc",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--command",
+                    "SELECT 1 / COUNT(*) FROM public.alembic_version",
+                ),
+                environment=_postgres_environment(self._settings.process_environment, target),
+                timeout_seconds=self._settings.command_timeout_seconds,
+            ),
+            "backup_source_schema_missing",
         )
 
     def _restic_backup(self, dump_path: Path) -> None:
@@ -846,6 +877,11 @@ def _configuration_failure(operation: MaintenanceOperation) -> MaintenanceHealth
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Encrypted PostgreSQL backup operations")
     parser.add_argument("operation", choices=("backup", "restore-test", "check-freshness"))
+    parser.add_argument(
+        "--require-enabled",
+        action="store_true",
+        help="fail when BACKUP_ENABLED is false (required for production schedulers)",
+    )
     return parser
 
 
@@ -873,8 +909,10 @@ def run_cli(
         else:
             result = service.check_freshness()
     print(json.dumps(result.as_dict(), ensure_ascii=False, separators=(",", ":")))
-    if result.status in {MaintenanceStatus.SUCCEEDED, MaintenanceStatus.DISABLED}:
+    if result.status is MaintenanceStatus.SUCCEEDED:
         return 0
+    if result.status is MaintenanceStatus.DISABLED:
+        return 2 if args.require_enabled else 0
     return 2 if result.error_code and "configuration" in result.error_code else 1
 
 

@@ -19,6 +19,8 @@ The Redis password must be at least 32 base64url-safe characters (`A-Z`, `a-z`,
 - `POSTGRES_PASSWORD_SECRET_FILE`
 - `REDIS_PASSWORD_SECRET_FILE`
 - `RESTIC_PASSWORD_SECRET_FILE`
+- `YOOKASSA_SHOP_ID_SECRET_FILE`
+- `YOOKASSA_SECRET_KEY_SECRET_FILE`
 
 For Compose file-backed secrets used by non-root containers, keep the containing
 directory mode `0700` and the individual files mode `0644`; the protected parent

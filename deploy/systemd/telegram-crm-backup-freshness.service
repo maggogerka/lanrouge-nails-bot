@@ -1,0 +1,16 @@
+[Unit]
+Description=Check freshness of Telegram CRM PostgreSQL backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=telegram-crm-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/telegram-crm-bot
+EnvironmentFile=/etc/telegram-crm/backup.env
+ExecStart=/usr/bin/docker compose --project-name ${COMPOSE_PROJECT_NAME} --env-file ${ENV_FILE} -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile backup run --rm backup python -m app.maintenance.backup_restore check-freshness --require-enabled
+TimeoutStartSec=30m
+
+[Install]
+WantedBy=multi-user.target
