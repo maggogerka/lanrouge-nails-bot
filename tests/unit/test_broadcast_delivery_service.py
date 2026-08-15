@@ -106,6 +106,23 @@ async def test_sent_recipient_is_never_prepared_or_marked_twice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_media_checkpoint_is_persisted_and_exposed_to_retry() -> None:
+    unit_of_work, target, _ = build_uow()
+    service = BroadcastDeliveryService(
+        lambda: unit_of_work,
+        lease_seconds=120,
+        max_attempts=5,  # type: ignore[arg-type]
+    )
+
+    assert await service.mark_media_sent(41, "worker", telegram_message_id=700)
+    assert target.telegram_message_id == 700
+    delivery = await service.prepare_delivery(41, "worker")
+
+    assert delivery is not None
+    assert delivery.media_checkpoint_message_id == 700
+
+
+@pytest.mark.asyncio
 async def test_forbidden_marks_user_and_snapshot_recipient_blocked() -> None:
     unit_of_work, target, user = build_uow()
     service = BroadcastDeliveryService(

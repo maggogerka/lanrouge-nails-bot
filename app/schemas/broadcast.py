@@ -103,6 +103,7 @@ class BroadcastDelivery(BaseModel):
     recipient_user_id: int
     recipient_telegram_id: int
     attempts: int
+    media_checkpoint_message_id: int | None = None
     text: str
     button_type: BroadcastButtonType
     button_text: str | None = None
