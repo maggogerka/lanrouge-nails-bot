@@ -9,6 +9,7 @@ from app.domain.enums import (
     ManualPaymentStatus,
     PaymentMode,
     PaymentStatus,
+    PortfolioStatus,
 )
 from app.domain.payments import PaymentType
 from app.keyboards.admin.appointments import admin_appointment_list_keyboard
@@ -21,9 +22,11 @@ from app.keyboards.admin.services import service_list_keyboard
 from app.keyboards.admin.windows import window_list_keyboard
 from app.keyboards.client.appointments import appointment_list_keyboard
 from app.keyboards.client.booking import BookingCallback, service_card_keyboard
+from app.keyboards.master.portfolio import master_portfolio_menu
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
 from app.schemas.availability import AvailabilityWindowView
 from app.schemas.payment import PaymentAdminSection, PaymentAdminView
+from app.schemas.portfolio import PortfolioItemView
 from app.schemas.service import ServiceView
 from app.schemas.workstation import WorkstationServiceView, WorkstationView
 
@@ -170,3 +173,27 @@ def test_workstation_and_its_service_assignments_are_bounded() -> None:
     assert len(details.inline_keyboard) <= 11
     assert any(button.text == "2/5" for row in listing.inline_keyboard for button in row)
     assert any(button.text == "2/5" for row in details.inline_keyboard for button in row)
+
+
+def test_master_portfolio_management_is_bounded() -> None:
+    items = [
+        PortfolioItemView(
+            id=index,
+            title=f"Work {index}",
+            description=None,
+            linked_service_id=None,
+            linked_service_name=None,
+            design_price=None,
+            status=PortfolioStatus.DRAFT,
+            sort_order=0,
+            published_at=None,
+            media=[],
+            tags=[],
+        )
+        for index in range(1, 9)
+    ]
+
+    keyboard = master_portfolio_menu(items, page=2, pages=5)
+
+    assert len(keyboard.inline_keyboard) <= 10
+    assert any(button.text == "2/5" for row in keyboard.inline_keyboard for button in row)

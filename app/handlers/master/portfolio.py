@@ -34,28 +34,46 @@ router = Router(name="master.portfolio")
 async def show_own_portfolio(
     message: Message,
     portfolio_service: PortfolioService,
+    *,
+    page_number: int = 1,
 ) -> None:
     if message.from_user is None:
         return
     page = await portfolio_service.list_admin(
         actor_from_telegram(message.from_user),
-        PageRequest(page=1, page_size=50),
+        PageRequest(page=page_number, page_size=8),
     )
     text = (
         "<b>Моё портфолио</b>\nВы можете добавлять и изменять только свои работы."
         if page.items
         else "<b>Моё портфолио</b>\nРабот пока нет. Добавьте первую фотографию."
     )
-    await message.answer(text, reply_markup=master_portfolio_menu(page.items))
+    await message.answer(
+        text,
+        reply_markup=master_portfolio_menu(page.items, page=page.page, pages=page.pages),
+    )
 
 
 @router.callback_query(MasterPortfolioCallback.filter(F.action == "list"))
 async def show_own_portfolio_callback(
     callback: CallbackQuery,
+    callback_data: MasterPortfolioCallback,
     portfolio_service: PortfolioService,
 ) -> None:
     if isinstance(callback.message, Message):
-        await show_own_portfolio(callback.message, portfolio_service)
+        page = await portfolio_service.list_admin(
+            actor_from_telegram(callback.from_user),
+            PageRequest(page=callback_data.page, page_size=8),
+        )
+        text = (
+            "<b>Моё портфолио</b>\nВы можете добавлять и изменять только свои работы."
+            if page.items
+            else "<b>Моё портфолио</b>\nРабот пока нет. Добавьте первую фотографию."
+        )
+        await callback.message.edit_text(
+            text,
+            reply_markup=master_portfolio_menu(page.items, page=page.page, pages=page.pages),
+        )
     await callback.answer()
 
 
@@ -208,7 +226,7 @@ async def show_own_portfolio_item(
     if isinstance(callback.message, Message):
         await callback.message.answer(
             _render_item(item),
-            reply_markup=master_portfolio_item_keyboard(item),
+            reply_markup=master_portfolio_item_keyboard(item, page=callback_data.page),
         )
     await callback.answer()
 
@@ -236,7 +254,7 @@ async def change_own_portfolio_status(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _render_item(item),
-            reply_markup=master_portfolio_item_keyboard(item),
+            reply_markup=master_portfolio_item_keyboard(item, page=callback_data.page),
         )
     await callback.answer("Статус обновлён.")
 

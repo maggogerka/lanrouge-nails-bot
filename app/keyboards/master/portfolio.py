@@ -10,9 +10,12 @@ from app.schemas.portfolio import PortfolioItemView
 class MasterPortfolioCallback(CallbackData, prefix="mpf"):
     action: str
     item_id: int = 0
+    page: int = 1
 
 
-def master_portfolio_menu(items: list[PortfolioItemView]) -> InlineKeyboardMarkup:
+def master_portfolio_menu(
+    items: list[PortfolioItemView], *, page: int = 1, pages: int = 1
+) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
@@ -20,11 +23,35 @@ def master_portfolio_menu(items: list[PortfolioItemView]) -> InlineKeyboardMarku
                 callback_data=MasterPortfolioCallback(
                     action="view",
                     item_id=item.id,
+                    page=page,
                 ).pack(),
             )
         ]
         for item in items
     ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=MasterPortfolioCallback(action="list", page=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=MasterPortfolioCallback(action="list", page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=MasterPortfolioCallback(action="list", page=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -74,7 +101,9 @@ def master_portfolio_save_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def master_portfolio_item_keyboard(item: PortfolioItemView) -> InlineKeyboardMarkup:
+def master_portfolio_item_keyboard(
+    item: PortfolioItemView, *, page: int = 1
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if item.status is not PortfolioStatus.PUBLISHED:
         rows.append(
@@ -84,6 +113,7 @@ def master_portfolio_item_keyboard(item: PortfolioItemView) -> InlineKeyboardMar
                     callback_data=MasterPortfolioCallback(
                         action="publish",
                         item_id=item.id,
+                        page=page,
                     ).pack(),
                 )
             ]
@@ -96,6 +126,7 @@ def master_portfolio_item_keyboard(item: PortfolioItemView) -> InlineKeyboardMar
                     callback_data=MasterPortfolioCallback(
                         action="archive",
                         item_id=item.id,
+                        page=page,
                     ).pack(),
                 )
             ]
@@ -104,7 +135,7 @@ def master_portfolio_item_keyboard(item: PortfolioItemView) -> InlineKeyboardMar
         [
             InlineKeyboardButton(
                 text="⬅️ Моё портфолио",
-                callback_data=MasterPortfolioCallback(action="list").pack(),
+                callback_data=MasterPortfolioCallback(action="list", page=page).pack(),
             )
         ]
     )
