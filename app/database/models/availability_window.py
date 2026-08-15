@@ -20,6 +20,18 @@ class AvailabilityWindow(TimestampMixin, Base):
     __tablename__ = "availability_windows"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
+    staff_member_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("staff_members.id", ondelete="RESTRICT"), nullable=False
+    )
+    service_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("services.id", ondelete="RESTRICT")
+    )
+    workstation_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workstations.id", ondelete="RESTRICT")
+    )
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[AvailabilityWindowStatus] = mapped_column(
@@ -38,11 +50,24 @@ class AvailabilityWindow(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("start_at < end_at", name="positive_duration"),
         ExcludeConstraint(
+            (staff_member_id, "="),
             (func.tstzrange(start_at, end_at, "[)"), "&&"),
             where=text("status IN ('open', 'reserved', 'booked')"),
             using="gist",
             name="ex_availability_windows_active_overlap",
         ),
-        Index("ix_availability_windows_status_start", "status", "start_at"),
-        Index("ix_availability_windows_start", "start_at"),
+        Index(
+            "ix_availability_windows_business_staff_status_start",
+            "business_id",
+            "staff_member_id",
+            "status",
+            "start_at",
+        ),
+        Index("ix_availability_windows_business_start", "business_id", "start_at"),
+        Index(
+            "ix_availability_windows_business_service_start",
+            "business_id",
+            "service_id",
+            "start_at",
+        ),
     )

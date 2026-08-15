@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.domain.enums import AppointmentStatus
 from app.schemas.appointment import AppointmentView
 from app.schemas.booking import BookingWindowView
 
@@ -18,9 +19,12 @@ class AppointmentCallback(CallbackData, prefix="appt"):
     action: str
     appointment_id: int
     object_id: int
+    page: int = 1
 
 
-def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyboardMarkup:
+def appointment_list_keyboard(
+    appointments: list[AppointmentView], *, page: int = 1, pages: int = 1
+) -> InlineKeyboardMarkup:
     rows = []
     for appointment in appointments:
         local = appointment.start_at.astimezone(ZoneInfo(appointment.timezone))
@@ -32,10 +36,40 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
                         action="view",
                         appointment_id=appointment.id,
                         object_id=0,
+                        page=page,
                     ).pack(),
                 )
             ]
         )
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=AppointmentCallback(
+                        action="list", appointment_id=0, object_id=0, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=AppointmentCallback(
+                    action="list", appointment_id=0, object_id=0, page=page
+                ).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=AppointmentCallback(
+                        action="list", appointment_id=0, object_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -44,6 +78,7 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
                     action="list",
                     appointment_id=0,
                     object_id=0,
+                    page=page,
                 ).pack(),
             )
         ]
@@ -53,35 +88,87 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
 
 def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if appointment.can_self_manage:
-        rows.extend(
+    can_reschedule = (
+        appointment.can_self_manage
+        if appointment.can_reschedule is None
+        else appointment.can_reschedule
+    )
+    is_active = appointment.status in {
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.CLIENT_CONFIRMED,
+    }
+    if is_active and can_reschedule:
+        rows.append(
             [
-                [
-                    InlineKeyboardButton(
-                        text="🔄 Перенести",
-                        callback_data=AppointmentCallback(
-                            action="reschedule",
-                            appointment_id=appointment.id,
-                            object_id=0,
-                        ).pack(),
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ Отменить",
-                        callback_data=AppointmentCallback(
-                            action="cancel_prompt",
-                            appointment_id=appointment.id,
-                            object_id=0,
-                        ).pack(),
-                    )
-                ],
+                InlineKeyboardButton(
+                    text="🔄 Перенести",
+                    callback_data=AppointmentCallback(
+                        action="reschedule",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ]
+        )
+    if is_active and appointment.can_self_manage:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить",
+                    callback_data=AppointmentCallback(
+                        action="cancel_prompt",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
             ]
         )
     rows.extend(
         [
-            [InlineKeyboardButton(text="Написать мастеру", url=appointment.master_telegram_url)],
-            [InlineKeyboardButton(text="📍 Открыть на карте", url=appointment.map_url)],
+            [
+                InlineKeyboardButton(
+                    text="🖼 Референсы",
+                    callback_data=AppointmentCallback(
+                        action="references",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ Добавить референс",
+                    callback_data=AppointmentCallback(
+                        action="references_add",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить референсы",
+                    callback_data=AppointmentCallback(
+                        action="references_clear_prompt",
+                        appointment_id=appointment.id,
+                        object_id=0,
+                    ).pack(),
+                ),
+            ],
+            *(
+                [
+                    [
+                        InlineKeyboardButton(
+                            text="💬 Написать мастеру", url=appointment.master_telegram_url
+                        )
+                    ]
+                ]
+                if appointment.master_telegram_url
+                else []
+            ),
+            *(
+                [[InlineKeyboardButton(text="📍 Открыть на карте", url=appointment.map_url)]]
+                if appointment.map_url
+                else []
+            ),
             [
                 InlineKeyboardButton(
                     text="⬅️ К списку",
@@ -95,6 +182,50 @@ def appointment_details_keyboard(appointment: AppointmentView) -> InlineKeyboard
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reference_edit_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Завершить",
+                    callback_data=AppointmentCallback(
+                        action="view",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ]
+        ]
+    )
+
+
+def clear_references_confirmation_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить все",
+                    callback_data=AppointmentCallback(
+                        action="references_clear",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Нет",
+                    callback_data=AppointmentCallback(
+                        action="view",
+                        appointment_id=appointment_id,
+                        object_id=0,
+                    ).pack(),
+                )
+            ],
+        ]
+    )
 
 
 def cancel_confirmation_keyboard(appointment_id: int) -> InlineKeyboardMarkup:
@@ -166,7 +297,11 @@ def reschedule_windows_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=local.strftime("%H:%M"),
+                    text=(
+                        f"{local:%H:%M} · {window.master_name}"
+                        if window.master_name
+                        else local.strftime("%H:%M")
+                    )[:64],
                     callback_data=AppointmentCallback(
                         action="rwindow",
                         appointment_id=appointment_id,

@@ -41,6 +41,9 @@ class NotificationJob(TimestampMixin, Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    business_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("businesses.id", ondelete="RESTRICT"), nullable=False
+    )
     appointment_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("appointments.id", ondelete="RESTRICT"),

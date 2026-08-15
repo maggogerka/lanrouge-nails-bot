@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from app.domain.enums import AppointmentStatus
+from app.domain.enums import AppointmentStatus, PaymentMode
 from app.schemas.booking import BookingWindowView
 
 
@@ -16,6 +16,7 @@ class AppointmentView(BaseModel):
 
     id: int
     service_name: str
+    master_name: str | None = None
     price: Decimal
     duration_min_minutes: int
     duration_max_minutes: int
@@ -24,9 +25,10 @@ class AppointmentView(BaseModel):
     end_at: datetime
     timezone: str
     address: str
-    map_url: str
-    master_telegram_url: str
+    map_url: str | None = None
+    master_telegram_url: str | None = None
     can_self_manage: bool
+    can_reschedule: bool | None = None
 
 
 class AdminAppointmentView(AppointmentView):
@@ -35,6 +37,12 @@ class AdminAppointmentView(AppointmentView):
     client_name: str
     client_phone: str | None
     client_username: str | None
+    client_telegram_id: int | None = None
+    client_comment: str | None = None
+    workstation_name: str | None = None
+    prepayment_amount: Decimal = Decimal("0")
+    payment_mode: PaymentMode = PaymentMode.DISABLED
+    reservation_expires_at: datetime | None = None
 
 
 class RescheduleAvailability(BaseModel):

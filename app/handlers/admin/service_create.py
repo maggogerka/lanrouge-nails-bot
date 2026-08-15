@@ -18,6 +18,7 @@ from app.keyboards.admin.services import (
     cancel_keyboard,
     service_details_keyboard,
 )
+from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.service import ServiceCreate
 from app.services.service_catalog import ServiceCatalog
 from app.states.admin_service import AdminServiceCreate
@@ -42,19 +43,25 @@ async def capture_service_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(name=name)
     await state.set_state(AdminServiceCreate.description)
-    await message.answer("Введите описание или отправьте «-», если его нет:")
+    await message.answer(
+        "Введите описание или пропустите этот шаг:", reply_markup=optional_input_keyboard()
+    )
 
 
 @router.message(AdminServiceCreate.description)
 async def capture_service_description(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
-    description = None if raw == "-" else raw
+    description = None if is_optional_skip(raw) else raw
     if description is not None and len(description) > 4000:
         await message.answer("Описание не должно превышать 4000 символов.")
         return
     await state.update_data(description=description)
     await state.set_state(AdminServiceCreate.price)
-    await message.answer("Введите стоимость в рублях, например 2500 или 2500.50:")
+    await message.answer(
+        "Введите стоимость в рублях, например 2500 или 2500.50.\n"
+        "Если точная стоимость обсуждается с мастером лично, отправьте <code>0</code> — "
+        "клиент увидит «Цена договорная»."
+    )
 
 
 @router.message(AdminServiceCreate.price)
@@ -87,6 +94,27 @@ async def capture_service_duration_min(message: Message, state: FSMContext) -> N
 
 
 @router.message(AdminServiceCreate.duration_max)
+async def capture_service_duration_max(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    maximum = parse_positive_minutes(message.text)
+    if maximum is None:
+        await message.answer("Введите целое число минут от 1 до 1440.")
+        return
+    data = await state.get_data()
+    minimum = data.get("duration_min_minutes")
+    if not isinstance(minimum, int) or minimum > maximum:
+        await message.answer("Максимальная длительность не может быть меньше минимальной.")
+        return
+    await state.update_data(duration_max_minutes=maximum)
+    await state.set_state(AdminServiceCreate.prepayment)
+    await message.answer(
+        "Введите фиксированную предоплату в рублях. Отправьте 0, чтобы отключить предоплату:"
+    )
+
+
+@router.message(AdminServiceCreate.prepayment)
 async def finish_service_creation(
     message: Message,
     state: FSMContext,
@@ -95,9 +123,9 @@ async def finish_service_creation(
 ) -> None:
     if message.from_user is None:
         return
-    maximum = parse_positive_minutes(message.text)
-    if maximum is None:
-        await message.answer("Введите целое число минут от 1 до 1440.")
+    prepayment = parse_price(message.text)
+    if prepayment is None:
+        await message.answer("Введите сумму, например 500, или 0 для отключения.")
         return
     data = await state.get_data()
     try:
@@ -106,10 +134,13 @@ async def finish_service_creation(
             description=data.get("description"),
             price=data["price"],
             duration_min_minutes=data["duration_min_minutes"],
-            duration_max_minutes=maximum,
+            duration_max_minutes=data["duration_max_minutes"],
+            prepayment_amount=prepayment,
         )
     except (ValidationError, KeyError):
-        await message.answer("Проверьте цену и диапазон длительности.")
+        await message.answer(
+            "Предоплата должна быть положительной либо равна нулю и не превышать цену услуги."
+        )
         return
     service = await service_catalog.create_service(
         actor_from_telegram(message.from_user),

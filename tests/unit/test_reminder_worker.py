@@ -22,12 +22,12 @@ def delivery() -> NotificationDelivery:
         notification_type=NotificationType.CLIENT_REMINDER,
         offset_minutes=1440,
         attempts=2,
-        service_name="Маникюр <premium>",
+        service_name="Консультация <premium>",
         start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
         timezone="Europe/Moscow",
         address="Дом <20>",
         map_url="https://example.com/map",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         client_name="Анна",
         client_phone="+79991234567",
     )
@@ -39,7 +39,7 @@ def test_24_hour_client_reminder_is_safe_and_has_confirmation_button() -> None:
     text = render_reminder(item)
     keyboard = reminder_keyboard(item)
 
-    assert "Маникюр &lt;premium&gt;" in text
+    assert "Консультация &lt;premium&gt;" in text
     assert "Дом &lt;20&gt;" in text
     assert "Подтверждаю визит" in keyboard.inline_keyboard[0][0].text
 

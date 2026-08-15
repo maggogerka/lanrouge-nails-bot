@@ -29,8 +29,12 @@ def build_uow() -> MagicMock:
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.staff.list_active_by_roles = AsyncMock(
+        return_value=[(SimpleNamespace(), SimpleNamespace(id=9, is_blocked=False))]
+    )
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.audit.add = AsyncMock()
+    unit_of_work.notifications.cancel_unsent_by_type = AsyncMock(return_value=3)
     unit_of_work.commit = AsyncMock()
     return unit_of_work
 
@@ -38,6 +42,41 @@ def build_uow() -> MagicMock:
 def test_reminder_offsets_must_be_unique_and_non_empty() -> None:
     with pytest.raises(ValidationError, match="unique"):
         BusinessSettingsPatch(reminder_offsets_minutes=[60, 60])
+
+    with pytest.raises(ValidationError, match="1-5"):
+        BusinessSettingsPatch(reminder_offsets_minutes=[1, 2, 3, 4, 5, 6])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("portfolio_max_media", 11),
+        ("broadcast_messages_per_second", 21),
+        ("repeat_booking_reminder_days", 0),
+        ("client_page_size", 51),
+        ("availability_date_picker_days", 63),
+        ("booking_reference_max_media", 11),
+        ("future_booking_limit_max", 101),
+        ("future_booking_limit_horizon_days", 366),
+    ],
+)
+def test_v020_settings_enforce_documented_bounds(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        BusinessSettingsPatch.model_validate({field: value})
+
+
+def test_v030_time_step_and_external_url_are_validated() -> None:
+    with pytest.raises(ValidationError, match="divide"):
+        BusinessSettingsPatch(availability_time_step_minutes=61)
+    with pytest.raises(ValidationError, match="HTTPS"):
+        BusinessSettingsPatch(external_portfolio_url="http://example.com/portfolio")
+
+    assert (
+        BusinessSettingsPatch(
+            external_portfolio_url="https://example.com/portfolio"
+        ).external_portfolio_url
+        == "https://example.com/portfolio"
+    )
 
 
 @pytest.mark.asyncio
@@ -62,6 +101,23 @@ async def test_setting_update_locks_row_increments_version_and_audits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_disabling_reviews_cancels_pending_review_jobs() -> None:
+    unit_of_work = build_uow()
+    service = SettingsService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    updated = await service.update(
+        AdminActor(telegram_id=900),
+        BusinessSettingsPatch(reviews_enabled=False),
+        now=NOW,
+    )
+
+    assert not updated.reviews_enabled
+    unit_of_work.notifications.cancel_unsent_by_type.assert_awaited_once_with(
+        NotificationType.REVIEW_REQUEST
+    )
+
+
+@pytest.mark.asyncio
 async def test_reminder_offset_update_rebuilds_only_unsent_future_jobs() -> None:
     unit_of_work = build_uow()
     client = User(id=5, telegram_id=101, is_blocked=False)
@@ -70,7 +126,7 @@ async def test_reminder_offset_update_rebuilds_only_unsent_future_jobs() -> None
         client_id=5,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2500.00"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,

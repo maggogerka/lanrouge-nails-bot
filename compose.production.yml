@@ -1,0 +1,14 @@
+# Apply with: docker compose -f docker-compose.yml -f compose.production.yml up -d
+# Application containers inherit read-only filesystems, dropped capabilities,
+# PID/CPU/memory limits, and log rotation from docker-compose.yml.
+services:
+  postgres:
+    pids_limit: 256
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2.0}
+    shm_size: ${POSTGRES_SHM_SIZE:-256m}
+
+  redis:
+    pids_limit: 128
+    mem_limit: ${REDIS_MEMORY_LIMIT:-512m}
+    cpus: ${REDIS_CPU_LIMIT:-1.0}

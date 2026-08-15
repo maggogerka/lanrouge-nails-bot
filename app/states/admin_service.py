@@ -11,6 +11,7 @@ class AdminServiceCreate(StatesGroup):
     price = State()
     duration_min = State()
     duration_max = State()
+    prepayment = State()
 
 
 class AdminServiceEdit(StatesGroup):
@@ -20,3 +21,21 @@ class AdminServiceEdit(StatesGroup):
     description = State()
     price = State()
     duration = State()
+    prepayment = State()
+    photo = State()
+
+
+class AdminAddonCreate(StatesGroup):
+    name = State()
+    description = State()
+    price = State()
+    duration = State()
+    photo = State()
+
+
+class AdminAddonEdit(StatesGroup):
+    name = State()
+    description = State()
+    price = State()
+    duration = State()
+    photo = State()

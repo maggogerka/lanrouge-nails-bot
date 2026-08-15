@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -50,7 +51,7 @@ def appointment(
         client_id=5,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2500.00"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,
@@ -71,11 +72,11 @@ def window() -> AvailabilityWindow:
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Новоостаповская, д. 20",
         map_url="https://yandex.ru/maps/-/CTbJz23i",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,
@@ -84,6 +85,7 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        reviews_enabled=True,
         version=1,
     )
 
@@ -108,13 +110,66 @@ def build_uow(
     unit_of_work.notifications.get = AsyncMock(return_value=target_job)
     unit_of_work.notifications.claim_due = AsyncMock(return_value=[target_job])
     unit_of_work.appointments.get = AsyncMock(return_value=appointment(status=appointment_status))
+    unit_of_work.appointments.has_future_active_for_client = AsyncMock(return_value=False)
     unit_of_work.users.get_by_id = AsyncMock(return_value=recipient)
     unit_of_work.users.mark_blocked = AsyncMock()
     unit_of_work.windows.get = AsyncMock(return_value=window())
     unit_of_work.settings.get = AsyncMock(return_value=settings())
+    unit_of_work.features.get = AsyncMock(
+        return_value=SimpleNamespace(reminders=True, reviews=True, repeat_booking=True)
+    )
+    unit_of_work.reviews.get_for_appointment = AsyncMock(return_value=None)
     unit_of_work.session.flush = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work, target_job, recipient
+
+
+@pytest.mark.asyncio
+async def test_review_request_is_delivered_only_for_completed_without_existing_review() -> None:
+    target_job = job()
+    target_job.notification_type = NotificationType.REVIEW_REQUEST
+    unit_of_work, target_job, _ = build_uow(
+        target_job=target_job,
+        appointment_status=AppointmentStatus.COMPLETED,
+    )
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    delivery = await service.prepare_delivery(21, "worker-1", now=NOW)
+    assert delivery is not None
+    assert delivery.notification_type is NotificationType.REVIEW_REQUEST
+
+    unit_of_work.reviews.get_for_appointment.return_value = object()
+    cancelled = await service.prepare_delivery(21, "worker-1", now=NOW)
+    assert cancelled is None
+    assert target_job.status is NotificationJobStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_repeat_reminder_requires_live_marketing_consent_and_no_future_booking() -> None:
+    target_job = job()
+    target_job.notification_type = NotificationType.REPEAT_BOOKING_REMINDER
+    unit_of_work, target_job, recipient = build_uow(
+        target_job=target_job,
+        appointment_status=AppointmentStatus.COMPLETED,
+    )
+    recipient.marketing_consent_at = NOW
+    recipient.repeat_booking_opt_out_at = None
+    unit_of_work.services.get = AsyncMock(return_value=SimpleNamespace(is_active=True))
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is not None
+
+    unit_of_work.appointments.has_future_active_for_client.return_value = True
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is None
+    assert target_job.last_error == "repeat_booking_not_actionable"
 
 
 @pytest.mark.asyncio
@@ -151,6 +206,23 @@ async def test_cancelled_appointment_is_not_prepared_for_delivery() -> None:
     assert target_job.status is NotificationJobStatus.CANCELLED
     assert target_job.last_error == "appointment_inactive"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disabled_reminders_are_cancelled_before_loading_client_data() -> None:
+    unit_of_work, target_job, _ = build_uow()
+    unit_of_work.features.get.return_value.reminders = False
+    service = NotificationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        lease_seconds=120,
+        max_attempts=5,
+    )
+
+    assert await service.prepare_delivery(21, "worker-1", now=NOW) is None
+
+    assert target_job.status is NotificationJobStatus.CANCELLED
+    assert target_job.last_error == "feature_disabled"
+    unit_of_work.appointments.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio

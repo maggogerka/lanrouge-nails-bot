@@ -15,6 +15,7 @@ class AvailabilityWindowCreate(BaseModel):
 
     local_date: date
     local_start_time: time
+    staff_member_id: Annotated[int, Field(gt=0)] | None = None
     duration_minutes: Annotated[int, Field(gt=0, le=24 * 60)] | None = None
     admin_comment: Annotated[str, Field(max_length=2000)] | None = None
     status: AvailabilityWindowStatus = AvailabilityWindowStatus.OPEN
@@ -50,6 +51,12 @@ class AvailabilityWindowView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    staff_member_id: int = 1
+    master_name: str | None = None
+    service_id: int | None = None
+    service_name: str | None = None
+    workstation_id: int | None = None
+    workstation_name: str | None = None
     start_at: datetime
     end_at: datetime
     status: AvailabilityWindowStatus
@@ -60,6 +67,24 @@ class AvailabilityWindowView(BaseModel):
     def timestamps_must_be_aware(self) -> Self:
         if self.start_at.tzinfo is None or self.end_at.tzinfo is None:
             raise ValueError("window timestamps must be timezone-aware")
+        return self
+
+
+class AvailabilityWindowPreview(BaseModel):
+    """Validated interval used by the explicit creation confirmation screen."""
+
+    start_at: datetime
+    end_at: datetime
+    staff_member_id: int
+    master_name: str
+    duration_minutes: int
+    admin_comment: str | None
+    timezone: str
+
+    @model_validator(mode="after")
+    def timestamps_must_be_aware(self) -> Self:
+        if self.start_at.tzinfo is None or self.end_at.tzinfo is None:
+            raise ValueError("preview timestamps must be timezone-aware")
         return self
 
 

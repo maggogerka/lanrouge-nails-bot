@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
-from app.database.models import AvailabilityWindow, BusinessSettings
+from app.database.models import AvailabilityWindow, BusinessSettings, StaffMember, User
 from app.domain.availability import (
     ExistingInterval,
     WindowRules,
@@ -21,14 +21,21 @@ from app.domain.errors import (
     EntityNotFoundError,
     WindowInUseError,
     WindowStateError,
+    WindowValidationError,
 )
+from app.domain.tenancy import DEFAULT_STAFF_MEMBER_ID
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from app.schemas.authorization import StaffContext
 from app.schemas.availability import (
     AvailabilityWindowCreate,
     AvailabilityWindowList,
+    AvailabilityWindowPreview,
     AvailabilityWindowView,
 )
-from app.schemas.service import AdminActor
+from app.schemas.service import AdminActor, ServiceView
+from app.schemas.settings import BusinessSettingsView
+from app.services.appointment_common import ensure_admin, ensure_owner_admin
+from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -48,17 +55,38 @@ class AvailabilityService:
         self,
         actor: AdminActor,
         *,
+        include_archived: bool = False,
         now: datetime | None = None,
     ) -> AvailabilityWindowList:
         self._ensure_admin(actor)
         current_time = self._aware_now(now)
         async with self._unit_of_work_factory() as unit_of_work:
             settings = await self._settings(unit_of_work)
-            windows = await unit_of_work.windows.list_upcoming(current_time)
+            windows = await unit_of_work.windows.list_upcoming(
+                current_time,
+                include_archived=include_archived,
+            )
             return AvailabilityWindowList(
                 timezone=settings.timezone,
-                windows=[self._view(window, settings.timezone) for window in windows],
+                windows=[
+                    await self._view(unit_of_work, window, settings.timezone) for window in windows
+                ],
             )
+
+    async def list_services_for_staff(
+        self,
+        actor: AdminActor,
+        staff_member_id: int,
+    ) -> list[ServiceView]:
+        """Return services a selected master can actually accept."""
+
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as unit_of_work:
+            rows = await unit_of_work.service_assignments.list_bookable_services_for_staff(
+                unit_of_work.business_id,
+                staff_member_id,
+            )
+            return [ServiceView.model_validate(service) for _, service in rows]
 
     async def get_window(
         self,
@@ -69,20 +97,23 @@ class AvailabilityService:
         async with self._unit_of_work_factory() as unit_of_work:
             settings = await self._settings(unit_of_work)
             window = await self._window(unit_of_work, window_id)
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def create_window(
         self,
-        actor: AdminActor,
+        actor: AdminActor | StaffContext,
         values: AvailabilityWindowCreate,
         *,
         now: datetime | None = None,
         correlation_id: str | None = None,
     ) -> AvailabilityWindowView:
-        self._ensure_admin(actor)
+        staff_member_id = values.staff_member_id or DEFAULT_STAFF_MEMBER_ID
+        self._ensure_window_actor(actor, staff_member_id)
         current_time = self._aware_now(now)
         async with self._unit_of_work_factory() as unit_of_work:
-            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            if isinstance(actor, StaffContext) and actor.business_id != unit_of_work.business_id:
+                raise AuthorizationError("Окна другого бизнеса недоступны.")
+            actor_user = await self._actor_user(unit_of_work, actor)
             settings = await self._settings(unit_of_work)
             rules = self._rules(settings)
             duration = values.duration_minutes or settings.default_window_duration_minutes
@@ -100,17 +131,22 @@ class AvailabilityService:
                 rules=rules,
             )
 
-            if values.status is AvailabilityWindowStatus.OPEN:
-                await self._lock_and_validate_active_interval(
-                    unit_of_work,
-                    settings,
-                    local_date=values.local_date,
-                    start_at=start_at,
-                    end_at=end_at,
-                )
+            master = await self._lock_and_validate_active_interval(
+                unit_of_work,
+                settings,
+                local_date=values.local_date,
+                start_at=start_at,
+                end_at=end_at,
+                staff_member_id=staff_member_id,
+                validate_schedule=values.status is AvailabilityWindowStatus.OPEN,
+            )
 
             window = await unit_of_work.windows.add(
                 AvailabilityWindow(
+                    business_id=unit_of_work.business_id,
+                    staff_member_id=master.id,
+                    service_id=None,
+                    workstation_id=None,
                     start_at=start_at,
                     end_at=end_at,
                     status=values.status,
@@ -126,8 +162,75 @@ class AvailabilityService:
                 changes={"after": self._audit_values(window)},
                 correlation_id=correlation_id,
             )
+            if window.status is AvailabilityWindowStatus.OPEN:
+                await enqueue_waitlist_matches(
+                    unit_of_work,
+                    window,
+                    settings,
+                    now=current_time,
+                    correlation_id=correlation_id,
+                )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
+
+    async def preview_window(
+        self,
+        actor: AdminActor | StaffContext,
+        values: AvailabilityWindowCreate,
+        *,
+        now: datetime | None = None,
+    ) -> AvailabilityWindowPreview:
+        """Validate a draft without persisting it; final creation validates again."""
+
+        staff_member_id = values.staff_member_id or DEFAULT_STAFF_MEMBER_ID
+        self._ensure_window_actor(actor, staff_member_id)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            if isinstance(actor, StaffContext) and actor.business_id != unit_of_work.business_id:
+                raise AuthorizationError("Окна другого бизнеса недоступны.")
+            settings = await self._settings(unit_of_work)
+            duration = values.duration_minutes or settings.default_window_duration_minutes
+            start_at, end_at = local_window_to_utc(
+                values.local_date,
+                values.local_start_time,
+                duration,
+                settings.timezone,
+            )
+            validate_calendar_rules(
+                local_date=values.local_date,
+                start_at=start_at,
+                end_at=end_at,
+                now=current_time,
+                rules=self._rules(settings),
+            )
+            master = await self._lock_and_validate_active_interval(
+                unit_of_work,
+                settings,
+                local_date=values.local_date,
+                start_at=start_at,
+                end_at=end_at,
+                staff_member_id=staff_member_id,
+                validate_schedule=values.status is AvailabilityWindowStatus.OPEN,
+            )
+            return AvailabilityWindowPreview(
+                start_at=start_at,
+                end_at=end_at,
+                staff_member_id=master.id,
+                master_name=master.display_name,
+                duration_minutes=duration,
+                admin_comment=values.admin_comment,
+                timezone=settings.timezone,
+            )
+
+    async def get_creation_settings(self, actor: StaffContext) -> BusinessSettingsView:
+        """Return safe calendar rules for a master opening only their own time."""
+
+        self._ensure_window_actor(actor, actor.staff_member_id)
+        async with self._unit_of_work_factory() as unit_of_work:
+            if actor.business_id != unit_of_work.business_id:
+                raise AuthorizationError("Настройки другого бизнеса недоступны.")
+            settings = await self._settings(unit_of_work)
+            return BusinessSettingsView.model_validate(settings)
 
     async def close_window(
         self,
@@ -153,7 +256,7 @@ class AvailabilityService:
                 correlation_id=correlation_id,
             )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def reopen_window(
         self,
@@ -185,6 +288,7 @@ class AvailabilityService:
                 local_date=local_date,
                 start_at=window.start_at,
                 end_at=window.end_at,
+                staff_member_id=window.staff_member_id,
                 exclude_id=window.id,
             )
             window.status = AvailabilityWindowStatus.OPEN
@@ -196,8 +300,15 @@ class AvailabilityService:
                 before=AvailabilityWindowStatus.CLOSED,
                 correlation_id=correlation_id,
             )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
+                correlation_id=correlation_id,
+            )
             await unit_of_work.commit()
-            return self._view(window, settings.timezone)
+            return await self._view(unit_of_work, window, settings.timezone)
 
     async def delete_unused_window(
         self,
@@ -228,6 +339,37 @@ class AvailabilityService:
             await unit_of_work.windows.delete(window)
             await unit_of_work.commit()
 
+    async def force_delete_window(
+        self,
+        actor: AdminActor,
+        window_id: int,
+        *,
+        correlation_id: str | None = None,
+    ) -> int:
+        """Permanently remove a window and its appointment aggregate."""
+
+        ensure_owner_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            window = await self._window(unit_of_work, window_id, for_update=True)
+            before = self._audit_values(window)
+            deleted_appointments = await unit_of_work.hard_delete.delete_window_with_history(
+                window_id
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="availability_window.force_deleted",
+                entity_type="availability_window",
+                entity_id=str(window_id),
+                changes={
+                    "before": before,
+                    "deleted_appointments": deleted_appointments,
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return deleted_appointments
+
     async def _lock_and_validate_active_interval(
         self,
         unit_of_work: SqlAlchemyUnitOfWork,
@@ -236,13 +378,56 @@ class AvailabilityService:
         local_date: date,
         start_at: datetime,
         end_at: datetime,
+        staff_member_id: int = DEFAULT_STAFF_MEMBER_ID,
         exclude_id: int | None = None,
-    ) -> None:
-        await unit_of_work.windows.lock_local_date(local_date)
+        validate_schedule: bool = True,
+    ) -> StaffMember:
+        master = await unit_of_work.staff.get_by_id(
+            unit_of_work.business_id,
+            staff_member_id,
+            for_update=True,
+        )
+        if master is None or not master.is_active or not master.is_bookable:
+            raise WindowValidationError(
+                "Мастер недоступен для записи. Проверьте его профиль в разделе сотрудников."
+            )
+        assignments = await unit_of_work.service_assignments.list_bookable_services_for_staff(
+            unit_of_work.business_id,
+            staff_member_id,
+        )
+        if not assignments:
+            raise WindowValidationError(
+                "У мастера нет услуг для онлайн-записи. Сначала назначьте их в его карточке."
+            )
+        duration_minutes = int((end_at - start_at).total_seconds() // 60)
+        fitting_services = [
+            service
+            for _, service in assignments
+            if service.duration_max_minutes <= duration_minutes
+        ]
+        if not fitting_services:
+            shortest = min(service.duration_max_minutes for _, service in assignments)
+            raise WindowValidationError(
+                f"Окно слишком короткое: самая короткая доступная услуга требует до {shortest} мин."
+            )
+        has_resource = False
+        for service in fitting_services:
+            if await unit_of_work.workstations.list_active_for_service(service.id):
+                has_resource = True
+                break
+        if not has_resource:
+            raise WindowValidationError(
+                "Для услуг мастера не настроено ни одного рабочего места. "
+                "Откройте «Настройки бизнеса → Рабочие места»."
+            )
+        if not validate_schedule:
+            return master
+        await unit_of_work.windows.lock_local_date(local_date, staff_member_id=staff_member_id)
         day_start, day_end = utc_day_bounds(local_date, settings.timezone)
         existing = await unit_of_work.windows.list_active_between(
             day_start,
             day_end,
+            staff_member_id=staff_member_id,
             exclude_id=exclude_id,
             for_update=True,
         )
@@ -253,6 +438,7 @@ class AvailabilityService:
             max_windows_per_day=settings.max_appointments_per_day,
             minimum_gap_minutes=settings.minimum_gap_minutes,
         )
+        return master
 
     async def _audit_status(
         self,
@@ -273,8 +459,30 @@ class AvailabilityService:
         )
 
     def _ensure_admin(self, actor: AdminActor) -> None:
-        if actor.telegram_id not in self._admin_telegram_ids:
-            raise AuthorizationError("Administrative access denied")
+        ensure_admin(actor, self._admin_telegram_ids)
+
+    def _ensure_window_actor(
+        self,
+        actor: AdminActor | StaffContext,
+        staff_member_id: int,
+    ) -> None:
+        if isinstance(actor, StaffContext):
+            if actor.staff_member_id != staff_member_id or not actor.is_bookable:
+                raise AuthorizationError("Мастер может открывать окна только для себя.")
+            return
+        self._ensure_admin(actor)
+
+    @staticmethod
+    async def _actor_user(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        actor: AdminActor | StaffContext,
+    ) -> User:
+        if isinstance(actor, StaffContext):
+            user = await unit_of_work.users.get_by_id(actor.user_id)
+            if user is None:
+                raise AuthorizationError("Профиль мастера больше недоступен.")
+            return user
+        return await unit_of_work.users.get_or_create_admin(actor)
 
     @staticmethod
     async def _settings(unit_of_work: SqlAlchemyUnitOfWork) -> BusinessSettings:
@@ -308,9 +516,33 @@ class AvailabilityService:
         )
 
     @staticmethod
-    def _view(window: AvailabilityWindow, timezone: str) -> AvailabilityWindowView:
+    async def _view(
+        unit_of_work: SqlAlchemyUnitOfWork,
+        window: AvailabilityWindow,
+        timezone: str,
+    ) -> AvailabilityWindowView:
+        master = await unit_of_work.staff.get_by_id(
+            unit_of_work.business_id,
+            window.staff_member_id,
+        )
+        service = (
+            await unit_of_work.services.get(window.service_id)
+            if window.service_id is not None
+            else None
+        )
+        workstation = (
+            await unit_of_work.workstations.get(window.workstation_id)
+            if window.workstation_id is not None
+            else None
+        )
         return AvailabilityWindowView(
             id=window.id,
+            staff_member_id=window.staff_member_id,
+            master_name=master.display_name if master is not None else None,
+            service_id=window.service_id,
+            service_name=service.name if service is not None else None,
+            workstation_id=window.workstation_id,
+            workstation_name=workstation.name if workstation is not None else None,
             start_at=window.start_at,
             end_at=window.end_at,
             status=window.status,
@@ -324,6 +556,8 @@ class AvailabilityService:
             "start_at": window.start_at.isoformat(),
             "end_at": window.end_at.isoformat(),
             "status": window.status.value,
+            "service_id": window.service_id,
+            "workstation_id": window.workstation_id,
             "has_admin_comment": window.admin_comment is not None,
         }
 

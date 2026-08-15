@@ -3,26 +3,39 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.database.models import (
     Appointment,
+    AppointmentReferenceMedia,
     AppointmentStatusHistory,
     AvailabilityWindow,
     BusinessSettings,
+    NotificationJob,
     User,
 )
 from app.domain.appointments import (
     ensure_active_appointment,
+    ensure_appointment_transition,
     ensure_client_change_deadline,
 )
 from app.domain.availability import utc_day_bounds
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
-from app.domain.errors import AppointmentNotFoundError, AppointmentStateError
+from app.domain.enums import (
+    AppointmentStatus,
+    AvailabilityWindowStatus,
+    MediaType,
+    NotificationType,
+)
+from app.domain.errors import (
+    AppointmentNotFoundError,
+    AppointmentStateError,
+    CancellationDeadlineError,
+)
+from app.domain.reference_retention import ReferenceRetentionPolicy, anonymize_reference
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
-from app.schemas.booking import ClientActor
+from app.schemas.booking import ClientActor, ReferenceMediaDraft, ReferenceMediaView
 from app.schemas.service import AdminActor
 from app.services.appointment_common import (
     admin_appointment_view,
@@ -30,6 +43,7 @@ from app.services.appointment_common import (
     ensure_admin,
     ensure_owner,
 )
+from app.services.waitlist_matching import enqueue_waitlist_matches
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -41,9 +55,12 @@ class AppointmentService:
         self,
         unit_of_work_factory: UnitOfWorkFactory,
         admin_telegram_ids: frozenset[int],
+        *,
+        reference_retention_policy: ReferenceRetentionPolicy | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._admin_telegram_ids = admin_telegram_ids
+        self._reference_retention_policy = reference_retention_policy or ReferenceRetentionPolicy()
 
     async def list_my(
         self,
@@ -76,6 +93,140 @@ class AppointmentService:
             window = await self._window(unit_of_work, appointment.window_id)
             settings = await self._settings(unit_of_work)
             return appointment_view(appointment, window, settings, current_time)
+
+    async def list_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+    ) -> list[ReferenceMediaView]:
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id)
+            ensure_owner(appointment, client)
+            rows = await unit_of_work.reference_media.list_active(appointment.id)
+            return [self._reference_view(row) for row in rows]
+
+    async def list_admin_reference_media(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+    ) -> list[ReferenceMediaView]:
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            appointment = await self._appointment(unit_of_work, appointment_id)
+            rows = await unit_of_work.reference_media.list_active(appointment.id)
+            return [self._reference_view(row) for row in rows]
+
+    async def request_admin_reference_cleanup(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> int:
+        """Authorize and mark all active references for immediate cleanup."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            admin = await unit_of_work.users.get_or_create_admin(actor)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            count = await unit_of_work.reference_media.set_expiry_for_appointment(
+                appointment.id, current_time
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=admin.id,
+                action="booking_reference.cleanup_requested",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={"reference_count": count, "immediate": True},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return count
+
+    async def add_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+        values: ReferenceMediaDraft,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> ReferenceMediaView:
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            ensure_owner(appointment, client)
+            settings = await self._settings(unit_of_work)
+            window = await self._window(unit_of_work, appointment.window_id)
+            self._ensure_reference_editable(appointment, window, settings, current_time)
+            active = await unit_of_work.reference_media.list_active(appointment.id)
+            if len(active) >= settings.booking_reference_max_media:
+                raise AppointmentStateError(
+                    f"Можно прикрепить не более {settings.booking_reference_max_media} фотографий."
+                )
+            if any(row.telegram_file_unique_id == values.telegram_file_unique_id for row in active):
+                raise AppointmentStateError("Эта фотография уже прикреплена к записи.")
+            position = max((row.position for row in active), default=-1) + 1
+            row = await unit_of_work.reference_media.add(
+                AppointmentReferenceMedia(
+                    business_id=unit_of_work.business_id,
+                    appointment_id=appointment.id,
+                    telegram_file_id=values.telegram_file_id,
+                    telegram_file_unique_id=values.telegram_file_unique_id,
+                    media_type=MediaType.PHOTO,
+                    position=position,
+                    uploaded_by_user_id=client.id,
+                    expires_at=self._reference_retention_policy.expires_at(
+                        status=appointment.status,
+                        planned_end_at=window.end_at,
+                        completed_at=appointment.completed_at,
+                        cancelled_at=appointment.cancelled_at,
+                    ),
+                )
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=client.id,
+                action="booking_reference.added",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={"position": position, "reference_count": len(active) + 1},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return self._reference_view(row)
+
+    async def clear_my_reference_media(
+        self,
+        actor: ClientActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> int:
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await self._client(unit_of_work, actor.telegram_id)
+            appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
+            ensure_owner(appointment, client)
+            active = await unit_of_work.reference_media.list_active(appointment.id)
+            for row in active:
+                anonymize_reference(row, current_time)
+            if active:
+                await unit_of_work.session.flush()
+                await unit_of_work.audit.add(
+                    actor_user_id=client.id,
+                    action="booking_reference.removed",
+                    entity_type="appointment",
+                    entity_id=str(appointment.id),
+                    changes={"removed_count": len(active)},
+                    correlation_id=correlation_id,
+                )
+                await unit_of_work.commit()
+            return len(active)
 
     async def list_admin_today(
         self,
@@ -121,12 +272,18 @@ class AppointmentService:
             if client is None:
                 raise RuntimeError("Appointment client is missing")
             settings = await self._settings(unit_of_work)
+            workstation = (
+                await unit_of_work.workstations.get(appointment.workstation_id)
+                if appointment.workstation_id is not None
+                else None
+            )
             return admin_appointment_view(
                 appointment,
                 window,
                 client,
                 settings,
                 current_time,
+                workstation_name=workstation.name if workstation is not None else None,
             )
 
     async def cancel_my(
@@ -165,6 +322,13 @@ class AppointmentService:
                 reopen=True,
                 correlation_id=correlation_id,
             )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
+                correlation_id=correlation_id,
+            )
             await unit_of_work.commit()
             return appointment_view(appointment, window, settings, current_time)
 
@@ -200,6 +364,13 @@ class AppointmentService:
                 reopen=reopen_window,
                 correlation_id=correlation_id,
             )
+            await enqueue_waitlist_matches(
+                unit_of_work,
+                window,
+                settings,
+                now=current_time,
+                correlation_id=correlation_id,
+            )
             client = await unit_of_work.users.get_by_id(appointment.client_id)
             if client is None:
                 raise RuntimeError("Appointment client is missing")
@@ -230,6 +401,7 @@ class AppointmentService:
                     "Подтвердить визит можно только для новой активной записи."
                 )
             previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.CLIENT_CONFIRMED)
             appointment.status = AppointmentStatus.CLIENT_CONFIRMED
             appointment.client_confirmed_at = current_time
             await unit_of_work.appointments.add_history(
@@ -280,6 +452,7 @@ class AppointmentService:
             ensure_owner(appointment, client)
             if appointment.status is not AppointmentStatus.CONFIRMED:
                 raise AppointmentStateError("Визит уже подтверждён или запись неактивна.")
+            ensure_appointment_transition(appointment.status, AppointmentStatus.CLIENT_CONFIRMED)
             appointment.status = AppointmentStatus.CLIENT_CONFIRMED
             appointment.client_confirmed_at = current_time
             await unit_of_work.appointments.add_history(
@@ -288,7 +461,7 @@ class AppointmentService:
                     previous_status=AppointmentStatus.CONFIRMED,
                     new_status=AppointmentStatus.CLIENT_CONFIRMED,
                     changed_by_user_id=client.id,
-                    reason="Подтверждено клиенткой",
+                    reason="Подтверждено клиентом",
                 )
             )
             await unit_of_work.audit.add(
@@ -309,6 +482,180 @@ class AppointmentService:
             await unit_of_work.commit()
             return appointment_view(appointment, window, settings, current_time)
 
+    async def complete_visit(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> AdminAppointmentView:
+        """Complete once and enqueue exactly one delayed review request."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            settings = await self._settings(unit_of_work)
+            appointment, window = await self._lock_appointment_window(
+                unit_of_work, appointment_id, settings.timezone
+            )
+            client = await unit_of_work.users.get_by_id(appointment.client_id)
+            if client is None:
+                raise RuntimeError("Appointment client is missing")
+            if appointment.status is AppointmentStatus.COMPLETED:
+                return admin_appointment_view(appointment, window, client, settings, current_time)
+            if appointment.status not in {
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.CLIENT_CONFIRMED,
+            }:
+                raise AppointmentStateError("Завершить можно только активную запись.")
+            if window.end_at > current_time:
+                raise AppointmentStateError("Завершить визит можно после окончания окна записи.")
+            previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.COMPLETED)
+            appointment.status = AppointmentStatus.COMPLETED
+            appointment.completed_at = current_time
+            window.status = AvailabilityWindowStatus.CLOSED
+            await unit_of_work.reference_media.set_expiry_for_appointment(
+                appointment.id,
+                self._reference_retention_policy.expires_at(
+                    status=AppointmentStatus.COMPLETED,
+                    planned_end_at=window.end_at,
+                    completed_at=current_time,
+                ),
+            )
+            await unit_of_work.notifications.cancel_unsent(appointment.id)
+            await unit_of_work.appointments.add_history(
+                AppointmentStatusHistory(
+                    appointment_id=appointment.id,
+                    previous_status=previous,
+                    new_status=AppointmentStatus.COMPLETED,
+                    changed_by_user_id=actor_user.id,
+                    reason="Визит завершён",
+                )
+            )
+            if settings.reviews_enabled:
+                scheduled_at = current_time + timedelta(
+                    minutes=settings.review_request_delay_minutes
+                )
+                await unit_of_work.notifications.add_all(
+                    [
+                        NotificationJob(
+                            business_id=unit_of_work.business_id,
+                            appointment_id=appointment.id,
+                            recipient_user_id=client.id,
+                            notification_type=NotificationType.REVIEW_REQUEST,
+                            offset_minutes=max(1, settings.review_request_delay_minutes),
+                            scheduled_at=scheduled_at,
+                            available_at=scheduled_at,
+                        )
+                    ]
+                )
+            if (
+                client.marketing_consent_at is not None
+                and client.repeat_booking_opt_out_at is None
+                and not client.is_blocked
+            ):
+                repeat_at = current_time + timedelta(days=settings.repeat_booking_reminder_days)
+                await unit_of_work.notifications.add_all(
+                    [
+                        NotificationJob(
+                            business_id=unit_of_work.business_id,
+                            appointment_id=appointment.id,
+                            recipient_user_id=client.id,
+                            notification_type=NotificationType.REPEAT_BOOKING_REMINDER,
+                            offset_minutes=settings.repeat_booking_reminder_days * 1440,
+                            scheduled_at=repeat_at,
+                            available_at=repeat_at,
+                        )
+                    ]
+                )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="appointment.completed",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={
+                    "status": {
+                        "before": previous.value,
+                        "after": AppointmentStatus.COMPLETED.value,
+                    },
+                    "review_request_scheduled": settings.reviews_enabled,
+                    "repeat_reminder_scheduled": (
+                        client.marketing_consent_at is not None
+                        and client.repeat_booking_opt_out_at is None
+                        and not client.is_blocked
+                    ),
+                },
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return admin_appointment_view(appointment, window, client, settings, current_time)
+
+    async def mark_no_show(
+        self,
+        actor: AdminActor,
+        appointment_id: int,
+        *,
+        now: datetime | None = None,
+        correlation_id: str | None = None,
+    ) -> AdminAppointmentView:
+        """Close a past active visit as no-show and shorten reference retention."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        current_time = self._aware_now(now)
+        async with self._unit_of_work_factory() as unit_of_work:
+            actor_user = await unit_of_work.users.get_or_create_admin(actor)
+            settings = await self._settings(unit_of_work)
+            appointment, window = await self._lock_appointment_window(
+                unit_of_work, appointment_id, settings.timezone
+            )
+            client = await unit_of_work.users.get_by_id(appointment.client_id)
+            if client is None:
+                raise RuntimeError("Appointment client is missing")
+            if appointment.status is AppointmentStatus.NO_SHOW:
+                return admin_appointment_view(appointment, window, client, settings, current_time)
+            if appointment.status not in {
+                AppointmentStatus.CONFIRMED,
+                AppointmentStatus.CLIENT_CONFIRMED,
+            }:
+                raise AppointmentStateError("Неявку можно отметить только для активной записи.")
+            if window.end_at > current_time:
+                raise AppointmentStateError("Неявку можно отметить после окончания записи.")
+            previous = appointment.status
+            ensure_appointment_transition(appointment.status, AppointmentStatus.NO_SHOW)
+            appointment.status = AppointmentStatus.NO_SHOW
+            appointment.no_show_at = current_time
+            window.status = AvailabilityWindowStatus.CLOSED
+            await unit_of_work.notifications.cancel_unsent(appointment.id)
+            await unit_of_work.reference_media.set_expiry_for_appointment(
+                appointment.id,
+                self._reference_retention_policy.expires_at(
+                    status=AppointmentStatus.NO_SHOW,
+                    planned_end_at=window.end_at,
+                ),
+            )
+            await unit_of_work.appointments.add_history(
+                AppointmentStatusHistory(
+                    appointment_id=appointment.id,
+                    previous_status=previous,
+                    new_status=AppointmentStatus.NO_SHOW,
+                    changed_by_user_id=actor_user.id,
+                    reason="Неявка",
+                )
+            )
+            await unit_of_work.audit.add(
+                actor_user_id=actor_user.id,
+                action="appointment.no_show",
+                entity_type="appointment",
+                entity_id=str(appointment.id),
+                changes={"status": {"before": previous.value, "after": "no_show"}},
+                correlation_id=correlation_id,
+            )
+            await unit_of_work.commit()
+            return admin_appointment_view(appointment, window, client, settings, current_time)
+
     async def _lock_appointment_window(
         self,
         unit_of_work: SqlAlchemyUnitOfWork,
@@ -318,7 +665,9 @@ class AppointmentService:
         initial = await self._appointment(unit_of_work, appointment_id)
         initial_window = await self._window(unit_of_work, initial.window_id)
         local_date = initial_window.start_at.astimezone(ZoneInfo(timezone)).date()
-        await unit_of_work.windows.lock_local_date(local_date)
+        await unit_of_work.windows.lock_local_date(
+            local_date, staff_member_id=initial_window.staff_member_id
+        )
         locked_windows = await unit_of_work.windows.get_many_for_update({initial.window_id})
         appointment = await self._appointment(unit_of_work, appointment_id, for_update=True)
         if len(locked_windows) != 1 or appointment.window_id != locked_windows[0].id:
@@ -341,9 +690,18 @@ class AppointmentService:
         if window.status is not AvailabilityWindowStatus.BOOKED:
             raise AppointmentStateError("Окно записи уже находится в другом состоянии.")
         previous = appointment.status
+        ensure_appointment_transition(previous, new_status)
         appointment.status = new_status
         appointment.cancelled_at = now
         appointment.cancellation_reason = reason
+        await unit_of_work.reference_media.set_expiry_for_appointment(
+            appointment.id,
+            self._reference_retention_policy.expires_at(
+                status=new_status,
+                planned_end_at=window.end_at,
+                cancelled_at=now,
+            ),
+        )
         window.status = (
             AvailabilityWindowStatus.OPEN
             if reopen and window.start_at > now
@@ -432,3 +790,25 @@ class AppointmentService:
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         return current.astimezone(UTC)
+
+    @staticmethod
+    def _reference_view(row: object) -> ReferenceMediaView:
+        return ReferenceMediaView.model_validate(row, from_attributes=True)
+
+    @staticmethod
+    def _ensure_reference_editable(
+        appointment: Appointment,
+        window: AvailabilityWindow,
+        settings: BusinessSettings,
+        now: datetime,
+    ) -> None:
+        if appointment.status not in {
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.CLIENT_CONFIRMED,
+        }:
+            raise AppointmentStateError("Референсы можно менять только у активной записи.")
+        deadline = timedelta(hours=settings.booking_reference_edit_deadline_hours)
+        if window.start_at - now < deadline:
+            raise CancellationDeadlineError(
+                "Срок самостоятельного изменения референсов уже истёк. Напишите мастеру."
+            )

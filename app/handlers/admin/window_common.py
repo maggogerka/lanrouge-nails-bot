@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time
 from html import escape
 from zoneinfo import ZoneInfo
@@ -30,14 +31,18 @@ def parse_local_date(raw: str | None) -> date | None:
 
 
 def parse_local_time(raw: str | None) -> time | None:
-    """Parse a strict 24-hour HH:MM wall-clock time."""
+    """Parse H:MM/HH:MM and reject 24:00 or malformed wall-clock values."""
 
     if raw is None:
         return None
-    try:
-        return datetime.strptime(raw.strip(), "%H:%M").time()
-    except ValueError:
+    match = re.fullmatch(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})", raw.strip())
+    if match is None:
         return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    if hour > 23 or minute > 59:
+        return None
+    return time(hour=hour, minute=minute)
 
 
 def render_window(window: AvailabilityWindowView) -> str:
@@ -47,9 +52,14 @@ def render_window(window: AvailabilityWindowView) -> str:
     start = window.start_at.astimezone(zone)
     end = window.end_at.astimezone(zone)
     comment = escape(window.admin_comment) if window.admin_comment else "—"
+    master = escape(window.master_name or "не указан")
     return (
-        f"<b>{start:%d.%m.%Y}</b>\n"
+        f"<b>Окно ID: <code>{window.id}</code></b>\n"
+        f"Дата: {start:%d.%m.%Y}\n"
         f"Время: {start:%H:%M}–{end:%H:%M}\n"
+        f"Мастер: {master}\n"
+        "Услуга: выбирается клиентом при записи\n"
+        "Рабочее место: проверяется и назначается при записи\n"
         f"Статус: {_STATUS_LABELS[window.status]}\n"
         f"Внутренний комментарий: {comment}"
     )

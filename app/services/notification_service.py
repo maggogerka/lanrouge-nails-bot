@@ -7,9 +7,18 @@ from datetime import UTC, datetime, timedelta
 
 from app.database.models import NotificationJob
 from app.domain.appointments import ACTIVE_APPOINTMENT_STATUSES
-from app.domain.enums import NotificationJobStatus
+from app.domain.enums import (
+    AppointmentStatus,
+    ManualPaymentStatus,
+    NotificationJobStatus,
+    NotificationType,
+    PaymentMode,
+    PaymentStatus,
+)
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from app.schemas.features import FeatureName
 from app.schemas.notification import NotificationDelivery
+from app.services.feature_guard import is_feature_enabled
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -61,13 +70,76 @@ class NotificationService:
             job = await self._claimed_job(unit_of_work, job_id, worker_id)
             if job is None:
                 return None
+            required_feature = self._required_feature(job.notification_type)
+            if not await is_feature_enabled(unit_of_work, required_feature):
+                await self._cancel_job(unit_of_work, job, "feature_disabled")
+                await unit_of_work.commit()
+                return None
             appointment = await unit_of_work.appointments.get(job.appointment_id)
             recipient = await unit_of_work.users.get_by_id(job.recipient_user_id)
             if appointment is None or recipient is None:
                 await self._fail_job(unit_of_work, job, "delivery_context_missing")
                 await unit_of_work.commit()
                 return None
-            if appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
+            payment = None
+            if job.notification_type in {
+                NotificationType.PAYMENT_DUE_CLIENT,
+                NotificationType.PAYMENT_REVIEW_STAFF,
+            }:
+                payment = await unit_of_work.payments.get_latest_for_appointment(job.appointment_id)
+                client_due = (
+                    job.notification_type is NotificationType.PAYMENT_DUE_CLIENT
+                    and appointment.status is AppointmentStatus.PENDING_PAYMENT
+                    and payment is not None
+                    and payment.provider is PaymentMode.MANUAL
+                    and payment.status is PaymentStatus.PENDING
+                    and payment.manual_status is ManualPaymentStatus.AWAITING_PAYMENT
+                    and payment.expires_at is not None
+                    and payment.expires_at > current_time
+                )
+                staff_review = (
+                    job.notification_type is NotificationType.PAYMENT_REVIEW_STAFF
+                    and appointment.status is AppointmentStatus.PENDING_MANUAL_CONFIRMATION
+                    and payment is not None
+                    and payment.provider is PaymentMode.MANUAL
+                    and payment.status is PaymentStatus.PENDING
+                    and payment.manual_status
+                    in {
+                        ManualPaymentStatus.CLIENT_REPORTED,
+                        ManualPaymentStatus.REVIEW_PENDING,
+                    }
+                )
+                if not client_due and not staff_review:
+                    await self._cancel_job(unit_of_work, job, "payment_not_actionable")
+                    await unit_of_work.commit()
+                    return None
+            elif job.notification_type is NotificationType.REVIEW_REQUEST:
+                settings = await unit_of_work.settings.get()
+                if (
+                    appointment.status is not AppointmentStatus.COMPLETED
+                    or settings is None
+                    or not settings.reviews_enabled
+                    or await unit_of_work.reviews.get_for_appointment(appointment.id) is not None
+                ):
+                    await self._cancel_job(unit_of_work, job, "review_not_actionable")
+                    await unit_of_work.commit()
+                    return None
+            elif job.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+                service = await unit_of_work.services.get(appointment.service_id)
+                if (
+                    appointment.status is not AppointmentStatus.COMPLETED
+                    or recipient.marketing_consent_at is None
+                    or recipient.repeat_booking_opt_out_at is not None
+                    or await unit_of_work.appointments.has_future_active_for_client(
+                        recipient.id, current_time
+                    )
+                    or service is None
+                    or not service.is_active
+                ):
+                    await self._cancel_job(unit_of_work, job, "repeat_booking_not_actionable")
+                    await unit_of_work.commit()
+                    return None
+            elif appointment.status not in ACTIVE_APPOINTMENT_STATUSES:
                 await self._cancel_job(unit_of_work, job, "appointment_inactive")
                 await unit_of_work.commit()
                 return None
@@ -82,7 +154,14 @@ class NotificationService:
                 await self._fail_job(unit_of_work, job, "delivery_context_missing")
                 await unit_of_work.commit()
                 return None
-            if window.start_at <= current_time:
+            if (
+                job.notification_type
+                in {
+                    NotificationType.CLIENT_REMINDER,
+                    NotificationType.ADMIN_REMINDER,
+                }
+                and window.start_at <= current_time
+            ):
                 await self._cancel_job(unit_of_work, job, "appointment_started")
                 await unit_of_work.commit()
                 return None
@@ -97,11 +176,12 @@ class NotificationService:
                 service_name=appointment.service_name_snapshot,
                 start_at=window.start_at,
                 timezone=settings.timezone,
-                address=settings.address,
-                map_url=settings.map_url,
-                master_telegram_url=settings.master_telegram_url,
+                address=appointment.address_snapshot or "Адрес не указан",
+                map_url=appointment.map_url_snapshot,
+                master_telegram_url=appointment.master_contact_url_snapshot,
                 client_name=client.first_name or "—",
                 client_phone=client.phone,
+                payment_id=payment.id if payment is not None else None,
             )
 
     async def mark_sent(
@@ -220,6 +300,19 @@ class NotificationService:
         job.locked_by = None
         job.last_error = error_code[:1000]
         await unit_of_work.session.flush()
+
+    @staticmethod
+    def _required_feature(notification_type: NotificationType) -> FeatureName:
+        if notification_type is NotificationType.REVIEW_REQUEST:
+            return FeatureName.REVIEWS
+        if notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+            return FeatureName.REPEAT_BOOKING
+        if notification_type in {
+            NotificationType.PAYMENT_DUE_CLIENT,
+            NotificationType.PAYMENT_REVIEW_STAFF,
+        }:
+            return FeatureName.PREPAYMENT
+        return FeatureName.REMINDERS
 
     @staticmethod
     def _aware_now(value: datetime | None) -> datetime:

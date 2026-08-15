@@ -1,3 +1,3 @@
-"""lanrouge nails Telegram bot package."""
+"""White-label Telegram booking CRM package."""
 
-__version__ = "0.1.0"
+__version__ = "0.4.1"

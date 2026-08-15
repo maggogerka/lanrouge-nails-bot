@@ -6,6 +6,9 @@ on:
     branches:
       - main
       - feature/**
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,16 +17,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:18.4-alpine
         env:
           POSTGRES_USER: lanrouge
-          POSTGRES_PASSWORD: password
+          POSTGRES_PASSWORD: ci-only-password
           POSTGRES_DB: lanrouge_test
         ports:
           - 5432:5432
@@ -31,26 +37,215 @@ jobs:
           --health-cmd "pg_isready -U lanrouge -d lanrouge_test"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 12
+      redis:
+        image: redis:8.2.7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
       APP_ENV: test
-      DATABASE_URL: postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test
-      TEST_DATABASE_URL: postgresql+asyncpg://lanrouge:password@localhost:5432/lanrouge_test
+      DATABASE_URL: postgresql+asyncpg://lanrouge:ci-only-password@localhost:5432/lanrouge_test
+      TEST_DATABASE_URL: postgresql+asyncpg://lanrouge:ci-only-password@localhost:5432/lanrouge_test
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_NAMESPACE: lanrouge-ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -e ".[dev]"
+          cache-dependency-path: requirements.lock
+      - name: Install hash-locked test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+          python -m pip check
+      - name: Reject tracked local environment files
+        run: test -z "$(git ls-files -- '.env' '.env.*' '.secrets/**' ':(exclude).env.example')"
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format
         run: ruff format --check .
       - name: Mypy
         run: mypy app
-      - name: Apply migrations
-        run: alembic upgrade head
-      - name: Tests
-        run: pytest
+      - name: Clean migration to head
+        run: |
+          alembic upgrade head
+          alembic check
+      - name: Dependency readiness
+        run: python -m app.healthcheck
+      - name: Tests and coverage floor
+        run: >-
+          pytest --cov=app --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=60
+
+  migration-preservation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18.4-alpine
+        env:
+          POSTGRES_USER: lanrouge
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: lanrouge_migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lanrouge -d lanrouge_migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://lanrouge:ci-only-password@localhost:5432/lanrouge_migration_test
+      TEST_DATABASE_URL: postgresql+asyncpg://lanrouge:ci-only-password@localhost:5432/lanrouge_migration_test
+      MIGRATION_PRESERVATION_TEST: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+      - name: Build the v0.3.1 schema
+        run: alembic upgrade 20260724_0010
+      - name: Seed, upgrade, and assert preservation
+        run: pytest -q tests/ops/test_migration_v031_to_head.py
+      - name: Assert model metadata matches head
+        run: alembic check
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install hash-locked security tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
+      - name: Bandit application scan
+        run: bandit --recursive app --severity-level medium --confidence-level medium
+      - name: Audit the production lock
+        run: pip-audit --require-hashes --disable-pip -r requirements-prod.lock
+      - name: Gitleaks repository history scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ENV_FILE: .env.example
+      POSTGRES_USER: app_user
+      POSTGRES_DB: app_db
+      POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/postgres_password
+      REDIS_PASSWORD_SECRET_FILE: .ci-secrets/redis_password
+      RESTIC_PASSWORD_SECRET_FILE: .ci-secrets/restic_password
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Prepare non-production Compose secrets
+        run: |
+          mkdir -p .ci-secrets
+          mkdir -p .ci-backup-repository
+          printf '%s' 'ci-postgres-password-only' > .ci-secrets/postgres_password
+          printf '%s' 'ci_redis_password_0123456789abcdef' > .ci-secrets/redis_password
+          printf '%s' 'ci-restic-password-only' > .ci-secrets/restic_password
+          # Compose file secrets are bind mounts: non-root containers need the
+          # files readable, while the 0700 parent keeps other host users out.
+          chmod 700 .ci-secrets
+          chmod 644 .ci-secrets/*
+          chmod 777 .ci-backup-repository
+      - name: Validate all Compose files and profiles
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --quiet
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --format json | jq -e '
+            ((.services.postgres.ports // []) | length) == 0 and
+            ((.services.redis.ports // []) | length) == 0 and
+            ((.services.api.ports // []) | length) == 0 and
+            .networks.backend.internal == true and
+            .services.bot.environment.HEALTHCHECK_COMPONENT == "bot" and
+            .services["notification-worker"].environment.HEALTHCHECK_COMPONENT == "reminders" and
+            .services["broadcast-worker"].environment.HEALTHCHECK_COMPONENT == "broadcasts" and
+            .services["reference-cleanup-worker"].environment.HEALTHCHECK_COMPONENT == "reference_cleanup" and
+            .services["reservation-worker"].environment.HEALTHCHECK_COMPONENT == "reservation_expiry" and
+            .services.api.environment.REDIS_NAMESPACE == .services.bot.environment.REDIS_NAMESPACE and
+            .services.api.environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services.api.environment.REDIS_PASSWORD_FILE == "/run/secrets/redis_password" and
+            .services["reservation-worker"].environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services["reservation-worker"].environment.REDIS_PASSWORD_FILE == "/run/secrets/redis_password" and
+            .services.backup.environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            ([.services.api.secrets[].source] | index("postgres_password") != null) and
+            ([.services.api.secrets[].source] | index("redis_password") != null) and
+            ([.services["reservation-worker"].secrets[].source] | index("postgres_password") != null) and
+            ([.services["reservation-worker"].secrets[].source] | index("redis_password") != null) and
+            ([.services.backup.secrets[].source] | index("postgres_password") != null)
+          '
+      - name: Smoke PostgreSQL and authenticated Redis
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml up -d --wait postgres redis
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T redis /bin/sh -ec 'REDISCLI_AUTH="$(cat "$REDIS_PASSWORD_FILE")" redis-cli ping')" = PONG
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T redis redis-cli ping 2>&1)" = "NOAUTH Authentication required."
+      - name: Build runtime services, test, and backup images
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup build bot api reservation-worker backup
+          docker build --target runtime --tag lanrouge-nails-bot:ci .
+          docker build --target test --tag lanrouge-nails-bot-test:ci .
+          docker build --target backup --tag lanrouge-nails-backup:ci .
+      - name: Smoke file-secret API and reservation worker
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api up -d --wait api reservation-worker
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/redis_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/redis_password
+      - name: Verify backup tools and explicit disabled mode
+        run: |
+          docker run --rm --entrypoint pg_dump lanrouge-nails-backup:ci --version
+          docker run --rm --entrypoint pg_restore lanrouge-nails-backup:ci --version
+          docker run --rm --entrypoint restic lanrouge-nails-backup:ci version
+          docker run --rm lanrouge-nails-backup:ci
+      - name: Run encrypted backup and restore smoke test
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm --entrypoint restic backup init
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_db -v ON_ERROR_STOP=1 -c "CREATE TABLE ci_backup_marker (value text NOT NULL); INSERT INTO ci_backup_marker VALUES ('restored');"
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres createdb -U app_user app_restore_test
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_restore_test -tAc 'SELECT value FROM ci_backup_marker')" = "restored"
+      - name: Trivy runtime image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: lanrouge-nails-bot:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Trivy backup image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: lanrouge-nails-backup:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Stop CI Compose dependencies
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api --profile backup down --volumes
+          sudo rm -rf -- "$GITHUB_WORKSPACE/.ci-backup-repository"

@@ -16,7 +16,7 @@ def privacy_consent_keyboard(policy_url: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Политика конфиденциальности", url=policy_url)],
             [
                 InlineKeyboardButton(
-                    text="Согласна и продолжить",
+                    text="✅ Подтверждаю согласие",
                     callback_data=ConsentCallback(action="privacy_accept").pack(),
                 )
             ],

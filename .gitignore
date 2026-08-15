@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+.secrets/
+.ci-secrets/
+.ci-backup-repository/
+secrets/
 
 # Python
 __pycache__/
@@ -17,7 +21,9 @@ venv/
 .coverage.*
 htmlcov/
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
+.pip-tools-cache/
 .ruff_cache/
 
 # IDE and OS

@@ -4,35 +4,48 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanrouge-nails-bot"
-version = "0.1.0"
-description = "Telegram CRM and appointment booking bot for lanrouge nails"
+version = "0.4.1"
+description = "White-label Telegram CRM and appointment booking platform for service businesses"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
 authors = [{ name = "maggogerka" }]
 dependencies = [
   "aiogram==3.30.0",
+  "aiohttp==3.14.3",
   "alembic==1.18.5",
   "asyncpg==0.31.0",
   "pydantic-settings==2.14.2",
   "redis==8.0.1",
+  "sentry-sdk==2.66.1",
   "SQLAlchemy[asyncio]==2.0.51",
+  "starlette==1.3.1",
   "tzdata>=2026.1,<2027.0",
+  "uvicorn==0.51.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "bandit==1.9.4",
   "mypy==1.19.1",
+  "pip-audit==2.10.1",
+  "pip-tools==7.6.0",
   "pytest==9.1.1",
   "pytest-asyncio==1.3.0",
   "pytest-cov==7.0.0",
   "ruff==0.15.22",
+  # pip-tools imports setuptools at runtime; pin it for --require-hashes installs.
+  "setuptools==84.0.0",
 ]
 
 [project.scripts]
 lanrouge-bot = "app.bot:run"
 lanrouge-healthcheck = "app.healthcheck:run"
 lanrouge-reminders = "app.workers.reminders:run"
+lanrouge-broadcasts = "app.workers.broadcasts:run"
+lanrouge-reference-cleanup = "app.workers.reference_cleanup:run"
+lanrouge-cleanup-references = "app.maintenance.cleanup_references:main"
+booking-crm-bot = "app.bot:run"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
@@ -60,10 +73,15 @@ module = ["redis.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-config --strict-markers"
+addopts = "-ra --strict-config --strict-markers --basetemp=.pytest-tmp"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
 source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 60

@@ -6,9 +6,10 @@ from app.handlers.admin import router as admin_router
 from app.handlers.client import router as client_router
 from app.handlers.common import router as common_router
 from app.handlers.errors import handle_unexpected_error
+from app.handlers.master import router as master_router
 
 root_router = Router(name="root")
 root_router.errors.register(handle_unexpected_error)
-root_router.include_routers(common_router, admin_router, client_router)
+root_router.include_routers(common_router, admin_router, master_router, client_router)
 
 __all__ = ["root_router"]

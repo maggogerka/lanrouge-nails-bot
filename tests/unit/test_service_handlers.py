@@ -2,19 +2,27 @@
 
 from decimal import Decimal
 
+from app.domain.enums import StaffRole
 from app.handlers.admin.service_common import (
     parse_positive_minutes,
     parse_price,
     render_service,
 )
-from app.keyboards.admin.services import ServiceCallback, service_details_keyboard
+from app.keyboards.admin.main import ADMIN_SERVICES_TEXT, admin_main_keyboard
+from app.keyboards.admin.services import (
+    ServiceCallback,
+    service_details_keyboard,
+    service_list_keyboard,
+)
+from app.keyboards.client.consent import privacy_consent_keyboard
+from app.schemas.authorization import StaffContext
 from app.schemas.service import ServiceView
 
 
 def service_view() -> ServiceView:
     return ServiceView(
         id=10,
-        name="Маникюр <premium>",
+        name="Консультация <premium>",
         description="Безопасно & красиво",
         price=Decimal("2500.00"),
         duration_min_minutes=120,
@@ -26,7 +34,7 @@ def service_view() -> ServiceView:
 def test_service_render_escapes_html_and_formats_snapshot_values() -> None:
     rendered = render_service(service_view())
 
-    assert "Маникюр &lt;premium&gt;" in rendered
+    assert "Консультация &lt;premium&gt;" in rendered
     assert "Безопасно &amp; красиво" in rendered
     assert "2500.00 ₽" in rendered
     assert "120–180 мин." in rendered
@@ -48,3 +56,41 @@ def test_service_callbacks_fit_telegram_limit() -> None:
 
     assert len(callback.encode()) <= 64
     assert service_details_keyboard(service_view()).inline_keyboard
+
+
+def test_admin_services_button_sends_handler_text_without_hidden_whitespace() -> None:
+    context = StaffContext(
+        business_id=1,
+        staff_member_id=1,
+        user_id=1,
+        telegram_id=123,
+        display_name="Владелец",
+        role=StaffRole.OWNER,
+        is_bookable=False,
+    )
+    keyboard = admin_main_keyboard(staff_context=context)
+    button_texts = {button.text for row in keyboard.keyboard for button in row}
+
+    assert ADMIN_SERVICES_TEXT == "🛠 Услуги"
+    assert ADMIN_SERVICES_TEXT in button_texts
+
+
+def test_service_list_can_show_and_hide_archived_rows() -> None:
+    active = service_view()
+    archived = active.model_copy(update={"is_active": False})
+
+    visible = service_list_keyboard([active], include_archived=False)
+    with_archive = service_list_keyboard([active, archived], include_archived=True)
+
+    assert any("Показать архив" in button.text for row in visible.inline_keyboard for button in row)
+    assert any(
+        "Скрыть архив" in button.text for row in with_archive.inline_keyboard for button in row
+    )
+
+
+def test_privacy_consent_copy_is_gender_neutral() -> None:
+    keyboard = privacy_consent_keyboard("https://example.com/privacy")
+    labels = [button.text.casefold() for row in keyboard.inline_keyboard for button in row]
+
+    assert any("подтверждаю" in label for label in labels)
+    assert all("согласна" not in label and "согласен" not in label for label in labels)

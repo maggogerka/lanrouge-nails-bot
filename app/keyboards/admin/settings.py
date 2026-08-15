@@ -12,12 +12,30 @@ class SettingsCallback(CallbackData, prefix="set"):
 
 def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
     labels = [
-        ("Лимит записей", "max_appointments_per_day"),
-        ("Горизонт записи", "booking_horizon_days"),
-        ("Дедлайн отмены", "cancellation_deadline_hours"),
-        ("Длительность окна", "default_window_duration_minutes"),
-        ("Интервал между окнами", "minimum_gap_minutes"),
-        ("Напоминания", "reminder_offsets_minutes"),
+        (
+            f"📊 Лимит записей в день · {settings.max_appointments_per_day}",
+            "max_appointments_per_day",
+        ),
+        (f"📅 Горизонт записи · {settings.booking_horizon_days} дн.", "booking_horizon_days"),
+        (
+            f"❌ Отмена не позднее · {settings.cancellation_deadline_hours} ч.",
+            "cancellation_deadline_hours",
+        ),
+        (
+            f"🔄 Перенос не позднее · {settings.reschedule_deadline_hours} ч.",
+            "reschedule_deadline_hours",
+        ),
+        (
+            f"⏱ Окно по умолчанию · {settings.default_window_duration_minutes} мин.",
+            "default_window_duration_minutes",
+        ),
+        (f"↔️ Интервал между окнами · {settings.minimum_gap_minutes} мин.", "minimum_gap_minutes"),
+        ("🔔 Напоминания о записи", "reminders"),
+        (f"🛡 Лимит клиента · {settings.future_booking_limit_max}", "future_booking_limit_max"),
+        (
+            f"🗓 Горизонт антиспама · {settings.future_booking_limit_horizon_days} дн.",
+            "future_booking_limit_horizon_days",
+        ),
     ]
     rows = [
         [
@@ -32,6 +50,26 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
+                    text=(
+                        "✅ Антиспам включён"
+                        if settings.future_booking_limit_enabled
+                        else "⛔ Антиспам выключен"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_future_limit").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "✅ Учитывать отмены клиента"
+                        if settings.future_booking_count_client_cancellations
+                        else "⛔ Не учитывать отмены клиента"
+                    ),
+                    callback_data=SettingsCallback(action="toggle_future_cancellations").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=("✅ Суббота" if settings.allow_saturday else "⛔ Суббота"),
                     callback_data=SettingsCallback(action="toggle_saturday").pack(),
                 ),
@@ -42,10 +80,47 @@ def settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="Обновить",
+                    text="🔄 Обновить настройки",
                     callback_data=SettingsCallback(action="view").pack(),
                 )
             ],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def reminder_settings_keyboard(settings: BusinessSettingsView) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ За 1 день, 3 часа и 1 час",
+                    callback_data=SettingsCallback(action="reminders_default").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="За 1 день и 2 часа",
+                    callback_data=SettingsCallback(action="reminders_day_two_hours").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="За 3 часа и 1 час",
+                    callback_data=SettingsCallback(action="reminders_three_one").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Свой график (до 5 уведомлений)",
+                    callback_data=SettingsCallback(action="reminders_custom").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К настройкам",
+                    callback_data=SettingsCallback(action="view").pack(),
+                )
+            ],
+        ]
+    )

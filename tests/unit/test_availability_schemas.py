@@ -13,6 +13,7 @@ def test_create_normalizes_optional_comment() -> None:
     values = AvailabilityWindowCreate(
         local_date=date(2026, 7, 23),
         local_start_time=time(10),
+        service_id=1,
         admin_comment="  служебная заметка  ",
     )
 
@@ -24,6 +25,7 @@ def test_create_rejects_persisted_non_admin_status() -> None:
         AvailabilityWindowCreate(
             local_date=date(2026, 7, 23),
             local_start_time=time(10),
+            service_id=1,
             status=AvailabilityWindowStatus.BOOKED,
         )
 
@@ -33,4 +35,5 @@ def test_create_rejects_aware_wall_clock_time() -> None:
         AvailabilityWindowCreate(
             local_date=date(2026, 7, 23),
             local_start_time=time(10, tzinfo=timezone(timedelta(hours=3))),
+            service_id=1,
         )

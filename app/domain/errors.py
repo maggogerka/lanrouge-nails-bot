@@ -9,6 +9,22 @@ class AuthorizationError(DomainError):
     """The actor is not allowed to execute an administrative use case."""
 
 
+class BusinessTypeTransitionError(DomainError):
+    """The business cannot enter solo mode while staff-owned data remains."""
+
+    def __init__(self, blockers: tuple[str, ...]) -> None:
+        self.blockers = blockers
+        super().__init__("Нельзя перейти в режим «Один мастер»: " + "; ".join(blockers))
+
+
+class StaffReassignmentError(DomainError):
+    """Future staff appointments cannot be moved without compatible target windows."""
+
+
+class FeatureDisabledError(DomainError):
+    """A disabled module was called directly despite being hidden in the UI."""
+
+
 class EntityNotFoundError(DomainError):
     """A requested domain entity does not exist."""
 
@@ -21,12 +37,20 @@ class WindowValidationError(DomainError):
     """A requested window violates a calendar or spacing rule."""
 
 
+class DatePickerValidationError(DomainError):
+    """A date-picker callback is stale or violates current calendar settings."""
+
+
 class WindowStateError(DomainError):
     """An operation is not valid for the current window status."""
 
 
 class WindowInUseError(DomainError):
     """A window with booking history cannot be physically removed."""
+
+
+class WorkstationStateError(DomainError):
+    """A workstation mutation conflicts with services or active windows."""
 
 
 class PrivacyConsentRequiredError(DomainError):
@@ -43,6 +67,39 @@ class BookingConflictError(BookingUnavailableError):
 
 class BookingLimitError(BookingUnavailableError):
     """The business-day appointment capacity has been exhausted."""
+
+
+class FutureBookingLimitError(BookingLimitError):
+    """The client reached the configured rolling future-booking quota."""
+
+    def __init__(self, message: str, *, current: int, maximum: int) -> None:
+        super().__init__(message)
+        self.current = current
+        self.maximum = maximum
+
+
+class PortfolioStateError(DomainError):
+    """A portfolio work cannot perform the requested lifecycle transition."""
+
+
+class CrmStateError(DomainError):
+    """A requested CRM mutation violates a tag, note or client-card rule."""
+
+
+class WaitlistStateError(DomainError):
+    """A waitlist request or notification is no longer actionable."""
+
+
+class ReviewStateError(DomainError):
+    """A review submission or moderation transition is invalid."""
+
+
+class RepeatBookingStateError(DomainError):
+    """A repeat-booking offer cannot be built from current history/catalog state."""
+
+
+class BroadcastStateError(DomainError):
+    """A broadcast draft, audience snapshot or lifecycle transition is invalid."""
 
 
 class AppointmentNotFoundError(DomainError):

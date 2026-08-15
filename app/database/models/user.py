@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base
@@ -34,9 +34,22 @@ class User(TimestampMixin, Base):
     privacy_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     marketing_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     marketing_unsubscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    repeat_booking_opt_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_blocked: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
+    is_self_booking_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    self_booking_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    self_booking_blocked_by: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+    )
+    self_booking_block_reason: Mapped[str | None] = mapped_column(String(500))

@@ -9,10 +9,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.database.models import Appointment, AvailabilityWindow, BusinessSettings, User
-from app.domain.enums import AppointmentStatus, AvailabilityWindowStatus
+from app.database.models import (
+    Appointment,
+    AppointmentReferenceMedia,
+    AvailabilityWindow,
+    BusinessSettings,
+    User,
+)
+from app.domain.enums import (
+    AppointmentStatus,
+    AvailabilityWindowStatus,
+    MediaType,
+    NotificationType,
+)
 from app.domain.errors import AppointmentNotFoundError, CancellationDeadlineError
-from app.schemas.booking import ClientActor
+from app.schemas.booking import ClientActor, ReferenceMediaDraft
 from app.schemas.service import AdminActor
 from app.services.appointment_service import AppointmentService
 
@@ -22,11 +33,11 @@ NOW = datetime(2026, 7, 22, 9, tzinfo=UTC)
 def settings() -> BusinessSettings:
     return BusinessSettings(
         id=1,
-        business_name="lanrouge nails",
+        business_name="Example Studio",
         timezone="Europe/Moscow",
         address="Новоостаповская, д. 20",
         map_url="https://yandex.ru/maps/-/CTbJz23i",
-        master_telegram_url="https://t.me/lanrouge",
+        master_telegram_url="https://t.me/example_studio",
         booking_horizon_days=31,
         cancellation_deadline_hours=36,
         max_appointments_per_day=2,
@@ -35,6 +46,30 @@ def settings() -> BusinessSettings:
         allow_saturday=False,
         allow_sunday=False,
         reminder_offsets_minutes=[1440, 180, 60],
+        portfolio_page_size=5,
+        portfolio_max_media=8,
+        waitlist_default_expiration_days=31,
+        waitlist_notification_cooldown_minutes=180,
+        review_request_delay_minutes=60,
+        repeat_booking_reminder_days=28,
+        broadcast_messages_per_second=15,
+        broadcast_max_media=5,
+        broadcast_max_retries=5,
+        broadcast_retry_base_seconds=15,
+        client_page_size=10,
+        reviews_enabled=True,
+        waitlist_enabled=True,
+        broadcasts_enabled=False,
+        portfolio_enabled=True,
+        availability_date_picker_days=31,
+        availability_time_step_minutes=60,
+        booking_reference_max_media=10,
+        booking_reference_edit_deadline_hours=36,
+        booking_reference_retention_days=None,
+        portfolio_mode="internal",
+        external_portfolio_url=None,
+        external_portfolio_button_text="Открыть портфолио",
+        master_profile_enabled=True,
         version=1,
     )
 
@@ -49,7 +84,7 @@ def appointment(*, client_id: int = 5) -> Appointment:
         client_id=client_id,
         window_id=7,
         service_id=3,
-        service_name_snapshot="Маникюр",
+        service_name_snapshot="Консультация",
         price_snapshot=Decimal("2500.00"),
         duration_min_snapshot=120,
         duration_max_snapshot=180,
@@ -61,6 +96,8 @@ def window(*, hours_until: int = 36) -> AvailabilityWindow:
     start_at = NOW + timedelta(hours=hours_until)
     return AvailabilityWindow(
         id=7,
+        business_id=1,
+        staff_member_id=1,
         start_at=start_at,
         end_at=start_at + timedelta(minutes=210),
         status=AvailabilityWindowStatus.BOOKED,
@@ -91,6 +128,15 @@ def build_uow(
     unit_of_work.users.get_by_id = AsyncMock(return_value=target_client)
     unit_of_work.users.get_or_create_admin = AsyncMock(return_value=SimpleNamespace(id=9))
     unit_of_work.notifications.cancel_unsent = AsyncMock(return_value=2)
+    unit_of_work.notifications.add_all = AsyncMock()
+    unit_of_work.reference_media.list_active = AsyncMock(return_value=[])
+    unit_of_work.reference_media.add = AsyncMock(
+        side_effect=lambda row: setattr(row, "id", 8) or row
+    )
+    unit_of_work.reference_media.set_expiry_for_appointment = AsyncMock(return_value=0)
+    unit_of_work.session.flush = AsyncMock()
+    unit_of_work.waitlist.list_matching = AsyncMock(return_value=[])
+    unit_of_work.service_assignments.list_bookable_services_for_staff = AsyncMock(return_value=[])
     unit_of_work.audit.add = AsyncMock()
     unit_of_work.commit = AsyncMock()
     return unit_of_work
@@ -103,6 +149,78 @@ async def test_client_cannot_view_another_clients_appointment() -> None:
 
     with pytest.raises(AppointmentNotFoundError, match="не найдена"):
         await service.get_my(ClientActor(telegram_id=101), 11, now=NOW)
+
+
+@pytest.mark.asyncio
+async def test_reference_media_requires_owner_but_is_visible_to_admin() -> None:
+    foreign_appointment = appointment(client_id=99)
+    unit_of_work = build_uow(target_appointment=foreign_appointment)
+    unit_of_work.reference_media.list_active.return_value = [
+        AppointmentReferenceMedia(
+            id=4,
+            appointment_id=11,
+            telegram_file_id="file-1",
+            telegram_file_unique_id="unique-1",
+            media_type=MediaType.PHOTO,
+            position=0,
+            uploaded_by_user_id=99,
+        )
+    ]
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(AppointmentNotFoundError):
+        await service.list_my_reference_media(ClientActor(telegram_id=101), 11)
+    media = await service.list_admin_reference_media(AdminActor(telegram_id=900), 11)
+
+    assert media[0].telegram_file_unique_id == "unique-1"
+    unit_of_work.reference_media.list_active.assert_awaited_once_with(11)
+
+
+@pytest.mark.asyncio
+async def test_client_can_add_reference_only_before_configured_deadline() -> None:
+    unit_of_work = build_uow(target_window=window(hours_until=37))
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    values = ReferenceMediaDraft(
+        telegram_file_id="file-2",
+        telegram_file_unique_id="unique-2",
+    )
+
+    added = await service.add_my_reference_media(
+        ClientActor(telegram_id=101),
+        11,
+        values,
+        now=NOW,
+        correlation_id="request-ref",
+    )
+
+    assert added.position == 0
+    assert added.telegram_file_unique_id == "unique-2"
+    assert unit_of_work.audit.add.await_args.kwargs["action"] == "booking_reference.added"
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reference_removal_is_always_available_as_explicit_privacy_action() -> None:
+    row = AppointmentReferenceMedia(
+        id=4,
+        appointment_id=11,
+        telegram_file_id="file-1",
+        telegram_file_unique_id="unique-1",
+        media_type=MediaType.PHOTO,
+        position=0,
+        uploaded_by_user_id=5,
+    )
+    unit_of_work = build_uow(target_window=window(hours_until=35))
+    unit_of_work.reference_media.list_active.return_value = [row]
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    removed = await service.clear_my_reference_media(ClientActor(telegram_id=101), 11, now=NOW)
+
+    assert removed == 1
+    assert row.deleted_at == NOW
+    assert row.telegram_file_id is None
+    assert row.telegram_file_unique_id is None
+    unit_of_work.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -127,6 +245,9 @@ async def test_client_cancellation_at_exact_deadline_reopens_window() -> None:
     unit_of_work.notifications.cancel_unsent.assert_awaited_once_with(11)
     history = unit_of_work.appointments.add_history.await_args.args[0]
     assert history.new_status is AppointmentStatus.CANCELLED_BY_CLIENT
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, NOW + timedelta(days=7)
+    )
     assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-1"
     unit_of_work.commit.assert_awaited_once()
 
@@ -202,3 +323,74 @@ async def test_client_can_confirm_only_own_visit_from_reminder() -> None:
     assert target_appointment.client_confirmed_at == NOW
     assert unit_of_work.audit.add.await_args.kwargs["correlation_id"] == "request-reminder"
     unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_completed_visit_schedules_exactly_one_review_request() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=-4)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    completed = await service.complete_visit(
+        AdminActor(telegram_id=900), 11, now=NOW, correlation_id="complete-1"
+    )
+
+    assert completed.status is AppointmentStatus.COMPLETED
+    assert target_appointment.completed_at == NOW
+    assert target_window.status is AvailabilityWindowStatus.CLOSED
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, NOW + timedelta(days=30)
+    )
+    jobs = unit_of_work.notifications.add_all.await_args.args[0]
+    assert len(jobs) == 1
+    assert jobs[0].notification_type is NotificationType.REVIEW_REQUEST
+    assert jobs[0].available_at == NOW + timedelta(minutes=60)
+
+    await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+    assert unit_of_work.notifications.add_all.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_show_retention_starts_at_planned_end() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=-24)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    result = await service.mark_no_show(AdminActor(telegram_id=900), 11, now=NOW)
+
+    assert result.status is AppointmentStatus.NO_SHOW
+    assert target_appointment.no_show_at == NOW
+    unit_of_work.reference_media.set_expiry_for_appointment.assert_awaited_once_with(
+        11, target_window.end_at + timedelta(days=14)
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_visit_schedules_repeat_only_with_marketing_consent() -> None:
+    target_client = client()
+    target_client.marketing_consent_at = NOW
+    target_appointment = appointment()
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=window(hours_until=-4),
+        target_client=target_client,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+
+    batches = [call.args[0] for call in unit_of_work.notifications.add_all.await_args_list]
+    jobs = [job for batch in batches for job in batch]
+    assert [job.notification_type for job in jobs] == [
+        NotificationType.REVIEW_REQUEST,
+        NotificationType.REPEAT_BOOKING_REMINDER,
+    ]
+    assert jobs[1].available_at == NOW + timedelta(days=28)

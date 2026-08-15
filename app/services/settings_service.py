@@ -11,6 +11,7 @@ from app.domain.notifications import future_reminder_schedules
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.service import AdminActor
 from app.schemas.settings import BusinessSettingsPatch, BusinessSettingsView
+from app.security import LEGACY_ADMIN_ROLES
 from app.services.appointment_common import ensure_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
@@ -59,6 +60,10 @@ class SettingsService:
                     offsets_minutes=new_value,
                     now=current_time,
                 )
+            if field == "reviews_enabled" and new_value is False:
+                await unit_of_work.notifications.cancel_unsent_by_type(
+                    NotificationType.REVIEW_REQUEST
+                )
             await unit_of_work.session.flush()
             await unit_of_work.audit.add(
                 actor_user_id=actor_user.id,
@@ -81,8 +86,11 @@ class SettingsService:
         offsets_minutes: list[int],
         now: datetime,
     ) -> None:
-        admin_users = await unit_of_work.users.list_by_telegram_ids(self._admin_telegram_ids)
-        active_admin_ids = [user.id for user in admin_users if not user.is_blocked]
+        staff_rows = await unit_of_work.staff.list_active_by_roles(
+            unit_of_work.business_id,
+            LEGACY_ADMIN_ROLES,
+        )
+        active_admin_ids = [user.id for _, user in staff_rows if not user.is_blocked]
         rows = await unit_of_work.appointments.list_future_active(now)
         for appointment, window in rows:
             client = await unit_of_work.users.get_by_id(appointment.client_id)
@@ -134,6 +142,7 @@ class SettingsService:
                 if existing_job is None:
                     new_jobs.append(
                         NotificationJob(
+                            business_id=unit_of_work.business_id,
                             appointment_id=appointment.id,
                             recipient_user_id=schedule.recipient_user_id,
                             notification_type=schedule.notification_type,

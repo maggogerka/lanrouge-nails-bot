@@ -5,19 +5,19 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.service import ServiceCreate, ServicePatch
+from app.schemas.service import ServiceAddonCreate, ServiceCreate, ServicePatch
 
 
 def test_service_create_normalizes_values() -> None:
     values = ServiceCreate(
-        name="  Маникюр с покрытием  ",
+        name="  Консультация с покрытием  ",
         description="  Базовая услуга  ",
         price="2500.50",
         duration_min_minutes=120,
         duration_max_minutes=180,
     )
 
-    assert values.name == "Маникюр с покрытием"
+    assert values.name == "Консультация с покрытием"
     assert values.description == "Базовая услуга"
     assert values.price == Decimal("2500.50")
 
@@ -25,7 +25,7 @@ def test_service_create_normalizes_values() -> None:
 def test_service_create_rejects_invalid_range_and_money() -> None:
     with pytest.raises(ValidationError, match="minimum duration"):
         ServiceCreate(
-            name="Маникюр",
+            name="Консультация",
             price=1000,
             duration_min_minutes=180,
             duration_max_minutes=120,
@@ -33,7 +33,7 @@ def test_service_create_rejects_invalid_range_and_money() -> None:
 
     with pytest.raises(ValidationError):
         ServiceCreate(
-            name="Маникюр",
+            name="Консультация",
             price="1000.999",
             duration_min_minutes=120,
             duration_max_minutes=180,
@@ -67,3 +67,38 @@ def test_service_patch_rejects_null_for_required_editable_fields(
 def test_service_patch_requires_at_least_one_field() -> None:
     with pytest.raises(ValidationError, match="at least one"):
         ServicePatch()
+
+
+def test_service_photo_identifiers_must_be_changed_together() -> None:
+    with pytest.raises(ValidationError, match="supplied together"):
+        ServicePatch(telegram_photo_file_id="file-id")
+
+    cleared = ServicePatch(
+        telegram_photo_file_id=None,
+        telegram_photo_file_unique_id=None,
+    )
+
+    assert cleared.model_fields_set == {
+        "telegram_photo_file_id",
+        "telegram_photo_file_unique_id",
+    }
+
+
+def test_addon_supports_exact_duration_and_rejects_inverted_range() -> None:
+    exact = ServiceAddonCreate(
+        service_id=1,
+        name="Дополнение",
+        price="500.00",
+        duration_min_minutes=30,
+        duration_max_minutes=30,
+    )
+    assert exact.duration_min_minutes == exact.duration_max_minutes == 30
+
+    with pytest.raises(ValidationError, match="minimum duration"):
+        ServiceAddonCreate(
+            service_id=1,
+            name="Дополнение",
+            price="500.00",
+            duration_min_minutes=45,
+            duration_max_minutes=30,
+        )
