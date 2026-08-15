@@ -78,6 +78,8 @@ API_SESSION_SIGNING_KEY=<другой случайный секрет не ко�
 YOOKASSA_BUSINESS_ID=1
 YOOKASSA_RETURN_URL=https://t.me/your_bot_username
 YOOKASSA_WEBHOOK_RETENTION_DAYS=30
+# Только после документально подтверждённой внешней фискализации:
+YOOKASSA_FISCALIZATION_MODE=external
 ```
 
 `API_RATE_LIMIT_SUBJECT_KEY` и `API_SESSION_SIGNING_KEY` должны быть разными. Для одного
@@ -93,8 +95,13 @@ tenant в БД.
 install -d -m 0700 .secrets
 printf '%s' '<test-shop-id>' > .secrets/yookassa_shop_id
 printf '%s' '<test-secret-key>' > .secrets/yookassa_secret_key
-chmod 0600 .secrets/yookassa_shop_id .secrets/yookassa_secret_key
+chmod 0644 .secrets/yookassa_shop_id .secrets/yookassa_secret_key
 ```
+
+Application-контейнеры работают как UID `10001`. Compose file secrets должны быть читаемы этим
+UID, поэтому файлы имеют mode `0644`, но защищены родительским каталогом `.secrets` с mode `0700`.
+Не делайте каталог доступным другим host users. Внешний secret manager может вместо этого
+выдать файлы UID/GID `10001` с более строгим mode.
 
 Не вводите реальные значения в команды, если shell history доступна другим пользователям:
 безопаснее открыть файлы через защищённый редактор или secret manager. В `.env` прямые
@@ -105,12 +112,18 @@ chmod 0600 .secrets/yookassa_shop_id .secrets/yookassa_secret_key
 
 ```bash
 docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml --profile api config --quiet
-docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml --profile api up -d --build api
+docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml --profile api up -d --build bot api
 docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml --profile api ps
 ```
 
 Проверьте через публичный домен `GET /health/live` и `GET /health/ready`. Оба запроса должны идти
 через тот же proxy и возвращать 200. Сам `/api/v1/webhooks/yookassa` принимает только `POST`.
+
+Override передаёт `YOOKASSA_*_FILE` одновременно `bot` и `api`: API принимает webhook, а bot
+создаёт клиентскую оплату. Если ключи настроены частично либо production не содержит явного
+`YOOKASSA_FISCALIZATION_MODE=external`, YooKassa остаётся недоступной; ручная предоплата работает.
+Значение `external` разрешено ставить только после проверки внешней кассы/фискализатора: текущий
+provider намеренно не формирует налоговый объект `receipt`.
 
 ## 6. Включение в боте
 

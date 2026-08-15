@@ -235,6 +235,34 @@ def test_yookassa_credentials_are_required_only_for_provider_runtime() -> None:
     )
 
 
+def test_production_yookassa_is_fail_closed_without_external_fiscalization() -> None:
+    settings = make_settings(
+        APP_ENV="production",
+        YOOKASSA_SHOP_ID="shop-id",
+        YOOKASSA_SECRET_KEY="secret-key",
+        YOOKASSA_RETURN_URL="https://bot.example.com/payment-return",
+    )
+
+    assert not settings.yookassa_runtime_ready
+    with pytest.raises(RuntimeConfigurationError) as error:
+        settings.validate_yookassa_runtime()
+
+    assert error.value.missing == ("YOOKASSA_FISCALIZATION_MODE=external",)
+
+
+def test_explicit_external_fiscalization_unlocks_production_yookassa() -> None:
+    settings = make_settings(
+        APP_ENV="production",
+        YOOKASSA_SHOP_ID="shop-id",
+        YOOKASSA_SECRET_KEY="secret-key",
+        YOOKASSA_RETURN_URL="https://bot.example.com/payment-return",
+        YOOKASSA_FISCALIZATION_MODE="external",
+    )
+
+    settings.validate_yookassa_runtime()
+    assert settings.yookassa_runtime_ready
+
+
 def test_vendor_support_is_separate_and_https_only() -> None:
     settings = make_settings(
         VENDOR_SUPPORT_URL="https://vendor.example.test/help",

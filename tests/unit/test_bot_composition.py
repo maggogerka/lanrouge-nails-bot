@@ -43,6 +43,7 @@ async def test_dispatcher_uses_redis_and_includes_root_router() -> None:
     assert "acquisition_service" in dispatcher.workflow_data
     assert "master_workspace_service" in dispatcher.workflow_data
     assert "vendor_support_service" in dispatcher.workflow_data
+    assert "destructive_confirmation_service" in dispatcher.workflow_data
 
     await dispatcher.storage.close()
     await database.close()

@@ -57,11 +57,7 @@ def create_application(settings: Settings | None = None) -> ApiApplication:
     runtime = settings or get_settings()
     runtime.validate_api_runtime()
 
-    yookassa_values_present = bool(
-        runtime.yookassa_shop_id.get_secret_value()
-        or runtime.yookassa_secret_key.get_secret_value()
-        or runtime.yookassa_return_url is not None
-    )
+    yookassa_values_present = runtime.yookassa_values_present
     if yookassa_values_present:
         runtime.validate_yookassa_runtime()
 

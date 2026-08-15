@@ -20,8 +20,13 @@ from app.keyboards.admin.reviews import (
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
+from app.schemas.authorization import StaffContext
 from app.schemas.pagination import PageRequest
 from app.schemas.review import ReviewAdminUpdate, ReviewView
+from app.security.destructive_confirmation import (
+    DestructiveConfirmationService,
+    DestructiveObjectType,
+)
 from app.services.review_service import ReviewService
 from app.states.review import AdminReviewEdit
 from app.utils.telegram import edit_text_safely
@@ -278,7 +283,18 @@ async def restore_review(
 async def prompt_hard_delete_review(
     callback: CallbackQuery,
     callback_data: AdminReviewCallback,
+    destructive_confirmation_service: DestructiveConfirmationService,
+    staff_context: StaffContext,
 ) -> None:
+    try:
+        await destructive_confirmation_service.issue(
+            staff_context,
+            DestructiveObjectType.REVIEW,
+            callback_data.review_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "Безвозвратно удалить отзыв и его ревизии? Это действие нельзя отменить.",
@@ -292,9 +308,16 @@ async def hard_delete_review(
     callback: CallbackQuery,
     callback_data: AdminReviewCallback,
     review_service: ReviewService,
+    destructive_confirmation_service: DestructiveConfirmationService,
+    staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
     try:
+        await destructive_confirmation_service.consume(
+            staff_context,
+            DestructiveObjectType.REVIEW,
+            callback_data.review_id,
+        )
         await review_service.hard_delete(
             actor_from_telegram(callback.from_user),
             callback_data.review_id,

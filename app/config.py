@@ -37,6 +37,13 @@ class AppEnvironment(StrEnum):
     PRODUCTION = "production"
 
 
+class YooKassaFiscalizationMode(StrEnum):
+    """Supported fiscalization boundary for the current provider implementation."""
+
+    DISABLED = "disabled"
+    EXTERNAL = "external"
+
+
 class RuntimeConfigurationError(ValueError):
     """Raised when a process starts without its mandatory settings."""
 
@@ -271,6 +278,10 @@ class Settings(BaseSettings):
         ge=1,
         le=365,
         validation_alias="YOOKASSA_WEBHOOK_RETENTION_DAYS",
+    )
+    yookassa_fiscalization_mode: YooKassaFiscalizationMode = Field(
+        default=YooKassaFiscalizationMode.DISABLED,
+        validation_alias="YOOKASSA_FISCALIZATION_MODE",
     )
     reminder_poll_interval_seconds: float = Field(
         default=15.0,
@@ -736,8 +747,34 @@ class Settings(BaseSettings):
             missing.append("YOOKASSA_SECRET_KEY")
         if self.yookassa_return_url is None:
             missing.append("YOOKASSA_RETURN_URL")
+        if (
+            self.app_env is AppEnvironment.PRODUCTION
+            and self.yookassa_fiscalization_mode is not YooKassaFiscalizationMode.EXTERNAL
+        ):
+            missing.append("YOOKASSA_FISCALIZATION_MODE=external")
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
+
+    @property
+    def yookassa_values_present(self) -> bool:
+        return bool(
+            self.yookassa_shop_id.get_secret_value()
+            or self.yookassa_secret_key.get_secret_value()
+            or self.yookassa_return_url is not None
+        )
+
+    @property
+    def yookassa_runtime_ready(self) -> bool:
+        credentials_ready = bool(
+            self.yookassa_shop_id.get_secret_value()
+            and self.yookassa_secret_key.get_secret_value()
+            and self.yookassa_return_url is not None
+        )
+        fiscalization_ready = (
+            self.app_env is not AppEnvironment.PRODUCTION
+            or self.yookassa_fiscalization_mode is YooKassaFiscalizationMode.EXTERNAL
+        )
+        return credentials_ready and fiscalization_ready
 
     def validate_reservation_worker_runtime(self) -> None:
         """Reservation expiry uses PostgreSQL and Redis component heartbeats."""
