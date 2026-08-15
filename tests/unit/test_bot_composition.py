@@ -105,7 +105,16 @@ async def test_polling_bootstraps_env_owners_before_dispatcher_runtime() -> None
     ):
         await run_polling(settings)
 
-    create_database.assert_called_once_with(settings.database_url.get_secret_value())
+    create_database.assert_called_once_with(
+        settings.database_url.get_secret_value(),
+        echo=False,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout_seconds=settings.database_pool_timeout_seconds,
+        statement_timeout_ms=settings.database_statement_timeout_ms,
+        lock_timeout_ms=settings.database_lock_timeout_ms,
+        idle_in_transaction_timeout_ms=(settings.database_idle_in_transaction_timeout_ms),
+    )
     authorization_service.bootstrap_owners.assert_awaited_once_with(
         business_id=1,
         telegram_ids=settings.configured_owner_telegram_ids,

@@ -289,7 +289,7 @@ async def run_polling(settings: Settings) -> None:
 async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
     """Own Telegram and database resources under heartbeat supervision."""
 
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     dispatcher: Dispatcher | None = None
     payment_transport: AioHttpTransport | None = None
     if not settings.admin_telegram_ids:

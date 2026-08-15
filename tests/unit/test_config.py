@@ -42,6 +42,38 @@ def test_connection_schemes_are_validated() -> None:
         make_settings(REDIS_URL="http://localhost:6379")
 
 
+def test_database_pool_and_timeout_settings_are_bounded() -> None:
+    settings = make_settings(
+        DATABASE_POOL_SIZE="3",
+        DATABASE_MAX_OVERFLOW="1",
+        DATABASE_POOL_TIMEOUT_SECONDS="7",
+        DATABASE_STATEMENT_TIMEOUT_MS="12000",
+        DATABASE_LOCK_TIMEOUT_MS="2500",
+        DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS="9000",
+    )
+
+    assert settings.database_pool_size == 3
+    assert settings.database_max_overflow == 1
+    assert settings.database_pool_timeout_seconds == 7
+    assert settings.database_statement_timeout_ms == 12_000
+    assert settings.database_lock_timeout_ms == 2_500
+    assert settings.database_idle_in_transaction_timeout_ms == 9_000
+
+    with pytest.raises(ValidationError):
+        make_settings(DATABASE_POOL_SIZE="0")
+
+
+def test_api_trusted_proxies_accept_only_exact_ip_addresses() -> None:
+    settings = make_settings(API_TRUSTED_PROXY_IPS="127.0.0.1, 172.20.0.10, ::1")
+
+    assert settings.api_trusted_proxy_ips == ("127.0.0.1", "172.20.0.10", "::1")
+
+    with pytest.raises(ValidationError, match="exact comma-separated IP"):
+        make_settings(API_TRUSTED_PROXY_IPS="*")
+    with pytest.raises(ValidationError, match="exact comma-separated IP"):
+        make_settings(API_TRUSTED_PROXY_IPS="reverse-proxy")
+
+
 def test_timezone_is_validated_with_zoneinfo() -> None:
     settings = make_settings(TIMEZONE="Europe/Moscow")
 

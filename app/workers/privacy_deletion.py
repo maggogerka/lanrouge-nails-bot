@@ -58,7 +58,7 @@ async def run_worker(settings: Settings) -> None:
     owner_ids = settings.configured_owner_telegram_ids
     if not owner_ids:
         raise RuntimeConfigurationError(("ADMIN_TELEGRAM_IDS",))
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     actor = AdminActor(telegram_id=owner_ids[0])
     service = PrivacyDeletionRuntimeService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),

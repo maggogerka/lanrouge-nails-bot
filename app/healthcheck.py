@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config import RuntimeConfigurationError, Settings, get_settings
 from app.logging import configure_logging, log_event
@@ -32,8 +33,17 @@ async def check_database(database_url: str) -> None:
 
     engine = create_async_engine(
         database_url,
-        pool_pre_ping=True,
-        connect_args={"server_settings": {"timezone": "UTC"}},
+        hide_parameters=True,
+        poolclass=NullPool,
+        connect_args={
+            "timeout": 5,
+            "server_settings": {
+                "timezone": "UTC",
+                "statement_timeout": "5000ms",
+                "lock_timeout": "1000ms",
+                "idle_in_transaction_session_timeout": "5000ms",
+            },
+        },
     )
     try:
         async with engine.connect() as connection:

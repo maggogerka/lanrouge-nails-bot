@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from decimal import Decimal
 
@@ -105,6 +106,27 @@ async def test_mock_provider_replays_create_and_refund_by_idempotency_key() -> N
     assert payment_one == payment_two
     assert refund_one == refund_two
     assert await provider.get_refund(refund_one.provider_refund_id) == refund_one
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_concurrent_refund_replay_is_idempotent() -> None:
+    provider = MockPaymentProvider()
+    payment = await provider.create_payment(create_command())
+    command = PaymentRefundCommand(
+        provider_payment_id=payment.provider_payment_id,
+        idempotency_key="refund-concurrent-123456",
+        amount=Decimal("100.00"),
+        currency="RUB",
+        reason_code="requested_by_business",
+    )
+
+    first, second = await asyncio.gather(
+        provider.refund_payment(command),
+        provider.refund_payment(command),
+    )
+
+    assert first == second
+    assert first.provider_refund_id == second.provider_refund_id
 
 
 @pytest.mark.asyncio

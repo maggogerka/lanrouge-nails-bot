@@ -8,6 +8,7 @@ import re
 import stat
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -85,6 +86,42 @@ class Settings(BaseSettings):
         repr=False,
         exclude=True,
     )
+    database_pool_size: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        validation_alias="DATABASE_POOL_SIZE",
+    )
+    database_max_overflow: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        validation_alias="DATABASE_MAX_OVERFLOW",
+    )
+    database_pool_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        validation_alias="DATABASE_POOL_TIMEOUT_SECONDS",
+    )
+    database_statement_timeout_ms: int = Field(
+        default=30_000,
+        ge=1_000,
+        le=300_000,
+        validation_alias="DATABASE_STATEMENT_TIMEOUT_MS",
+    )
+    database_lock_timeout_ms: int = Field(
+        default=5_000,
+        ge=100,
+        le=60_000,
+        validation_alias="DATABASE_LOCK_TIMEOUT_MS",
+    )
+    database_idle_in_transaction_timeout_ms: int = Field(
+        default=30_000,
+        ge=1_000,
+        le=300_000,
+        validation_alias="DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+    )
     redis_url: SecretStr = Field(default=SecretStr(""), validation_alias="REDIS_URL")
     redis_url_file: Path | None = Field(
         default=None,
@@ -143,6 +180,11 @@ class Settings(BaseSettings):
     api_allowed_hosts_raw: str = Field(
         default="localhost,127.0.0.1",
         validation_alias="API_ALLOWED_HOSTS",
+        repr=False,
+    )
+    api_trusted_proxy_ips_raw: str = Field(
+        default="127.0.0.1,::1",
+        validation_alias="API_TRUSTED_PROXY_IPS",
         repr=False,
     )
     mini_app_allowed_origins_raw: str = Field(
@@ -383,6 +425,20 @@ class Settings(BaseSettings):
             raise ValueError("API_ALLOWED_HOSTS must contain exact comma-separated hosts")
         return ",".join(host.lower() for host in hosts)
 
+    @field_validator("api_trusted_proxy_ips_raw")
+    @classmethod
+    def validate_api_trusted_proxy_ips(cls, value: str) -> str:
+        addresses = cls._csv(value)
+        if not addresses:
+            raise ValueError("API_TRUSTED_PROXY_IPS must contain at least one exact IP address")
+        try:
+            normalized = tuple(str(ip_address(address)) for address in addresses)
+        except ValueError as exc:
+            raise ValueError(
+                "API_TRUSTED_PROXY_IPS must contain exact comma-separated IP addresses"
+            ) from exc
+        return ",".join(normalized)
+
     @field_validator("mini_app_allowed_origins_raw")
     @classmethod
     def validate_mini_app_allowed_origins(cls, value: str) -> str:
@@ -585,6 +641,10 @@ class Settings(BaseSettings):
     @property
     def api_allowed_hosts(self) -> tuple[str, ...]:
         return self._csv(self.api_allowed_hosts_raw)
+
+    @property
+    def api_trusted_proxy_ips(self) -> tuple[str, ...]:
+        return self._csv(self.api_trusted_proxy_ips_raw)
 
     @property
     def mini_app_allowed_origins(self) -> tuple[str, ...]:

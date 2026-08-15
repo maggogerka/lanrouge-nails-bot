@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from types import TracebackType
-from typing import Never, Protocol, Self
+from typing import Literal, Never, Protocol, Self
 
 from app.database.models.appointment import Appointment, AppointmentStatusHistory
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
@@ -22,7 +22,13 @@ from app.domain.enums import (
 )
 from app.domain.errors import DomainError, EntityNotFoundError
 from app.domain.payments import PaymentStateError, WebhookProcessingStatus, aware_utc
-from app.payments.providers.base import PaymentProviderError, ProviderWebhookEvent
+from app.payments.providers.base import (
+    PaymentProviderError,
+    PaymentRefundCommand,
+    ProviderPayment,
+    ProviderRefund,
+    ProviderWebhookEvent,
+)
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.payment_repository import PaymentRepository
@@ -61,6 +67,12 @@ class WebhookProcessingError(RuntimeError):
 class RefundOutcome:
     refund: RefundView
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedWebhookCall:
+    kind: Literal["payment", "refund"]
+    provider_object_id: str
 
 
 class PaymentUnitOfWork(Protocol):
@@ -133,6 +145,7 @@ class YooKassaWebhookLifecycleCoordinator:
         if event.provider is not PaymentMode.YOOKASSA:
             raise WebhookProcessingError(retryable=False)
 
+        prepared: _PreparedWebhookCall | None = None
         payment_to_reconcile: int | None = None
         duplicate = False
         async with self._uow_factory() as uow:
@@ -164,15 +177,33 @@ class YooKassaWebhookLifecycleCoordinator:
                     ):
                         payment_to_reconcile = stored.payment_id
                 else:
-                    payment_to_reconcile = await self._process_locked_event(
-                        uow,
-                        stored,
-                        current,
-                    )
-                    await uow.commit()
+                    prepared = await self._prepare_locked_event(uow, stored, current)
             else:
-                payment_to_reconcile = await self._process_locked_event(uow, stored, current)
-                await uow.commit()
+                prepared = await self._prepare_locked_event(uow, stored, current)
+
+        if prepared is not None:
+            try:
+                if prepared.kind == "payment":
+                    result = await self._payment_service.fetch_authoritative_payment(
+                        prepared.provider_object_id
+                    )
+                    payment_to_reconcile = await self._apply_payment_result(
+                        event,
+                        result,
+                        now=current,
+                    )
+                else:
+                    refund_result = await self._payment_service.fetch_authoritative_refund(
+                        prepared.provider_object_id
+                    )
+                    await self._apply_refund_result(
+                        event,
+                        refund_result,
+                        now=current,
+                    )
+            except PaymentProviderError as exc:
+                await self._record_provider_failure(event, exc, now=current)
+                raise WebhookProcessingError(retryable=exc.retryable) from None
 
         if payment_to_reconcile is not None:
             await self._reconcile_paid_reservation(
@@ -183,12 +214,12 @@ class YooKassaWebhookLifecycleCoordinator:
             )
         return WebhookDisposition(duplicate=duplicate)
 
-    async def _process_locked_event(
+    async def _prepare_locked_event(
         self,
         uow: PaymentUnitOfWork,
         event: PaymentWebhookEvent,
         now: datetime,
-    ) -> int | None:
+    ) -> _PreparedWebhookCall | None:
         payment = await uow.payments.get_by_provider_id(
             event.provider,
             event.provider_payment_id,
@@ -197,42 +228,155 @@ class YooKassaWebhookLifecycleCoordinator:
         if payment is None:
             await self._persist_retryable_lookup_failure(uow, event, "payment_not_found")
 
-        try:
-            if event.event_type.startswith("payment."):
-                await self._payment_service.process_payment_webhook(payment, event, now=now)
-            elif event.event_type.startswith("refund."):
-                refund = await uow.payments.get_refund_by_provider_id(
-                    event.provider,
-                    event.provider_object_id,
-                    for_update=True,
+        if event.event_type.startswith("refund."):
+            refund = await uow.payments.get_refund_by_provider_id(
+                event.provider,
+                event.provider_object_id,
+                for_update=True,
+            )
+            if refund is None:
+                await self._persist_retryable_lookup_failure(uow, event, "refund_not_found")
+            kind: Literal["payment", "refund"] = "refund"
+        elif event.event_type.startswith("payment."):
+            kind = "payment"
+        else:
+            event.status = WebhookProcessingStatus.IGNORED
+            event.processed_at = now
+            event.last_error_code = "event_type_unsupported"
+            await self._audit_processed_event(uow, event, payment)
+            await uow.commit()
+            return None
+
+        event.attempts += 1
+        event.last_error_code = None
+        await uow.commit()
+        return _PreparedWebhookCall(kind=kind, provider_object_id=event.provider_object_id)
+
+    async def _apply_payment_result(
+        self,
+        envelope: ProviderWebhookEvent,
+        result: ProviderPayment,
+        *,
+        now: datetime,
+    ) -> int | None:
+        async with self._uow_factory() as uow:
+            self._require_scope(uow)
+            event = await self._load_locked_event(uow, envelope)
+            if event.status in _TERMINAL_WEBHOOK_STATUSES:
+                return event.payment_id
+            payment = await uow.payments.get_by_provider_id(
+                event.provider,
+                event.provider_payment_id,
+                for_update=True,
+            )
+            if payment is None:
+                await self._persist_retryable_lookup_failure(uow, event, "payment_not_found")
+            try:
+                self._payment_service.apply_payment_webhook_result(
+                    payment,
+                    event,
+                    result,
+                    now=now,
                 )
-                if refund is None:
-                    await self._persist_retryable_lookup_failure(uow, event, "refund_not_found")
-                await self._payment_service.process_refund_webhook(
+            except (PaymentProviderError, PaymentStateError) as exc:
+                await self._record_apply_failure(uow, event, exc, now=now)
+            await self._audit_processed_event(uow, event, payment)
+            payment_id = payment.id if payment.status is PaymentStatus.SUCCEEDED else None
+            await uow.commit()
+            return payment_id
+
+    async def _apply_refund_result(
+        self,
+        envelope: ProviderWebhookEvent,
+        result: ProviderRefund,
+        *,
+        now: datetime,
+    ) -> None:
+        async with self._uow_factory() as uow:
+            self._require_scope(uow)
+            event = await self._load_locked_event(uow, envelope)
+            if event.status in _TERMINAL_WEBHOOK_STATUSES:
+                return
+            payment = await uow.payments.get_by_provider_id(
+                event.provider,
+                event.provider_payment_id,
+                for_update=True,
+            )
+            if payment is None:
+                await self._persist_retryable_lookup_failure(uow, event, "payment_not_found")
+            refund = await uow.payments.get_refund_by_provider_id(
+                event.provider,
+                event.provider_object_id,
+                for_update=True,
+            )
+            if refund is None:
+                await self._persist_retryable_lookup_failure(uow, event, "refund_not_found")
+            try:
+                self._payment_service.apply_refund_webhook_result(
                     payment,
                     refund,
                     event,
+                    result,
                     now=now,
                 )
-                await _sync_refund_appointment_status(
-                    uow,
-                    payment,
-                    actor_user_id=None,
-                )
-            else:
-                event.status = WebhookProcessingStatus.IGNORED
-                event.processed_at = now
-                event.last_error_code = "event_type_unsupported"
-        except PaymentProviderError as exc:
+            except (PaymentProviderError, PaymentStateError) as exc:
+                await self._record_apply_failure(uow, event, exc, now=now)
+            await _sync_refund_appointment_status(uow, payment, actor_user_id=None)
+            await self._audit_processed_event(uow, event, payment)
             await uow.commit()
-            raise WebhookProcessingError(retryable=exc.retryable) from None
-        except PaymentStateError:
-            event.status = WebhookProcessingStatus.FAILED
-            event.processed_at = now
-            event.last_error_code = "payment_state_rejected"
-            await uow.commit()
-            raise WebhookProcessingError(retryable=False) from None
 
+    async def _load_locked_event(
+        self,
+        uow: PaymentUnitOfWork,
+        envelope: ProviderWebhookEvent,
+    ) -> PaymentWebhookEvent:
+        event = await uow.payments.get_webhook_by_event_key(
+            envelope.provider,
+            envelope.event_key,
+            for_update=True,
+        )
+        if event is None:
+            raise WebhookProcessingError(retryable=True)
+        if not self._same_envelope(event, envelope):
+            raise WebhookProcessingError(retryable=False)
+        return event
+
+    async def _record_provider_failure(
+        self,
+        envelope: ProviderWebhookEvent,
+        error: PaymentProviderError,
+        *,
+        now: datetime,
+    ) -> None:
+        async with self._uow_factory() as uow:
+            self._require_scope(uow)
+            event = await self._load_locked_event(uow, envelope)
+            if event.status not in _TERMINAL_WEBHOOK_STATUSES:
+                self._payment_service.apply_webhook_provider_failure(event, error, now=now)
+                await uow.commit()
+
+    async def _record_apply_failure(
+        self,
+        uow: PaymentUnitOfWork,
+        event: PaymentWebhookEvent,
+        error: PaymentProviderError | PaymentStateError,
+        *,
+        now: datetime,
+    ) -> Never:
+        event.status = WebhookProcessingStatus.FAILED
+        event.processed_at = now
+        event.last_error_code = (
+            error.code if isinstance(error, PaymentProviderError) else "payment_state_rejected"
+        )
+        await uow.commit()
+        raise WebhookProcessingError(retryable=False) from None
+
+    @staticmethod
+    async def _audit_processed_event(
+        uow: PaymentUnitOfWork,
+        event: PaymentWebhookEvent,
+        payment: Payment,
+    ) -> None:
         await uow.audit.add(
             actor_user_id=None,
             action="payment.webhook_processed",
@@ -245,9 +389,6 @@ class YooKassaWebhookLifecycleCoordinator:
             },
             correlation_id=event.correlation_id,
         )
-        if event.event_type.startswith("payment.") and payment.status is PaymentStatus.SUCCEEDED:
-            return payment.id
-        return None
 
     @staticmethod
     async def _persist_retryable_lookup_failure(
@@ -564,6 +705,40 @@ class RefundCoordinator:
         now: datetime,
         correlation_id: str | None,
     ) -> RefundView:
+        command, current_view = await self._prepare_pending_refund(
+            actor,
+            payment_id=payment_id,
+            refund_id=refund_id,
+        )
+        if command is None:
+            return current_view
+        try:
+            result = await self._payment_service.submit_refund(command)
+        except PaymentProviderError as exc:
+            await self._apply_refund_failure(
+                actor,
+                payment_id=payment_id,
+                refund_id=refund_id,
+                error=exc,
+                now=now,
+            )
+            raise
+        return await self._apply_refund_result(
+            actor,
+            payment_id=payment_id,
+            refund_id=refund_id,
+            result=result,
+            now=now,
+            correlation_id=correlation_id,
+        )
+
+    async def _prepare_pending_refund(
+        self,
+        actor: StaffContext,
+        *,
+        payment_id: int,
+        refund_id: int,
+    ) -> tuple[PaymentRefundCommand | None, RefundView]:
         async with self._uow_factory() as uow:
             _require_actor_scope(uow, actor)
             payment = await uow.payments.get(payment_id, for_update=True)
@@ -580,10 +755,45 @@ class RefundCoordinator:
             ):
                 raise PaymentStateError("refund belongs to another provider or business")
             if refund.status is not RefundStatus.PENDING or refund.provider_refund_id is not None:
+                return None, RefundView.model_validate(refund)
+            command = self._payment_service.prepare_refund_submission(payment, refund)
+            view = RefundView.model_validate(refund)
+            await uow.commit()
+            return command, view
+
+    async def _apply_refund_result(
+        self,
+        actor: StaffContext,
+        *,
+        payment_id: int,
+        refund_id: int,
+        result: ProviderRefund,
+        now: datetime,
+        correlation_id: str | None,
+    ) -> RefundView:
+        async with self._uow_factory() as uow:
+            payment, refund = await self._load_locked_refund(
+                uow,
+                actor,
+                payment_id=payment_id,
+                refund_id=refund_id,
+            )
+            if refund.status is not RefundStatus.PENDING or refund.provider_refund_id is not None:
                 return RefundView.model_validate(refund)
             try:
-                await self._payment_service.refund_with_provider(payment, refund, now=now)
-            except PaymentProviderError:
+                self._payment_service.apply_authoritative_refund(
+                    payment,
+                    refund,
+                    result,
+                    now=now,
+                )
+            except PaymentProviderError as exc:
+                self._payment_service.apply_refund_submission_failure(
+                    payment,
+                    refund,
+                    exc,
+                    now=now,
+                )
                 await uow.commit()
                 raise
             await self._sync_refund_result(
@@ -602,6 +812,55 @@ class RefundCoordinator:
             view = RefundView.model_validate(refund)
             await uow.commit()
             return view
+
+    async def _apply_refund_failure(
+        self,
+        actor: StaffContext,
+        *,
+        payment_id: int,
+        refund_id: int,
+        error: PaymentProviderError,
+        now: datetime,
+    ) -> None:
+        async with self._uow_factory() as uow:
+            payment, refund = await self._load_locked_refund(
+                uow,
+                actor,
+                payment_id=payment_id,
+                refund_id=refund_id,
+            )
+            if refund.status is RefundStatus.PENDING and refund.provider_refund_id is None:
+                self._payment_service.apply_refund_submission_failure(
+                    payment,
+                    refund,
+                    error,
+                    now=now,
+                )
+                await uow.commit()
+
+    async def _load_locked_refund(
+        self,
+        uow: PaymentUnitOfWork,
+        actor: StaffContext,
+        *,
+        payment_id: int,
+        refund_id: int,
+    ) -> tuple[Payment, Refund]:
+        _require_actor_scope(uow, actor)
+        payment = await uow.payments.get(payment_id, for_update=True)
+        if payment is None:
+            raise EntityNotFoundError("payment not found")
+        refund = await uow.payments.get_refund(refund_id, for_update=True)
+        if refund is None or refund.payment_id != payment.id:
+            raise EntityNotFoundError("refund not found")
+        if (
+            payment.provider is not self._payment_service.provider_mode
+            or refund.provider is not payment.provider
+            or refund.business_id != actor.business_id
+            or refund.currency != payment.currency
+        ):
+            raise PaymentStateError("refund belongs to another provider or business")
+        return payment, refund
 
     async def _sync_refund_result(
         self,

@@ -305,12 +305,28 @@ class PaymentService:
         """Submit an idempotent refund and apply only a fully verified response."""
 
         current = aware_utc(now)
+        command = self.prepare_refund_submission(payment, refund)
+        try:
+            result = await self.submit_refund(command)
+            self.apply_authoritative_refund(payment, refund, result, now=current)
+        except PaymentProviderError as exc:
+            self.apply_refund_submission_failure(payment, refund, exc, now=current)
+            raise
+        return result
+
+    def prepare_refund_submission(
+        self,
+        payment: Payment,
+        refund: Refund,
+    ) -> PaymentRefundCommand:
+        """Validate and persist an attempt before the caller leaves its transaction."""
+
         self._require_refund_belongs_to_payment(payment, refund)
         if refund.status is not RefundStatus.PENDING:
             raise PaymentStateError("Провайдеру можно отправить только ожидающий возврат.")
         provider_payment_id = self._required_provider_payment_id(payment)
         refund.attempts += 1
-        command = PaymentRefundCommand(
+        return PaymentRefundCommand(
             provider_payment_id=provider_payment_id,
             idempotency_key=refund.idempotency_key,
             amount=refund.amount,
@@ -318,18 +334,32 @@ class PaymentService:
             reason_code=refund.reason_code,
             safe_metadata=refund.safe_metadata,
         )
-        try:
-            result = await self._provider.refund_payment(command)
-            self.apply_authoritative_refund(payment, refund, result, now=current)
-        except PaymentProviderError as exc:
-            refund.last_error_code = exc.code
-            if not exc.retryable:
-                require_refund_transition(refund.status, RefundStatus.FAILED)
-                refund.status = RefundStatus.FAILED
-                refund.failed_at = current
-                self._restore_payment_after_failed_refund(payment)
-            raise
-        return result
+
+    async def submit_refund(self, command: PaymentRefundCommand) -> ProviderRefund:
+        """Perform only the external idempotent provider call, without ORM mutation."""
+
+        return await self._provider.refund_payment(command)
+
+    def apply_refund_submission_failure(
+        self,
+        payment: Payment,
+        refund: Refund,
+        error: PaymentProviderError,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Apply a bounded provider failure after re-locking the local aggregates."""
+
+        current = aware_utc(now)
+        self._require_refund_belongs_to_payment(payment, refund)
+        if refund.status is not RefundStatus.PENDING:
+            return
+        refund.last_error_code = error.code
+        if not error.retryable:
+            require_refund_transition(refund.status, RefundStatus.FAILED)
+            refund.status = RefundStatus.FAILED
+            refund.failed_at = current
+            self._restore_payment_after_failed_refund(payment)
 
     async def refresh_refund_from_provider(
         self,
@@ -463,18 +493,11 @@ class PaymentService:
             raise PaymentStateError("Webhook не является событием платежа.")
         event.attempts += 1
         try:
-            result = await self._provider.get_payment(event.provider_payment_id)
-            self.apply_authoritative_payment(payment, result, now=current)
+            result = await self.fetch_authoritative_payment(event.provider_payment_id)
         except PaymentProviderError as exc:
-            event.last_error_code = exc.code
-            if not exc.retryable:
-                event.status = WebhookProcessingStatus.FAILED
-                event.processed_at = current
+            self.apply_webhook_provider_failure(event, exc, now=current)
             raise
-        event.payment_id = payment.id
-        event.status = WebhookProcessingStatus.PROCESSED
-        event.processed_at = current
-        event.last_error_code = None
+        self.apply_payment_webhook_result(payment, event, result, now=current)
         return result
 
     async def process_refund_webhook(
@@ -496,19 +519,80 @@ class PaymentService:
             raise PaymentStateError("Webhook относится к другому возврату.")
         event.attempts += 1
         try:
-            result = await self._provider.get_refund(event.provider_object_id)
-            self.apply_authoritative_refund(payment, refund, result, now=current)
+            result = await self.fetch_authoritative_refund(event.provider_object_id)
         except PaymentProviderError as exc:
-            event.last_error_code = exc.code
-            if not exc.retryable:
-                event.status = WebhookProcessingStatus.FAILED
-                event.processed_at = current
+            self.apply_webhook_provider_failure(event, exc, now=current)
             raise
+        self.apply_refund_webhook_result(payment, refund, event, result, now=current)
+        return result
+
+    async def fetch_authoritative_payment(self, provider_payment_id: str) -> ProviderPayment:
+        """Fetch provider state without touching ORM objects or a database transaction."""
+
+        return await self._provider.get_payment(provider_payment_id)
+
+    async def fetch_authoritative_refund(self, provider_refund_id: str) -> ProviderRefund:
+        """Fetch provider refund state without touching ORM objects or a transaction."""
+
+        return await self._provider.get_refund(provider_refund_id)
+
+    def apply_payment_webhook_result(
+        self,
+        payment: Payment,
+        event: PaymentWebhookEvent,
+        result: ProviderPayment,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Apply an authoritative payment result inside a fresh short transaction."""
+
+        current = aware_utc(now)
+        self._require_webhook_matches_payment(payment, event)
+        if not event.event_type.startswith("payment."):
+            raise PaymentStateError("Webhook не является событием платежа.")
+        self.apply_authoritative_payment(payment, result, now=current)
         event.payment_id = payment.id
         event.status = WebhookProcessingStatus.PROCESSED
         event.processed_at = current
         event.last_error_code = None
-        return result
+
+    def apply_refund_webhook_result(
+        self,
+        payment: Payment,
+        refund: Refund,
+        event: PaymentWebhookEvent,
+        result: ProviderRefund,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Apply an authoritative refund result inside a fresh short transaction."""
+
+        current = aware_utc(now)
+        self._require_webhook_matches_payment(payment, event)
+        self._require_refund_belongs_to_payment(payment, refund)
+        if not event.event_type.startswith("refund."):
+            raise PaymentStateError("Webhook не является событием возврата.")
+        if refund.provider_refund_id != event.provider_object_id:
+            raise PaymentStateError("Webhook относится к другому возврату.")
+        self.apply_authoritative_refund(payment, refund, result, now=current)
+        event.payment_id = payment.id
+        event.status = WebhookProcessingStatus.PROCESSED
+        event.processed_at = current
+        event.last_error_code = None
+
+    @staticmethod
+    def apply_webhook_provider_failure(
+        event: PaymentWebhookEvent,
+        error: PaymentProviderError,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Persist only a safe provider error after the external call has completed."""
+
+        event.last_error_code = error.code
+        if not error.retryable:
+            event.status = WebhookProcessingStatus.FAILED
+            event.processed_at = aware_utc(now)
 
     def _require_webhook_matches_payment(
         self, payment: Payment, event: PaymentWebhookEvent

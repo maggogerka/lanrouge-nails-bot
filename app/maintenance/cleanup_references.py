@@ -15,7 +15,7 @@ from app.services.reference_cleanup_service import ReferenceCleanupService
 async def run_command(*, dry_run: bool) -> int:
     settings = get_settings()
     settings.validate_database_runtime()
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     try:
         service = ReferenceCleanupService(lambda: SqlAlchemyUnitOfWork(database.sessions))
         result = await service.run(dry_run=dry_run)

@@ -99,6 +99,26 @@ def test_run_uses_bounded_server_defaults_and_loopback_proxy_trust() -> None:
     assert kwargs["limit_concurrency"] == 200
 
 
+def test_run_uses_explicit_reverse_proxy_allowlist() -> None:
+    settings = api_settings().model_copy(
+        update={"api_trusted_proxy_ips_raw": "127.0.0.1,172.20.0.10"}
+    )
+    application = MagicMock(spec=ApiApplication)
+
+    with (
+        patch("app.api.__main__.get_settings", return_value=settings),
+        patch("app.api.__main__.configure_logging"),
+        patch("app.api.__main__.create_application", return_value=application),
+        patch("app.api.__main__.uvicorn.run") as uvicorn_run,
+    ):
+        run()
+
+    assert uvicorn_run.call_args.kwargs["forwarded_allow_ips"] == [
+        "127.0.0.1",
+        "172.20.0.10",
+    ]
+
+
 def test_composition_allows_api_without_optional_yookassa() -> None:
     settings = Settings(
         _env_file=None,

@@ -71,7 +71,7 @@ async def run_worker(settings: Settings) -> None:
 
 
 async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     try:
         service = ReferenceCleanupService(lambda: SqlAlchemyUnitOfWork(database.sessions))
         interval_seconds = settings.reference_cleanup_interval_hours * 60 * 60

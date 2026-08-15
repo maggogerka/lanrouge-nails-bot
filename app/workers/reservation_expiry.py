@@ -109,7 +109,7 @@ async def run_worker(settings: Settings) -> None:
 
 
 async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     log_event(
         logger,
         logging.INFO,
