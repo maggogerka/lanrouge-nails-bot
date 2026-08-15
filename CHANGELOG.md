@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.1] - 2026-08-11
+## [0.4.1] - 2026-08-15
 
 ### Added
 
@@ -68,6 +68,10 @@
 - appointments, windows, services, add-ons, broadcasts, reviews, waitlists, privacy requests and
   active/payment-history screens retain their actions while navigating between bounded pages.
 - master workspace appointments and pending prepayments are also bounded and paginated.
+- reservation expiry is a permanent base service instead of an optional profile;
+- API, reservation and backup containers now consume PostgreSQL/Redis file secrets consistently;
+- backup resolves source and restore database passwords from bounded secret files, and CI runs a
+  real encrypted backup-to-separate-database restore smoke test.
 
 ### Security
 

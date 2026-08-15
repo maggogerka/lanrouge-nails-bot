@@ -52,11 +52,11 @@ docker compose ps
 docker compose logs -f bot
 ```
 
-Базовый Compose запускает PostgreSQL, Redis, миграции, бота и постоянные workers.
-Опциональные API и очистка просроченных резервов:
+Базовый Compose запускает PostgreSQL, Redis, миграции, бота, постоянные workers и обязательную
+очистку просроченных резервов. Опционально включается только HTTP API:
 
 ```powershell
-docker compose -f docker-compose.yml -f compose.profiles.yml --profile api --profile reservation up --build -d
+docker compose -f docker-compose.yml -f compose.profiles.yml --profile api up --build -d api
 ```
 
 Production hardening и backup подключаются отдельным override:

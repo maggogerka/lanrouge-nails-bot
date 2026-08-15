@@ -147,9 +147,11 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       ENV_FILE: .env.example
+      POSTGRES_USER: app_user
+      POSTGRES_DB: app_db
       POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/postgres_password
       REDIS_PASSWORD_SECRET_FILE: .ci-secrets/redis_password
       RESTIC_PASSWORD_SECRET_FILE: .ci-secrets/restic_password
@@ -158,6 +160,7 @@ jobs:
       - name: Prepare non-production Compose secrets
         run: |
           mkdir -p .ci-secrets
+          mkdir -p .ci-backup-repository
           printf '%s' 'ci-postgres-password-only' > .ci-secrets/postgres_password
           printf '%s' 'ci_redis_password_0123456789abcdef' > .ci-secrets/redis_password
           printf '%s' 'ci-restic-password-only' > .ci-secrets/restic_password
@@ -165,10 +168,11 @@ jobs:
           # files readable, while the 0700 parent keeps other host users out.
           chmod 700 .ci-secrets
           chmod 644 .ci-secrets/*
+          chmod 777 .ci-backup-repository
       - name: Validate all Compose files and profiles
         run: |
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation --profile backup config --quiet
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation --profile backup config --format json | jq -e '
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --quiet
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --format json | jq -e '
             ((.services.postgres.ports // []) | length) == 0 and
             ((.services.redis.ports // []) | length) == 0 and
             ((.services.api.ports // []) | length) == 0 and
@@ -178,7 +182,17 @@ jobs:
             .services["broadcast-worker"].environment.HEALTHCHECK_COMPONENT == "broadcasts" and
             .services["reference-cleanup-worker"].environment.HEALTHCHECK_COMPONENT == "reference_cleanup" and
             .services["reservation-worker"].environment.HEALTHCHECK_COMPONENT == "reservation_expiry" and
-            .services.api.environment.REDIS_NAMESPACE == .services.bot.environment.REDIS_NAMESPACE
+            .services.api.environment.REDIS_NAMESPACE == .services.bot.environment.REDIS_NAMESPACE and
+            .services.api.environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services.api.environment.REDIS_PASSWORD_FILE == "/run/secrets/redis_password" and
+            .services["reservation-worker"].environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services["reservation-worker"].environment.REDIS_PASSWORD_FILE == "/run/secrets/redis_password" and
+            .services.backup.environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            ([.services.api.secrets[].source] | index("postgres_password") != null) and
+            ([.services.api.secrets[].source] | index("redis_password") != null) and
+            ([.services["reservation-worker"].secrets[].source] | index("postgres_password") != null) and
+            ([.services["reservation-worker"].secrets[].source] | index("redis_password") != null) and
+            ([.services.backup.secrets[].source] | index("postgres_password") != null)
           '
       - name: Smoke PostgreSQL and authenticated Redis
         run: |
@@ -187,16 +201,31 @@ jobs:
           test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T redis redis-cli ping 2>&1)" = "NOAUTH Authentication required."
       - name: Build runtime services, test, and backup images
         run: |
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation --profile backup build bot api reservation-worker backup
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup build bot api reservation-worker backup
           docker build --target runtime --tag lanrouge-nails-bot:ci .
           docker build --target test --tag lanrouge-nails-bot-test:ci .
           docker build --target backup --tag lanrouge-nails-backup:ci .
+      - name: Smoke file-secret API and reservation worker
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api up -d --wait api reservation-worker
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/redis_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/redis_password
       - name: Verify backup tools and explicit disabled mode
         run: |
           docker run --rm --entrypoint pg_dump lanrouge-nails-backup:ci --version
           docker run --rm --entrypoint pg_restore lanrouge-nails-backup:ci --version
           docker run --rm --entrypoint restic lanrouge-nails-backup:ci version
           docker run --rm lanrouge-nails-backup:ci
+      - name: Run encrypted backup and restore smoke test
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm --entrypoint restic backup init
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_db -v ON_ERROR_STOP=1 -c "CREATE TABLE ci_backup_marker (value text NOT NULL); INSERT INTO ci_backup_marker VALUES ('restored');"
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres createdb -U app_user app_restore_test
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_restore_test -tAc 'SELECT value FROM ci_backup_marker')" = "restored"
       - name: Trivy runtime image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -217,4 +246,6 @@ jobs:
           severity: HIGH,CRITICAL
       - name: Stop CI Compose dependencies
         if: always()
-        run: docker compose -f docker-compose.yml -f compose.production.yml down --volumes
+        run: |
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api --profile backup down --volumes
+          rm -rf .ci-backup-repository

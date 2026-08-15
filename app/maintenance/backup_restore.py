@@ -32,6 +32,7 @@ _OFFSITE_REPOSITORY_PREFIXES = (
 )
 _RESTORE_ACKNOWLEDGEMENT = "RESTORE_TO_SEPARATE_TEST_DATABASE"
 _SAFE_DATABASE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
+_MAX_SECRET_FILE_BYTES = 16_384
 _SYSTEM_ENVIRONMENT_KEYS = {
     "COMSPEC",
     "HOME",
@@ -110,6 +111,7 @@ class BackupSettings:
     keep_weekly: int = 5
     keep_monthly: int = 12
     command_timeout_seconds: int = 3_600
+    allow_local_repository_for_tests: bool = False
     process_environment: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     def __repr__(self) -> str:
@@ -126,10 +128,30 @@ class BackupSettings:
         enabled = _boolean(source.get("BACKUP_ENABLED", ""), name="BACKUP_ENABLED")
         if not enabled:
             return cls(enabled=False)
+        database_url = _resolve_connection_url(
+            source,
+            url_name="DATABASE_URL",
+            url_file_name="DATABASE_URL_FILE",
+            password_file_name="DATABASE_PASSWORD_FILE",
+        )
+        restore_database_url = _resolve_connection_url(
+            source,
+            url_name="RESTORE_DATABASE_URL",
+            url_file_name="RESTORE_DATABASE_URL_FILE",
+            password_file_name="RESTORE_DATABASE_PASSWORD_FILE",
+        )
+        allow_local_repository_for_tests = _boolean(
+            source.get("BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS", ""),
+            name="BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS",
+        )
+        if allow_local_repository_for_tests and source.get("APP_ENV", "").strip() != "test":
+            raise BackupConfigurationError(
+                "local backup repositories may only be enabled when APP_ENV=test"
+            )
         return cls(
             enabled=True,
-            database_url=source.get("DATABASE_URL", "").strip(),
-            restore_database_url=source.get("RESTORE_DATABASE_URL", "").strip(),
+            database_url=database_url,
+            restore_database_url=restore_database_url,
             restic_repository=source.get("RESTIC_REPOSITORY", "").strip(),
             restore_acknowledgement=source.get("RESTORE_ACKNOWLEDGE", "").strip(),
             keep_daily=_bounded_integer(source, "BACKUP_KEEP_DAILY", default=7, maximum=365),
@@ -142,6 +164,7 @@ class BackupSettings:
                 minimum=60,
                 maximum=86_400,
             ),
+            allow_local_repository_for_tests=allow_local_repository_for_tests,
             process_environment=source,
         )
 
@@ -152,7 +175,10 @@ class BackupSettings:
             raise BackupConfigurationError("DATABASE_URL is required")
         if not self.restic_repository:
             raise BackupConfigurationError("RESTIC_REPOSITORY is required")
-        if not self.restic_repository.casefold().startswith(_OFFSITE_REPOSITORY_PREFIXES):
+        if not (
+            self.restic_repository.casefold().startswith(_OFFSITE_REPOSITORY_PREFIXES)
+            or self.allow_local_repository_for_tests
+        ):
             raise BackupConfigurationError("RESTIC_REPOSITORY must be offsite")
         if not (
             self.process_environment.get("RESTIC_PASSWORD", "").strip()
@@ -605,6 +631,75 @@ def _boolean(raw: str, *, name: str) -> bool:
     if normalized in _FALSE_VALUES:
         return False
     raise BackupConfigurationError(f"{name} must be a boolean")
+
+
+def _resolve_connection_url(
+    source: Mapping[str, str],
+    *,
+    url_name: str,
+    url_file_name: str,
+    password_file_name: str,
+) -> str:
+    """Resolve a URL/file pair and inject a separately mounted password."""
+
+    direct_url = source.get(url_name, "").strip()
+    url_file = source.get(url_file_name, "").strip()
+    if url_file:
+        if direct_url:
+            raise BackupConfigurationError(f"{url_name} and {url_file_name} are mutually exclusive")
+        direct_url = _read_secret_file(Path(url_file), url_file_name)
+
+    password_file = source.get(password_file_name, "").strip()
+    if not password_file:
+        return direct_url
+    if not direct_url:
+        raise BackupConfigurationError(f"{password_file_name} requires {url_name}")
+
+    password = _read_secret_file(Path(password_file), password_file_name)
+    try:
+        parsed = make_url(direct_url)
+    except Exception as exc:
+        raise BackupConfigurationError(f"{url_name} is invalid") from exc
+    if not (parsed.username or "").strip():
+        raise BackupConfigurationError(f"{password_file_name} requires a URL username")
+    return parsed.set(password=password).render_as_string(hide_password=False)
+
+
+def _read_secret_file(path: Path, variable_name: str) -> str:
+    """Read one bounded regular UTF-8 secret file without leaking its value."""
+
+    try:
+        with path.open("rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise BackupConfigurationError(f"{variable_name} must reference a regular file")
+            if metadata.st_size > _MAX_SECRET_FILE_BYTES:
+                raise BackupConfigurationError(
+                    f"{variable_name} must not exceed {_MAX_SECRET_FILE_BYTES} bytes"
+                )
+            raw = stream.read(_MAX_SECRET_FILE_BYTES + 1)
+    except BackupConfigurationError:
+        raise
+    except OSError as exc:
+        raise BackupConfigurationError(f"{variable_name} cannot be read") from exc
+
+    if len(raw) > _MAX_SECRET_FILE_BYTES:
+        raise BackupConfigurationError(
+            f"{variable_name} must not exceed {_MAX_SECRET_FILE_BYTES} bytes"
+        )
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BackupConfigurationError(f"{variable_name} must contain valid UTF-8") from exc
+    if value.endswith("\n"):
+        value = value[:-1]
+        if value.endswith("\r"):
+            value = value[:-1]
+    if not value or "\x00" in value or "\r" in value or "\n" in value:
+        raise BackupConfigurationError(f"{variable_name} must contain one non-empty line")
+    if value != value.strip():
+        raise BackupConfigurationError(f"{variable_name} must not contain surrounding whitespace")
+    return value
 
 
 def _bounded_integer(

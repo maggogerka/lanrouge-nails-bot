@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 .secrets/
+.ci-secrets/
+.ci-backup-repository/
 secrets/
 
 # Python

@@ -42,8 +42,8 @@ file must also contain the normal runtime values such as
 
 Set `REDIS_NAMESPACE` in the shell or Compose `.env` file (default `telegram_crm`).
 The variable is preserved through the Compose environment anchors and is wired
-into every application container, including optional API and reservation
-profiles. Redis-backed sessions, limits, locks, and heartbeats use this namespace.
+into every application container, including the permanent reservation worker and
+the optional API. Redis-backed sessions, limits, locks, and heartbeats use this namespace.
 
 Compose no longer forces a global project name. Set a unique name per deployment:
 
@@ -58,7 +58,7 @@ $env:REDIS_PASSWORD_SECRET_FILE = "C:\secure\redis_password"
 
 ```powershell
 docker compose -f docker-compose.yml -f compose.production.yml config --quiet
-docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation --profile backup config --quiet
+docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --quiet
 docker compose -f docker-compose.yml -f compose.production.yml build
 docker compose -f docker-compose.yml -f compose.production.yml up -d
 docker compose -f docker-compose.yml -f compose.production.yml ps
@@ -81,9 +81,9 @@ Database isolation here comes from the internal network, absent published ports,
 the password file, `no-new-privileges`, and host-level Docker access controls.
 
 Each permanent service selects its own heartbeat through
-`HEALTHCHECK_COMPONENT`: `bot`, `reminders`, `broadcasts`, or
-`reference_cleanup`. The image healthcheck verifies PostgreSQL, Redis, and only
-that service's heartbeat, so a stopped optional worker does not mark unrelated
+`HEALTHCHECK_COMPONENT`: `bot`, `reminders`, `broadcasts`, `reference_cleanup`,
+`privacy_deletion`, or `reservation_expiry`. The image healthcheck verifies PostgreSQL,
+Redis, and only that service's heartbeat, so a stopped process does not mark unrelated
 containers unhealthy. Process exit remains visible through the container state.
 
 ## Optional profiles
@@ -95,20 +95,23 @@ docker compose -f docker-compose.yml -f compose.production.yml -f compose.profil
 ```
 
 Set `BACKUP_ENABLED=true`, `RESTIC_REPOSITORY` to a supported offsite repository,
-the provider credentials, and the restic password secret. The dump lives in a
-mode-0600 temporary file on a configurable tmpfs (`BACKUP_TMPFS_SIZE`, default
+the provider credentials, and the restic password secret. Compose also mounts
+`postgres_password`; backup replaces the placeholder password in `DATABASE_URL`
+using `DATABASE_PASSWORD_FILE` without exporting the resulting URL. The dump lives in
+a mode-0600 temporary file on a configurable tmpfs (`BACKUP_TMPFS_SIZE`, default
 `1g`). Size this above the largest custom-format dump. Retention defaults are
 implemented by the backup core. Restore remains a separate, guarded
 `restore-test` operation and must target a different database whose name contains
 `test` or `restore`; see `backup-restore.md`.
 
-The HTTP API and reservation expiry worker are real, optional long-running
-services. Validate and start them with:
+The HTTP API is optional. The reservation expiry worker is a permanent base
+service because payment reservations must expire even without Mini App. Validate
+and start the API with:
 
 ```powershell
-docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation config --quiet
-docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation up -d api reservation-worker
-docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile reservation ps api reservation-worker
+docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api config --quiet
+docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api up -d api
+docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api ps api reservation-worker
 ```
 
 The API runs `python -m app.api`, binds to internal port `8080`, and publishes no
@@ -120,8 +123,8 @@ rejected. A separately
 managed reverse proxy must join an appropriate Docker network if external API
 access is later required; this Compose stack does not expose it.
 
-The reservation service runs `python -m app.workers.reservation_expiry` and sets
-`HEALTHCHECK_COMPONENT=reservation_expiry`, so its Docker healthcheck covers both
+The permanent reservation service runs `python -m app.workers.reservation_expiry` and
+sets `HEALTHCHECK_COMPONENT=reservation_expiry`, so its Docker healthcheck covers both
 dependencies and its worker heartbeat. Both services inherit the same read-only
 filesystem, dropped capabilities, resource limits, dependency ordering, internal
 backend network, egress network, and rotated logs as the base application.

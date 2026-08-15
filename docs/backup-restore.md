@@ -10,7 +10,8 @@
 Backup явно отключён, пока `BACKUP_ENABLED=true` не задан. Это возвращает структурированный
 status `disabled`, а не создаёт незашифрованный локальный dump. Локальный/file restic repository
 отклоняется: разрешены offsite backends `s3:`, `sftp:`, `rest:`, `b2:`, `azure:`, `gs:` и
-`rclone:`.
+`rclone:`. Локальный repository разрешается только CI при одновременных `APP_ENV=test` и
+`BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS=true`; production с таким исключением завершится ошибкой.
 
 Требуются внешние binaries:
 
@@ -25,7 +26,8 @@ status `disabled`, а не создаёт незашифрованный лок�
 
 ```text
 BACKUP_ENABLED=true
-DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/<database>
+DATABASE_URL=postgresql+asyncpg://<user>:<placeholder>@<host>:5432/<database>
+DATABASE_PASSWORD_FILE=/run/secrets/postgres_password
 RESTIC_REPOSITORY=s3:<bucket>/<prefix>
 RESTIC_PASSWORD=<repository-encryption-password>
 AWS_ACCESS_KEY_ID=<storage-key-id>
@@ -35,8 +37,10 @@ BACKUP_KEEP_WEEKLY=5
 BACKUP_KEEP_MONTHLY=12
 ```
 
-Вместо `RESTIC_PASSWORD` поддерживается `RESTIC_PASSWORD_FILE`. Файл должен быть доступен только
-backup identity. Runtime передаёт `pg_dump` только `PG*`, а restic — только системные и
+Вместо прямого PostgreSQL-пароля поддерживаются `DATABASE_PASSWORD_FILE` и полный защищённый
+`DATABASE_URL_FILE`; прямое значение URL и `DATABASE_URL_FILE` взаимоисключающие. Для restic
+поддерживается `RESTIC_PASSWORD_FILE`. Файлы должны быть доступны только backup identity.
+Runtime передаёт `pg_dump` только `PG*`, а restic — только системные и
 backend/restic variables; `BOT_TOKEN` и полный `DATABASE_URL` дочерним процессам не передаются.
 
 Запуск:
@@ -66,6 +70,7 @@ Core никогда не создаёт и не удаляет базы. Опе�
 
 ```text
 RESTORE_DATABASE_URL=postgresql+asyncpg://<restore-user>:<password>@<host>:5432/app_restore_test
+RESTORE_DATABASE_PASSWORD_FILE=/run/secrets/restore_postgres_password
 RESTORE_ACKNOWLEDGE=RESTORE_TO_SEPARATE_TEST_DATABASE
 ```
 
@@ -99,3 +104,5 @@ tenant/payment/appointment строк. Не направляйте Telegram bot 
 - Restic password нельзя потерять: без него snapshot криптографически невосстановим.
 - Backup считается проверенным только после успешного restore drill, а не после exit code `0`
   команды upload.
+- CI выполняет настоящий локальный encrypted backup → restore smoke, но он не заменяет проверку
+  production offsite credentials, retention, alerting и восстановления на VPS покупателя.

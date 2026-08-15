@@ -7,6 +7,8 @@ x-profile-logging: &profile-logging
 
 x-profile-environment: &profile-environment
   REDIS_NAMESPACE: ${REDIS_NAMESPACE:-telegram_crm}
+  DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+  REDIS_PASSWORD_FILE: /run/secrets/redis_password
 
 x-profile-runtime: &profile-runtime
   build:
@@ -14,6 +16,9 @@ x-profile-runtime: &profile-runtime
     target: runtime
   env_file: ${ENV_FILE:-.env}
   environment: *profile-environment
+  secrets:
+    - postgres_password
+    - redis_password
   init: true
   stop_grace_period: 20s
   read_only: true
@@ -80,16 +85,6 @@ services:
     restart: unless-stopped
     depends_on: *profile-dependencies
 
-  reservation-worker:
-    <<: *profile-runtime
-    profiles: ["reservation"]
-    command: ["python", "-m", "app.workers.reservation_expiry"]
-    environment:
-      <<: *profile-environment
-      HEALTHCHECK_COMPONENT: reservation_expiry
-    restart: unless-stopped
-    depends_on: *profile-dependencies
-
   backup:
     build:
       context: .
@@ -98,12 +93,14 @@ services:
     env_file: ${ENV_FILE:-.env}
     environment:
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       RESTIC_PASSWORD_FILE: /run/secrets/restic_password
     command: ["python", "-m", "app.maintenance.backup_restore", "backup"]
     depends_on:
       postgres:
         condition: service_healthy
     secrets:
+      - postgres_password
       - restic_password
     restart: "no"
     init: true

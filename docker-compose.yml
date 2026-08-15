@@ -164,6 +164,15 @@ services:
     restart: unless-stopped
     depends_on: *app-dependencies
 
+  reservation-worker:
+    <<: *app-runtime
+    command: ["python", "-m", "app.workers.reservation_expiry"]
+    environment:
+      <<: *app-environment
+      HEALTHCHECK_COMPONENT: reservation_expiry
+    restart: unless-stopped
+    depends_on: *app-dependencies
+
 volumes:
   postgres-data:
   redis-data:

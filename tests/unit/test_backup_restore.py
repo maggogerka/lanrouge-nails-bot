@@ -7,7 +7,10 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from app.maintenance.backup_restore import (
+    BackupConfigurationError,
     BackupRestoreService,
     BackupSettings,
     CommandResult,
@@ -121,6 +124,66 @@ def test_local_unencrypted_repository_is_rejected_and_failure_hook_receives_safe
     serialized = json.dumps(result.as_dict())
     assert "production-password" not in serialized
     assert "/var/backups" not in serialized
+
+
+def test_connection_password_files_replace_placeholders_without_leaking(
+    tmp_path: Path,
+) -> None:
+    database_password = tmp_path / "database-password"
+    restore_password = tmp_path / "restore-password"
+    database_password.write_text("source:@/secret", encoding="utf-8")
+    restore_password.write_text("restore:@/secret", encoding="utf-8")
+
+    settings = BackupSettings.from_environment(
+        environment(
+            DATABASE_URL="postgresql+asyncpg://app_user:placeholder@db:5432/app_db",
+            DATABASE_PASSWORD_FILE=str(database_password),
+            RESTORE_DATABASE_URL=(
+                "postgresql+asyncpg://restore_user:placeholder@db:5432/app_restore_test"
+            ),
+            RESTORE_DATABASE_PASSWORD_FILE=str(restore_password),
+            RESTORE_ACKNOWLEDGE="RESTORE_TO_SEPARATE_TEST_DATABASE",
+        )
+    )
+
+    source, target = settings.validate_restore()
+
+    assert source.password == "source:@/secret"
+    assert target.password == "restore:@/secret"
+    assert "source:@/secret" not in repr(settings)
+    assert "restore:@/secret" not in repr(settings)
+
+
+def test_url_file_conflict_and_non_test_local_repository_are_rejected(tmp_path: Path) -> None:
+    database_url = tmp_path / "database-url"
+    database_url.write_text(
+        "postgresql+asyncpg://app_user:file-secret@db:5432/app_db",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BackupConfigurationError, match="mutually exclusive"):
+        BackupSettings.from_environment(environment(DATABASE_URL_FILE=str(database_url)))
+
+    with pytest.raises(BackupConfigurationError, match="APP_ENV=test"):
+        BackupSettings.from_environment(
+            environment(
+                RESTIC_REPOSITORY="/test/repository",
+                BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS="true",
+                APP_ENV="production",
+            )
+        )
+
+
+def test_local_repository_requires_explicit_test_environment() -> None:
+    settings = BackupSettings.from_environment(
+        environment(
+            RESTIC_REPOSITORY="/test/repository",
+            BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS="true",
+            APP_ENV="test",
+        )
+    )
+
+    assert settings.validate_backup().database == "app_db"
 
 
 def test_command_failure_has_stable_code_and_never_exposes_process_details() -> None:
