@@ -54,4 +54,21 @@ def test_systemd_environment_template_binds_one_explicit_compose_project() -> No
     assert "COMPOSE_PROJECT_NAME=telegram-crm-production" in text
     assert "ENV_FILE=/opt/telegram-crm-bot/.env" in text
     assert "POSTGRES_PASSWORD_SECRET_FILE=/etc/telegram-crm/secrets/postgres_password" in text
+    assert (
+        "RESTORE_POSTGRES_PASSWORD_SECRET_FILE="
+        "/etc/telegram-crm/secrets/restore_postgres_password" in text
+    )
     assert "RESTIC_PASSWORD_SECRET_FILE=/etc/telegram-crm/secrets/restic_password" in text
+
+
+def test_backup_compose_uses_a_separate_restore_password_secret() -> None:
+    profile = Path("compose.profiles.yml").read_text(encoding="utf-8")
+    ci_override = Path("compose.ci.yml").read_text(encoding="utf-8")
+
+    assert "RESTORE_DATABASE_PASSWORD_FILE: /run/secrets/restore_postgres_password" in profile
+    assert "- restore_postgres_password" in profile
+    assert (
+        "${RESTORE_POSTGRES_PASSWORD_SECRET_FILE:-./.secrets/restore_postgres_password}" in profile
+    )
+    assert "RESTORE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password" not in ci_override
+    assert "postgresql+asyncpg://restore_user:placeholder@postgres" in ci_override

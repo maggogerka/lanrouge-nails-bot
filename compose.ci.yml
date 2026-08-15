@@ -22,8 +22,7 @@ services:
       BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS: "true"
       RESTIC_REPOSITORY: /repository
       RESTIC_CACHE_DIR: /tmp/restic-cache
-      RESTORE_DATABASE_URL: postgresql+asyncpg://app_user:placeholder@postgres:5432/app_restore_test
-      RESTORE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      RESTORE_DATABASE_URL: postgresql+asyncpg://restore_user:placeholder@postgres:5432/app_restore_test
       RESTORE_ACKNOWLEDGE: RESTORE_TO_SEPARATE_TEST_DATABASE
     volumes:
       - ./.ci-backup-repository:/repository

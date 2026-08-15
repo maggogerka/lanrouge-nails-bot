@@ -192,6 +192,35 @@ def test_connection_password_files_replace_placeholders_without_leaking(
     assert "restore:@/secret" not in repr(settings)
 
 
+def test_mounted_restore_secret_does_not_break_backup_without_restore_url(
+    tmp_path: Path,
+) -> None:
+    restore_password = tmp_path / "restore-password"
+    restore_password.write_text("separate-restore-secret", encoding="utf-8")
+
+    settings = BackupSettings.from_environment(
+        environment(RESTORE_DATABASE_PASSWORD_FILE=str(restore_password))
+    )
+
+    assert settings.validate_backup().database == "app_db"
+    with pytest.raises(BackupConfigurationError, match="RESTORE_DATABASE_URL"):
+        settings.validate_restore()
+
+
+def test_configured_restore_url_fails_fast_when_secret_is_missing(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-restore-password"
+
+    with pytest.raises(BackupConfigurationError, match="cannot be read"):
+        BackupSettings.from_environment(
+            environment(
+                RESTORE_DATABASE_URL=(
+                    "postgresql+asyncpg://restore_user:placeholder@db:5432/app_restore_test"
+                ),
+                RESTORE_DATABASE_PASSWORD_FILE=str(missing),
+            )
+        )
+
+
 def test_url_file_conflict_and_non_test_local_repository_are_rejected(tmp_path: Path) -> None:
     database_url = tmp_path / "database-url"
     database_url.write_text(

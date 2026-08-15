@@ -94,6 +94,7 @@ services:
     environment:
       BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      RESTORE_DATABASE_PASSWORD_FILE: /run/secrets/restore_postgres_password
       RESTIC_PASSWORD_FILE: /run/secrets/restic_password
     command: ["python", "-m", "app.maintenance.backup_restore", "backup"]
     depends_on:
@@ -101,6 +102,7 @@ services:
         condition: service_healthy
     secrets:
       - postgres_password
+      - restore_postgres_password
       - restic_password
     restart: "no"
     init: true
@@ -123,5 +125,7 @@ services:
       disable: true
 
 secrets:
+  restore_postgres_password:
+    file: ${RESTORE_POSTGRES_PASSWORD_SECRET_FILE:-./.secrets/restore_postgres_password}
   restic_password:
     file: ${RESTIC_PASSWORD_SECRET_FILE:-./.secrets/restic_password}

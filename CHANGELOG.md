@@ -12,13 +12,22 @@
 - production backup jobs fail when disabled, reject an unexpected/empty database and use explicit
   Compose project/environment bindings;
 - irreversible actions use atomic actor/business/object-bound confirmations with a short TTL;
-- retries of composite broadcasts resume after the persisted media phase instead of resending it.
+- retries of composite broadcasts do not resend a media phase already persisted in PostgreSQL;
+  Telegram does not support idempotency keys, so a crash between the API response and that
+  checkpoint still has a narrow duplicate-delivery window rather than an exactly-once guarantee;
+- backup/restore Compose uses a dedicated `restore_postgres_password` and a separate restricted
+  restore database account instead of reusing the production application password.
 
 ### Operations
 
 - CI now runs automatically for `fix/**` and `release/**` and validates the YooKassa override;
 - neutral `telegram-crm-backup*` systemd units replace legacy branded names, including freshness,
   monthly restore-test and an `OnFailure` alert hook.
+- the legacy Python distribution/package identity remains internal for compatibility; a complete
+  rename is deferred to a separate tested release and is not shown in user-facing bot copy.
+- no container registry target or credentials are configured in the repository; publishing a
+  client image by immutable digest remains an explicit deployment blocker and must not be replaced
+  with a floating `latest` tag.
 
 ## [0.4.2] - 2026-08-15
 

@@ -42,7 +42,8 @@ Set-Content -NoNewline .secrets/redis_password "replace_with_32_byte_url_safe_se
 ```
 
 В `.env` обязательно задайте `BOT_TOKEN`, `PRIVACY_POLICY_URL`, `DATABASE_URL` и
-аутентифицированный `REDIS_URL`. Пароли внутри URL должны совпадать с файлами в `.secrets`.
+аутентифицированный `REDIS_URL`. В Docker пароль URL является placeholder: Compose безопасно
+заменяет его значением соответствующего file secret.
 Настоящие `.env` и `.secrets` игнорируются Git; не отправляйте их в чат и не коммитьте.
 
 ```powershell
@@ -67,6 +68,8 @@ docker compose -f docker-compose.yml -f compose.production.yml up -d
 ```
 
 Полные команды и границы секретов: [docs/deployment-v0.4.md](docs/deployment-v0.4.md).
+Для backup/restore дополнительно обязательны отдельные `restic_password` и
+`restore_postgres_password`; настройка описана в [docs/backup-restore.md](docs/backup-restore.md).
 
 ## Полная очистка локальной базы
 

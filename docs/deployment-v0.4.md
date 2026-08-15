@@ -11,6 +11,7 @@ Create secret files outside source control before the first start:
 .secrets/postgres_password
 .secrets/redis_password
 .secrets/restic_password    # only when the backup profile is used
+.secrets/restore_postgres_password # required by the backup profile; used only by restore-test
 ```
 
 The Redis password must be at least 32 base64url-safe characters (`A-Z`, `a-z`,
@@ -19,6 +20,7 @@ The Redis password must be at least 32 base64url-safe characters (`A-Z`, `a-z`,
 - `POSTGRES_PASSWORD_SECRET_FILE`
 - `REDIS_PASSWORD_SECRET_FILE`
 - `RESTIC_PASSWORD_SECRET_FILE`
+- `RESTORE_POSTGRES_PASSWORD_SECRET_FILE`
 - `YOOKASSA_SHOP_ID_SECRET_FILE`
 - `YOOKASSA_SECRET_KEY_SECRET_FILE`
 
@@ -97,14 +99,16 @@ docker compose -f docker-compose.yml -f compose.production.yml -f compose.profil
 ```
 
 Set `BACKUP_ENABLED=true`, `RESTIC_REPOSITORY` to a supported offsite repository,
-the provider credentials, and the restic password secret. Compose also mounts
-`postgres_password`; backup replaces the placeholder password in `DATABASE_URL`
+the provider credentials, and the restic password secret. Compose mounts
+`postgres_password` for the source and the distinct `restore_postgres_password` for the guarded
+restore account; backup replaces the placeholder password in `DATABASE_URL`
 using `DATABASE_PASSWORD_FILE` without exporting the resulting URL. The dump lives in
 a mode-0600 temporary file on a configurable tmpfs (`BACKUP_TMPFS_SIZE`, default
 `1g`). Size this above the largest custom-format dump. Retention defaults are
 implemented by the backup core. Restore remains a separate, guarded
 `restore-test` operation and must target a different database whose name contains
-`test` or `restore`; see `backup-restore.md`.
+`test` or `restore`. `RESTORE_DATABASE_PASSWORD_FILE` is fixed to
+`/run/secrets/restore_postgres_password`; see `backup-restore.md`.
 
 The HTTP API is optional. The reservation expiry worker is a permanent base
 service because payment reservations must expire even without Mini App. Validate

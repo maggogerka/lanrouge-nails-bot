@@ -139,11 +139,19 @@ class BackupSettings:
             url_file_name="DATABASE_URL_FILE",
             password_file_name="DATABASE_PASSWORD_FILE",
         )
-        restore_database_url = _resolve_connection_url(
-            source,
-            url_name="RESTORE_DATABASE_URL",
-            url_file_name="RESTORE_DATABASE_URL_FILE",
-            password_file_name="RESTORE_DATABASE_PASSWORD_FILE",
+        restore_url_configured = bool(
+            source.get("RESTORE_DATABASE_URL", "").strip()
+            or source.get("RESTORE_DATABASE_URL_FILE", "").strip()
+        )
+        restore_database_url = (
+            _resolve_connection_url(
+                source,
+                url_name="RESTORE_DATABASE_URL",
+                url_file_name="RESTORE_DATABASE_URL_FILE",
+                password_file_name="RESTORE_DATABASE_PASSWORD_FILE",
+            )
+            if restore_url_configured
+            else ""
         )
         allow_local_repository_for_tests = _boolean(
             source.get("BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS", ""),
