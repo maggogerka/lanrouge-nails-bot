@@ -36,7 +36,7 @@ from app.schemas.authorization import (
 from app.schemas.public_links import PublicLink, public_links_from_mapping
 from app.services.authorization_service import AuthorizationService
 from app.states.staff import StaffInvitationForm, StaffProfileForm
-from app.utils.telegram import answer_photo_with_html
+from app.utils.telegram import answer_html_safely, answer_photo_with_html
 
 router = Router(name="admin.staff")
 
@@ -136,7 +136,7 @@ async def _show_member(
             reply_markup=keyboard,
         )
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await answer_html_safely(message, text, reply_markup=keyboard)
 
 
 @router.callback_query(StaffAdminCallback.filter(F.action == "member"))

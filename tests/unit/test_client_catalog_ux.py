@@ -8,8 +8,14 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
-from app.handlers.client.booking_browse import show_service_cards
+from app.handlers.client.booking_browse import (
+    _render_service_card,
+    browse_service_page,
+    return_to_services,
+    show_service_cards,
+)
 from app.handlers.client.menu import book_with_master, refresh_stale_optional_menu
+from app.keyboards.client.booking import BookingCallback
 from app.keyboards.client.main import CLIENT_REVIEWS_TEXT
 from app.keyboards.client.masters import PublicMasterCallback, public_master_keyboard
 from app.schemas.menu import MenuCapabilities
@@ -77,6 +83,128 @@ async def test_service_card_shows_photo_immediately_without_photo_button() -> No
 
 
 @pytest.mark.asyncio
+async def test_schema_maximum_service_card_is_split_without_losing_controls() -> None:
+    message = MagicMock(spec=Message)
+    message.answer = AsyncMock(return_value=MagicMock(spec=Message))
+    message.answer_photo = AsyncMock(return_value=MagicMock(spec=Message))
+    message.photo = None
+    state = MagicMock(spec=FSMContext)
+    state.set_state = AsyncMock()
+    state.update_data = AsyncMock()
+    service = service_view().model_copy(
+        update={
+            "name": "<&😀" + "Н" * 251,
+            "description": "<&😀x" * 1000,
+            "telegram_photo_file_id": "service-photo",
+        }
+    )
+
+    await show_service_cards(message, state, [service])
+
+    message.answer_photo.assert_awaited_once_with("service-photo")
+    assert message.answer.await_count >= 2
+    assert all(
+        call.kwargs.get("reply_markup") is None for call in message.answer.await_args_list[:-1]
+    )
+    assert message.answer.await_args_list[-1].kwargs["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_current_service_page_indicator_is_a_noop() -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = User(id=12, is_bot=False, first_name="Тест")
+    callback.message = MagicMock(spec=Message)
+    callback.message.edit_media = AsyncMock()
+    callback.message.edit_text = AsyncMock()
+    callback.answer = AsyncMock()
+    state = MagicMock(spec=FSMContext)
+    state.get_data = AsyncMock(return_value={"service_page": 1})
+    state.update_data = AsyncMock()
+    booking = SimpleNamespace(list_active_services=AsyncMock(return_value=[service_view()]))
+
+    await browse_service_page(
+        callback,
+        BookingCallback(action="service_page", object_id=0, page=1),
+        state,
+        booking,
+    )
+
+    callback.message.edit_media.assert_not_awaited()
+    callback.message.edit_text.assert_not_awaited()
+    callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_return_to_services_handles_empty_catalog_without_index_error() -> None:
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = User(id=12, is_bot=False, first_name="Тест")
+    callback.message = MagicMock(spec=Message)
+    callback.message.edit_reply_markup = AsyncMock()
+    callback.message.answer = AsyncMock()
+    callback.answer = AsyncMock()
+    state = MagicMock(spec=FSMContext)
+    state.get_data = AsyncMock(return_value={"service_page": 1})
+    state.clear = AsyncMock()
+    booking = SimpleNamespace(list_active_services=AsyncMock(return_value=[]))
+
+    await return_to_services(callback, state, booking)
+
+    state.clear.assert_awaited_once_with()
+    callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    callback.message.answer.assert_awaited_once_with("Сейчас нет активных услуг для записи.")
+    callback.answer.assert_awaited_once_with()
+
+
+def card_state() -> MagicMock:
+    state = MagicMock(spec=FSMContext)
+    state.get_data = AsyncMock(return_value={"service_auxiliary_message_ids": []})
+    state.update_data = AsyncMock()
+    return state
+
+
+@pytest.mark.asyncio
+async def test_service_navigation_edits_photo_to_photo_in_place() -> None:
+    message = MagicMock(spec=Message)
+    message.photo = [MagicMock()]
+    message.edit_media = AsyncMock()
+    message.delete = AsyncMock()
+    first = service_view().model_copy(update={"telegram_photo_file_id": "photo-1"})
+    second = first.model_copy(update={"id": 5, "telegram_photo_file_id": "photo-2"})
+
+    await _render_service_card(message, card_state(), [first, second], page=2, edit=True)
+
+    message.edit_media.assert_awaited_once()
+    message.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_navigation_replaces_photo_with_text_without_stale_keyboard() -> None:
+    message = MagicMock(spec=Message)
+    message.photo = [MagicMock()]
+    message.delete = AsyncMock()
+    message.answer = AsyncMock(return_value=MagicMock(spec=Message))
+
+    await _render_service_card(message, card_state(), [service_view()], page=1, edit=True)
+
+    message.delete.assert_awaited_once_with()
+    message.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_service_navigation_replaces_text_with_photo_without_stale_keyboard() -> None:
+    message = MagicMock(spec=Message)
+    message.photo = None
+    message.delete = AsyncMock()
+    message.answer_photo = AsyncMock(return_value=MagicMock(spec=Message))
+    target = service_view().model_copy(update={"telegram_photo_file_id": "photo-1"})
+
+    await _render_service_card(message, card_state(), [target], page=1, edit=True)
+
+    message.delete.assert_awaited_once_with()
+    message.answer_photo.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_master_card_opens_generic_booking_flow() -> None:
     callback = MagicMock(spec=CallbackQuery)
     callback.from_user = User(id=12, is_bot=False, first_name="Тест")
@@ -96,7 +224,11 @@ async def test_master_card_opens_generic_booking_flow() -> None:
         booking,
     )
 
-    state.update_data.assert_awaited_with(preferred_staff_member_id=None)
+    state.update_data.assert_any_await(
+        preferred_staff_member_id=None,
+        service_page=1,
+        service_auxiliary_message_ids=[],
+    )
     callback.message.answer.assert_awaited()
 
 

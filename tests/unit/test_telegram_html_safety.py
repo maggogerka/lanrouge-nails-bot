@@ -1,10 +1,17 @@
 """Untrusted business/client text must not become Telegram HTML."""
 
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from aiogram.types import Message
 
 from app.domain.enums import WaitlistStatus
 from app.handlers.admin.waitlist import _render_entry
+from app.handlers.client.master_profile import show_master_profile
 from app.handlers.client.waitlist import _render_waitlist_line
+from app.schemas.master_profile import MasterProfileView
 from app.schemas.waitlist import AdminWaitlistView, WaitlistDelivery, WaitlistView
 from app.workers.reminders import render_waitlist_offer
 
@@ -60,3 +67,31 @@ def test_waitlist_worker_escapes_service_name() -> None:
 
     assert "Услуга &lt;b&gt; &amp; ✨" in text
     assert "Услуга <b>" not in text
+
+
+@pytest.mark.asyncio
+async def test_schema_maximum_master_profile_is_escaped_and_safely_split() -> None:
+    profile = MasterProfileView(
+        id=1,
+        display_name="<&😀" + "М" * 251,
+        bio="<&😀x" * 1000,
+        telegram_photo_file_id="master-photo",
+        telegram_photo_file_unique_id="unique",
+        address="<&😀x" * 125,
+        map_url=None,
+        telegram_url=None,
+        is_published=True,
+        links=[],
+    )
+    service = SimpleNamespace(get_public=AsyncMock(return_value=profile))
+    message = MagicMock(spec=Message)
+    message.answer_photo = AsyncMock(return_value=MagicMock(spec=Message))
+    message.answer = AsyncMock(return_value=MagicMock(spec=Message))
+
+    await show_master_profile(message, service)
+
+    message.answer_photo.assert_awaited_once_with("master-photo")
+    assert message.answer.await_count >= 2
+    combined = "".join(call.args[0] for call in message.answer.await_args_list)
+    assert "<script>" not in combined
+    assert "&lt;&amp;😀x" in combined

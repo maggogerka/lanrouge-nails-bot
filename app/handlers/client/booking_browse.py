@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
@@ -35,8 +36,13 @@ from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
 from app.utils.pagination import paginate_sequence
 from app.utils.pricing import format_rub_price
-from app.utils.telegram import answer_photo_with_html, edit_text_safely
-from app.utils.telegram_text import fits_telegram_caption, require_telegram_message
+from app.utils.telegram import (
+    answer_html_safely,
+    answer_photo_with_html,
+    edit_photo_safely,
+    edit_text_safely,
+)
+from app.utils.telegram_text import fits_telegram_caption, split_telegram_html
 
 router = Router(name="client.booking_browse")
 date_picker_service = DatePickerService()
@@ -85,8 +91,48 @@ async def show_service_cards(
     """Render one reusable, bounded service card and prepare the booking FSM."""
 
     await state.set_state(BookingFlow.service)
-    await state.update_data(preferred_staff_member_id=preferred_staff_member_id)
-    await _render_service_card(message, services, page=1, edit=False)
+    await state.update_data(
+        preferred_staff_member_id=preferred_staff_member_id,
+        service_page=1,
+        service_auxiliary_message_ids=[],
+    )
+    await _render_service_card(message, state, services, page=1, edit=False)
+
+
+async def _remember_auxiliary_messages(state: FSMContext, sent: list[Message]) -> None:
+    message_ids = [
+        raw_message_id
+        for item in sent[:-1]
+        if isinstance((raw_message_id := getattr(item, "message_id", None)), int)
+    ]
+    await state.update_data(service_auxiliary_message_ids=message_ids)
+
+
+async def _delete_service_card_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except TelegramBadRequest as exc:
+        if "message to delete not found" not in str(exc).casefold():
+            raise
+
+
+async def _clear_auxiliary_messages(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    raw_message_ids = data.get("service_auxiliary_message_ids", [])
+    message_ids = (
+        [item for item in raw_message_ids if isinstance(item, int) and item > 0]
+        if isinstance(raw_message_ids, list)
+        else []
+    )
+    bot = message.bot
+    if bot is not None:
+        for message_id in message_ids:
+            try:
+                await bot.delete_message(message.chat.id, message_id)
+            except TelegramBadRequest as exc:
+                if "message to delete not found" not in str(exc).casefold():
+                    raise
+    await state.update_data(service_auxiliary_message_ids=[])
 
 
 def _service_card_text(service: ServiceView, *, page: int, pages: int) -> str:
@@ -107,11 +153,12 @@ def _service_card_text(service: ServiceView, *, page: int, pages: int) -> str:
 
 async def _render_service_card(
     message: Message,
+    state: FSMContext,
     services: list[ServiceView],
     *,
     page: int,
     edit: bool,
-) -> None:
+) -> int:
     current = paginate_sequence(services, page=page, page_size=1)
     service = current.items[0]
     text = _service_card_text(service, page=current.page, pages=current.pages)
@@ -123,24 +170,32 @@ async def _render_service_card(
     photo_file_id = service.telegram_photo_file_id
     if not edit:
         if photo_file_id:
-            await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+            sent = await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+            await _remember_auxiliary_messages(state, sent)
         else:
-            await message.answer(text, reply_markup=keyboard)
-        return
+            sent = await answer_html_safely(message, text, reply_markup=keyboard)
+            await _remember_auxiliary_messages(state, sent)
+        return current.page
     if message.photo and photo_file_id and fits_telegram_caption(text, html=True):
-        require_telegram_message(text, html=True)
-        await message.edit_media(
+        await _clear_auxiliary_messages(message, state)
+        await edit_photo_safely(
+            message,
             InputMediaPhoto(media=photo_file_id, caption=text, parse_mode=ParseMode.HTML),
             reply_markup=keyboard,
         )
-    elif not message.photo and not photo_file_id:
+    elif not message.photo and not photo_file_id and len(split_telegram_html(text)) == 1:
+        await _clear_auxiliary_messages(message, state)
         await edit_text_safely(message, text, reply_markup=keyboard)
     else:
-        await message.edit_reply_markup(reply_markup=None)
+        await _clear_auxiliary_messages(message, state)
+        await _delete_service_card_message(message)
         if photo_file_id:
-            await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+            sent = await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+            await _remember_auxiliary_messages(state, sent)
         else:
-            await message.answer(text, reply_markup=keyboard)
+            sent = await answer_html_safely(message, text, reply_markup=keyboard)
+            await _remember_auxiliary_messages(state, sent)
+    return current.page
 
 
 @router.message(F.text == CLIENT_BOOK_TEXT)
@@ -162,20 +217,30 @@ async def return_to_services(
     data = await state.get_data()
     page = data.get("service_page", 1)
     preferred = data.get("preferred_staff_member_id")
+    if not services:
+        await state.clear()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer("Сейчас нет активных услуг для записи.")
+        await callback.answer()
+        return
     await state.set_state(BookingFlow.service)
     await state.set_data(
         {
             "service_page": page if isinstance(page, int) else 1,
             "preferred_staff_member_id": preferred if isinstance(preferred, int) else None,
+            "service_auxiliary_message_ids": data.get("service_auxiliary_message_ids", []),
         }
     )
     if isinstance(callback.message, Message):
-        await _render_service_card(
+        actual_page = await _render_service_card(
             callback.message,
+            state,
             services,
             page=page if isinstance(page, int) else 1,
             edit=True,
         )
+        await state.update_data(service_page=actual_page)
     await callback.answer()
 
 
@@ -190,14 +255,19 @@ async def browse_service_page(
     if not services:
         await callback.answer("Услуги для записи больше не доступны.", show_alert=True)
         return
-    await state.update_data(service_page=callback_data.page)
+    data = await state.get_data()
+    if data.get("service_page") == callback_data.page:
+        await callback.answer()
+        return
     if isinstance(callback.message, Message):
-        await _render_service_card(
+        actual_page = await _render_service_card(
             callback.message,
+            state,
             services,
             page=callback_data.page,
             edit=True,
         )
+        await state.update_data(service_page=actual_page)
     await callback.answer()
 
 

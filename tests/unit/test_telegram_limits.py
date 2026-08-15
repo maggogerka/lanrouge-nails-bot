@@ -12,6 +12,7 @@ from app.utils.telegram_text import (
     TELEGRAM_MESSAGE_LIMIT,
     fits_telegram_caption,
     require_telegram_message,
+    split_telegram_html,
     telegram_text_length,
 )
 
@@ -48,4 +49,34 @@ async def test_long_photo_text_is_not_truncated_or_put_into_caption() -> None:
         text,
         reply_markup=keyboard,
         parse_mode=ParseMode.HTML,
+    )
+
+
+def test_long_html_is_split_on_codepoints_with_balanced_tags_and_entities() -> None:
+    value = f"<b>{'😀&amp;&lt;&gt;' * 900}</b>"
+
+    chunks = split_telegram_html(value)
+
+    assert len(chunks) > 1
+    assert all(telegram_text_length(chunk, html=True) <= TELEGRAM_MESSAGE_LIMIT for chunk in chunks)
+    assert all(chunk.startswith("<b>") and chunk.endswith("</b>") for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_very_long_photo_card_keeps_keyboard_only_on_last_html_chunk() -> None:
+    message = MagicMock(spec=Message)
+    message.answer_photo = AsyncMock(return_value=MagicMock(spec=Message))
+    message.answer = AsyncMock(return_value=MagicMock(spec=Message))
+    text = f"<b>{'😀 &amp; ' * 2500}</b>"
+    keyboard = MagicMock()
+
+    await answer_photo_with_html(message, "photo-id", text, reply_markup=keyboard)
+
+    message.answer_photo.assert_awaited_once_with("photo-id")
+    assert message.answer.await_count > 1
+    calls = message.answer.await_args_list
+    assert all(call.kwargs["reply_markup"] is None for call in calls[:-1])
+    assert calls[-1].kwargs["reply_markup"] is keyboard
+    assert all(
+        telegram_text_length(call.args[0], html=True) <= TELEGRAM_MESSAGE_LIMIT for call in calls
     )
