@@ -1,0 +1,17 @@
+[Unit]
+Description=lanrouge nails encrypted PostgreSQL backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/lanrouge-nails-bot
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile backup run --rm backup
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

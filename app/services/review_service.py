@@ -20,7 +20,7 @@ from app.schemas.booking import ClientActor
 from app.schemas.pagination import Page, PageRequest
 from app.schemas.review import ReviewAdminUpdate, ReviewCreate, ReviewView
 from app.schemas.service import AdminActor
-from app.services.appointment_common import ensure_admin
+from app.services.appointment_common import ensure_admin, ensure_owner_admin
 
 UnitOfWorkFactory = Callable[[], SqlAlchemyUnitOfWork]
 
@@ -305,8 +305,13 @@ class ReviewService:
         *,
         correlation_id: str | None = None,
     ) -> None:
-        self._ensure_admin(actor)
+        ensure_owner_admin(actor, self._admin_telegram_ids)
         async with self._unit_of_work_factory() as uow:
+            ensure_owner_admin(
+                actor,
+                self._admin_telegram_ids,
+                business_id=uow.business_id,
+            )
             admin = await uow.users.get_or_create_admin(actor)
             review = await uow.reviews.get(review_id, for_update=True)
             if review is None:

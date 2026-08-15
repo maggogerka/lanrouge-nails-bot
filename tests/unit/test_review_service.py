@@ -9,11 +9,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.database.models import Appointment, Review, ReviewRevision, User
-from app.domain.enums import AppointmentStatus, ReviewModerationStatus
+from app.domain.enums import AppointmentStatus, ReviewModerationStatus, StaffRole
 from app.domain.errors import AuthorizationError, ReviewStateError
+from app.schemas.authorization import StaffContext
 from app.schemas.booking import ClientActor
 from app.schemas.review import ReviewAdminUpdate, ReviewCreate
 from app.schemas.service import AdminActor
+from app.security import staff_authorization_scope
 from app.services.review_service import ReviewService
 
 NOW = datetime(2026, 7, 22, 9, tzinfo=UTC)
@@ -40,6 +42,7 @@ def build_uow(
     existing: Review | None = None,
 ) -> MagicMock:
     unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
     unit_of_work.__aexit__ = AsyncMock(return_value=None)
     client = User(
@@ -232,3 +235,23 @@ async def test_soft_delete_restore_and_hard_delete_have_separate_lifecycle() -> 
     target.deleted_at = NOW
     await service.hard_delete(AdminActor(telegram_id=900), 21)
     unit_of_work.reviews.hard_delete.assert_awaited_once_with(target)
+
+
+@pytest.mark.asyncio
+async def test_manager_cannot_permanently_delete_review() -> None:
+    unit_of_work = build_uow()
+    service = ReviewService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+    context = StaffContext(
+        business_id=1,
+        staff_member_id=3,
+        user_id=9,
+        telegram_id=900,
+        display_name="Manager",
+        role=StaffRole.MANAGER,
+        is_bookable=False,
+    )
+
+    with staff_authorization_scope(context), pytest.raises(AuthorizationError):
+        await service.hard_delete(AdminActor(telegram_id=900), 21)
+
+    unit_of_work.reviews.hard_delete.assert_not_awaited()

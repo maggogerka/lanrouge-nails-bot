@@ -223,6 +223,7 @@ jobs:
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm --entrypoint restic backup init
           docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_db -v ON_ERROR_STOP=1 -c "CREATE TABLE ci_backup_marker (value text NOT NULL); INSERT INTO ci_backup_marker VALUES ('restored');"
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore check-freshness
           docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres createdb -U app_user app_restore_test
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test
           test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_restore_test -tAc 'SELECT value FROM ci_backup_marker')" = "restored"

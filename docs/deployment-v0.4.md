@@ -121,7 +121,10 @@ least one safe host plus `MINI_APP_ALLOWED_ORIGINS` and the API signing/rate-lim
 keys before enabling the profile. YooKassa is optional; partial provider configuration is
 rejected. A separately
 managed reverse proxy must join an appropriate Docker network if external API
-access is later required; this Compose stack does not expose it.
+access is later required; this Compose stack does not expose it. Give that proxy a stable internal
+address, place only that exact address in `API_TRUSTED_PROXY_IPS`, and pass
+`X-Forwarded-Proto: https`. Wildcards and untrusted subnets are rejected. YooKassa deployment and
+file-secret examples are documented in [yookassa.md](yookassa.md).
 
 The permanent reservation service runs `python -m app.workers.reservation_expiry` and
 sets `HEALTHCHECK_COMPONENT=reservation_expiry`, so its Docker healthcheck covers both

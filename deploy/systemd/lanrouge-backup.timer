@@ -1,0 +1,11 @@
+[Unit]
+Description=Run lanrouge nails backup every day
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=lanrouge-backup.service
+
+[Install]
+WantedBy=timers.target

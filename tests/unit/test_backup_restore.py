@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import stat
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -15,6 +17,7 @@ from app.maintenance.backup_restore import (
     BackupSettings,
     CommandResult,
     CommandSpec,
+    MaintenanceFailureHook,
     MaintenanceHealth,
     MaintenanceStatus,
     run_cli,
@@ -37,11 +40,17 @@ def environment(**overrides: str) -> dict[str, str]:
 
 
 class FakeRunner:
-    def __init__(self, *, fail_at: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_at: tuple[str, str] | None = None,
+        snapshot_time: datetime | None = None,
+    ) -> None:
         self.calls: list[CommandSpec] = []
         self.fail_at = fail_at
         self.dump_mode: int | None = None
         self.dump_path: Path | None = None
+        self.snapshot_time = snapshot_time
 
     def __call__(self, command: CommandSpec) -> CommandResult:
         self.calls.append(command)
@@ -58,6 +67,13 @@ class FakeRunner:
             self.dump_path = command.stdout_path
             self.dump_mode = stat.S_IMODE(command.stdout_path.stat().st_mode)
             command.stdout_path.write_bytes(b"PGDMP-restored-test")
+        if marker == ("restic", "snapshots"):
+            assert command.stdout_path is not None
+            snapshot_time = self.snapshot_time or datetime.now(UTC)
+            command.stdout_path.write_text(
+                json.dumps([{"time": snapshot_time.isoformat()}]),
+                encoding="utf-8",
+            )
         return CommandResult(0)
 
 
@@ -115,7 +131,11 @@ def test_local_unencrypted_repository_is_rejected_and_failure_hook_receives_safe
     failures: list[MaintenanceHealth] = []
     settings = BackupSettings.from_environment(environment(RESTIC_REPOSITORY="/var/backups"))
 
-    result = BackupRestoreService(settings, runner=runner, failure_hook=failures.append).backup()
+    result = BackupRestoreService(
+        settings,
+        runner=runner,
+        failure_hook=cast(MaintenanceFailureHook, failures.append),
+    ).backup()
 
     assert result.status is MaintenanceStatus.FAILED
     assert result.error_code == "backup_configuration_invalid"
@@ -196,6 +216,52 @@ def test_command_failure_has_stable_code_and_never_exposes_process_details() -> 
     assert result.error_code == "restic_backup_failed"
     assert runner.dump_path is not None and not runner.dump_path.exists()
     assert "password" not in json.dumps(result.as_dict())
+
+
+def test_freshness_check_accepts_snapshot_inside_26_hour_rpo() -> None:
+    now = datetime(2026, 8, 15, 12, tzinfo=UTC)
+    runner = FakeRunner(snapshot_time=now - timedelta(hours=25, minutes=59))
+    settings = BackupSettings.from_environment(environment(BACKUP_MAX_AGE_HOURS="26"))
+
+    result = BackupRestoreService(settings, runner=runner, clock=lambda: now).check_freshness()
+
+    assert result.status is MaintenanceStatus.SUCCEEDED
+    assert [call.argv[:2] for call in runner.calls] == [("restic", "snapshots")]
+    command = runner.calls[0]
+    assert command.stdout_path is not None and not command.stdout_path.exists()
+    assert command.environment["RESTIC_PASSWORD"] == "restic-password"
+    assert "DATABASE_URL" not in command.environment
+
+
+def test_freshness_check_fails_for_stale_or_missing_snapshot() -> None:
+    now = datetime(2026, 8, 15, 12, tzinfo=UTC)
+    stale = FakeRunner(snapshot_time=now - timedelta(hours=26, seconds=1))
+    settings = BackupSettings.from_environment(environment())
+
+    stale_result = BackupRestoreService(
+        settings,
+        runner=stale,
+        clock=lambda: now,
+    ).check_freshness()
+
+    assert stale_result.status is MaintenanceStatus.FAILED
+    assert stale_result.error_code == "backup_snapshot_stale"
+
+    class EmptySnapshotRunner(FakeRunner):
+        def __call__(self, command: CommandSpec) -> CommandResult:
+            result = super().__call__(command)
+            if command.argv[:2] == ("restic", "snapshots"):
+                assert command.stdout_path is not None
+                command.stdout_path.write_text("[]", encoding="utf-8")
+            return result
+
+    missing_result = BackupRestoreService(
+        settings,
+        runner=EmptySnapshotRunner(),
+        clock=lambda: now,
+    ).check_freshness()
+    assert missing_result.status is MaintenanceStatus.FAILED
+    assert missing_result.error_code == "backup_snapshot_missing"
 
 
 def test_restore_rejects_production_or_unguarded_target_before_any_command() -> None:

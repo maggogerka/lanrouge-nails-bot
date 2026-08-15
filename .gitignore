@@ -6,6 +6,7 @@
 .ci-secrets/
 .ci-backup-repository/
 secrets/
+compose.yookassa.yml
 
 # Python
 __pycache__/

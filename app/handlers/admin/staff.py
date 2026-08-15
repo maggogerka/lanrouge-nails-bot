@@ -36,6 +36,7 @@ from app.schemas.authorization import (
 from app.schemas.public_links import PublicLink, public_links_from_mapping
 from app.services.authorization_service import AuthorizationService
 from app.states.staff import StaffInvitationForm, StaffProfileForm
+from app.utils.telegram import answer_photo_with_html
 
 router = Router(name="admin.staff")
 
@@ -128,9 +129,10 @@ async def _show_member(
     text = "\n".join(lines)
     keyboard = staff_member_keyboard(actor, member)
     if member.telegram_photo_file_id:
-        await message.answer_photo(
+        await answer_photo_with_html(
+            message,
             member.telegram_photo_file_id,
-            caption=text[:1024],
+            text,
             reply_markup=keyboard,
         )
     else:

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check lanrouge nails backup freshness every hour
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5m
+Unit=lanrouge-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

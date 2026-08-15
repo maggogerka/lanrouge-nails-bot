@@ -35,6 +35,7 @@ AWS_SECRET_ACCESS_KEY=<storage-secret>
 BACKUP_KEEP_DAILY=7
 BACKUP_KEEP_WEEKLY=5
 BACKUP_KEEP_MONTHLY=12
+BACKUP_MAX_AGE_HOURS=26
 ```
 
 Вместо прямого PostgreSQL-пароля поддерживаются `DATABASE_PASSWORD_FILE` и полный защищённый
@@ -61,6 +62,52 @@ object и должен отправлять alert во внешний канал
 Рекомендуемый график: ежедневный backup, независимый alert при возрасте более 26 часов,
 еженедельный `restic check` и ежемесячный restore drill. Retention не заменяет lifecycle/versioning
 на стороне object storage и защиту bucket от удаления отдельной учётной записью.
+
+Проверка свежести использует только метаданные последнего restic snapshot с тегом
+`telegram-crm-postgres` и возвращает ненулевой exit code, если snapshot отсутствует, повреждён
+или старше `BACKUP_MAX_AGE_HOURS`:
+
+```bash
+bash scripts/backup-freshness.sh
+```
+
+## Автоматический запуск на Ubuntu через systemd
+
+В `deploy/systemd/` лежат шаблоны ежедневного backup и ежечасной проверки свежести. Сначала
+откройте оба файла `*.service` и замените `WorkingDirectory=/opt/lanrouge-nails-bot` на абсолютный
+путь вашего checkout, если он отличается. Затем установите units:
+
+```bash
+sudo install -m 0644 deploy/systemd/lanrouge-backup.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/lanrouge-backup.timer /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/lanrouge-backup-freshness.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/lanrouge-backup-freshness.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lanrouge-backup.timer lanrouge-backup-freshness.timer
+sudo systemctl list-timers 'lanrouge-backup*'
+```
+
+`Persistent=true` запускает пропущенную задачу после включения VPS. Сначала выполните обе services
+вручную и убедитесь, что exit code успешный:
+
+```bash
+sudo systemctl start lanrouge-backup.service
+sudo systemctl start lanrouge-backup-freshness.service
+sudo systemctl status lanrouge-backup.service lanrouge-backup-freshness.service
+sudo journalctl -u lanrouge-backup.service -u lanrouge-backup-freshness.service --since today
+```
+
+Не помещайте секреты в `ExecStart` или unit-файлы: Compose монтирует PostgreSQL/restic password
+files. Настройте внешний alert на состояние `failed` любой из services — один systemd без системы
+мониторинга не отправит владельцу уведомление.
+
+Дополнительный обязательный регламент:
+
+- еженедельно запускайте `restic check` из того же защищённого backup-окружения и проверяйте его
+  ненулевой exit code; команда проверяет целостность repository, но не заменяет восстановление;
+- ежемесячно создавайте отдельную пустую test/restore БД и выполняйте описанный ниже
+  `restore-test`; фиксируйте дату, RPO/RTO и контрольные количества строк без персональных данных;
+- после ротации DB/restic/S3-секретов немедленно выполняйте backup, freshness check и restore drill.
 
 ## Guarded restore drill
 

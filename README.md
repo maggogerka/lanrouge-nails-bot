@@ -10,10 +10,10 @@
 - [Установка экземпляра для клиента](DEPLOYMENT_FOR_CLIENT.md) — отдельный регламент продавца и администратора VPS.
 
 Production-ready Telegram CRM и онлайн-запись для частного мастера или салона.
-Текущая версия — **v0.4.1**. Runtime-интерфейс получает бренд и опубликованное
+Текущая версия — **v0.4.2**. Runtime-интерфейс получает бренд и опубликованное
 приветствие из БД.
 
-## Что умеет v0.4.1
+## Что умеет v0.4.2
 
 - один владелец-мастер или несколько мастеров с индивидуальными услугами и расписанием;
 - роли `OWNER`, `MANAGER`, `MASTER`, `RECEPTIONIST` с проверкой членства в БД на каждом действии;
@@ -223,6 +223,8 @@ Compose/Docker, gitleaks и Trivy. См. [docs/testing-v0.4.md](docs/testing-v0.
 - [production deployment](docs/deployment-v0.4.md)
 - [платежи](docs/payments.md) и [YooKassa](docs/yookassa.md)
 - [backup/restore](docs/backup-restore.md)
+- [подключение YooKassa для разработчика](docs/yookassa.md)
+- [инструкция владельцу бизнеса по YooKassa](YOOKASSA_CLIENT_GUIDE.md)
 - [мониторинг](docs/monitoring.md)
 - [ротация секретов](docs/secrets-rotation.md)
 - [incident response](docs/incident-response.md)

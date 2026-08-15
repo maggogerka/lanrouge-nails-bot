@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanrouge-nails-bot"
-version = "0.4.1"
+version = "0.4.2"
 description = "White-label Telegram CRM and appointment booking platform for service businesses"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
