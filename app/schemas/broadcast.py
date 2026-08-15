@@ -14,6 +14,7 @@ from app.domain.enums import (
     BroadcastStatus,
     MediaType,
 )
+from app.utils.telegram_text import require_telegram_message
 
 
 class BroadcastMediaInput(BaseModel):
@@ -37,6 +38,11 @@ class BroadcastCreate(BaseModel):
     @classmethod
     def strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("text")
+    @classmethod
+    def validate_telegram_message_length(cls, value: str) -> str:
+        return require_telegram_message(value)
 
     @model_validator(mode="after")
     def validate_button_and_audience(self) -> BroadcastCreate:

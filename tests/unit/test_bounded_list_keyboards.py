@@ -149,10 +149,10 @@ def test_service_browser_callbacks_fit_telegram_limit_with_pagination() -> None:
         object_id=9_223_372_036_854_775_807,
         page=2_147_483_647,
     ).pack()
-    keyboard = service_card_keyboard(1, page=2, pages=20, has_photo=True)
+    keyboard = service_card_keyboard(1, page=2, pages=20)
 
     assert len(callback.encode()) <= 64
-    assert len(keyboard.inline_keyboard) == 4
+    assert len(keyboard.inline_keyboard) == 3
 
 
 def test_workstation_and_its_service_assignments_are_bounded() -> None:

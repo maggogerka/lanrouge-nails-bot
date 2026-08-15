@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -35,7 +37,7 @@ async def _show_repeat_offer(
     except DomainError as exc:
         message = target.message if isinstance(target, CallbackQuery) else target
         if isinstance(message, Message):
-            await message.answer(str(exc))
+            await message.answer(str(exc), parse_mode=None)
         return
     message = target.message if isinstance(target, CallbackQuery) else target
     if not isinstance(message, Message):
@@ -70,14 +72,19 @@ async def _show_repeat_offer(
         )
         return
     availability = await booking_service.list_availability(actor, offer.service_id)
-    assert offer.current_price is not None
+    if offer.current_price is None:
+        await message.answer(
+            "Не удалось определить текущую цену услуги. Выберите другую услугу "
+            "или уточните стоимость у мастера."
+        )
+        return
     price_text = f"Текущая цена: {format_rub_price(offer.current_price)}."
     if offer.price_changed:
         price_text += f" Ранее было {format_rub_price(offer.previous_price)}."
     dates = available_dates(availability.windows)
     if not dates:
         await message.answer(
-            f"{offer.service_name}. {price_text}\nСейчас свободных окон нет.",
+            f"{escape(offer.service_name)}. {price_text}\nСейчас свободных окон нет.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -96,7 +103,7 @@ async def _show_repeat_offer(
     await state.update_data(service_id=offer.service_id)
     await state.set_state(BookingFlow.date)
     await message.answer(
-        f"Повторяем услугу «{offer.service_name}». {price_text}\nВыберите новую дату:",
+        f"Повторяем услугу «{escape(offer.service_name)}». {price_text}\nВыберите новую дату:",
         reply_markup=dates_keyboard(dates),
     )
 

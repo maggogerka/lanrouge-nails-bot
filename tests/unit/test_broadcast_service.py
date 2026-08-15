@@ -31,6 +31,14 @@ def values() -> BroadcastCreate:
     )
 
 
+def test_broadcast_schema_rejects_text_over_telegram_utf16_limit() -> None:
+    with pytest.raises(ValueError, match="4096"):
+        BroadcastCreate(
+            title="Emoji overflow",
+            text="x" * 4095 + "😀",
+        )
+
+
 def build_uow() -> MagicMock:
     unit_of_work = MagicMock()
     unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)

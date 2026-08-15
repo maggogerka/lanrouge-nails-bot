@@ -271,7 +271,7 @@ async def _save_draft(
         )
         estimated = await service.estimate_audience(actor_from_telegram(telegram_user), draft.id)
     except (DomainError, ValidationError, KeyError, ValueError) as exc:
-        await target.answer(str(exc))
+        await target.answer(str(exc), parse_mode=None)
         return
     await state.clear()
     await target.answer(
@@ -279,10 +279,13 @@ async def _save_draft(
         f"Название: {escape(draft.title)}\n"
         f"Получателей примерно: {estimated}\n"
         f"Фотографий: {len(draft.media)}\n"
-        f"Кнопка: {escape(draft.button_text or 'нет')}\n\n"
-        f"{escape(draft.text)}\n\n"
-        "После запуска изменить получателей будет нельзя.",
+        f"Кнопка: {escape(draft.button_text or 'нет')}\n"
+        "Текст рассылки отправлен следующим сообщением.",
+    )
+    await target.answer(
+        draft.text,
         reply_markup=preview_keyboard(draft.id),
+        parse_mode=None,
     )
 
 

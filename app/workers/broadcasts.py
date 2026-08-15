@@ -28,6 +28,7 @@ from app.repositories import SqlAlchemyUnitOfWork
 from app.runtime_health import RuntimeHeartbeat, open_component_heartbeat
 from app.schemas.broadcast import BroadcastDelivery
 from app.services.broadcast_delivery_service import BroadcastDeliveryService
+from app.utils.telegram_text import fits_telegram_caption, require_telegram_message
 from app.workers.reminders import retry_delay_seconds, worker_identity
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def delivery_keyboard(delivery: BroadcastDelivery) -> InlineKeyboardMarkup | Non
 
 
 async def send_delivery(bot: Bot, delivery: BroadcastDelivery) -> int:
+    require_telegram_message(delivery.text)
     markup = delivery_keyboard(delivery)
     if not delivery.media:
         message = await bot.send_message(
@@ -61,25 +63,47 @@ async def send_delivery(bot: Bot, delivery: BroadcastDelivery) -> int:
         )
         return message.message_id
     if len(delivery.media) == 1:
-        message = await bot.send_photo(
+        if fits_telegram_caption(delivery.text):
+            message = await bot.send_photo(
+                delivery.recipient_telegram_id,
+                delivery.media[0].telegram_file_id,
+                caption=delivery.text,
+                reply_markup=markup,
+                parse_mode=None,
+            )
+            return message.message_id
+        await bot.send_photo(
             delivery.recipient_telegram_id,
             delivery.media[0].telegram_file_id,
-            caption=delivery.text,
+            parse_mode=None,
+        )
+        text_message = await bot.send_message(
+            delivery.recipient_telegram_id,
+            delivery.text,
             reply_markup=markup,
             parse_mode=None,
         )
-        return message.message_id
+        return text_message.message_id
+    caption = delivery.text if fits_telegram_caption(delivery.text) else None
     messages = await bot.send_media_group(
         delivery.recipient_telegram_id,
         [
             InputMediaPhoto(
                 media=item.telegram_file_id,
-                caption=delivery.text if index == 0 else None,
+                caption=caption if index == 0 else None,
                 parse_mode=None,
             )
             for index, item in enumerate(delivery.media)
         ],
     )
+    if caption is None:
+        text_message = await bot.send_message(
+            delivery.recipient_telegram_id,
+            delivery.text,
+            reply_markup=markup,
+            parse_mode=None,
+        )
+        return text_message.message_id
     if markup is not None:
         await bot.send_message(
             delivery.recipient_telegram_id,
@@ -161,7 +185,7 @@ async def run_delivery_cycle(
 
 
 async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     try:
         async with SqlAlchemyUnitOfWork(database.sessions) as uow:
             business_settings = await uow.settings.get()

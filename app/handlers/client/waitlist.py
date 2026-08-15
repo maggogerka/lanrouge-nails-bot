@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from html import escape
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -21,7 +22,7 @@ from app.keyboards.client.waitlist import (
     waitlist_time_keyboard,
 )
 from app.schemas.pagination import PageRequest
-from app.schemas.waitlist import WaitlistCreate
+from app.schemas.waitlist import WaitlistCreate, WaitlistView
 from app.services.booking_service import BookingService
 from app.services.waitlist_service import WaitlistService
 from app.states.booking import BookingFlow
@@ -29,6 +30,13 @@ from app.states.waitlist import WaitlistFlow
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.waitlist")
+
+
+def _render_waitlist_line(item: WaitlistView) -> str:
+    return (
+        f"#{item.id} · {escape(item.service_name)} · "
+        f"{item.date_from:%d.%m}–{item.date_to:%d.%m} · {item.status.value}"
+    )
 
 
 def _parse_date(value: str) -> date:
@@ -49,11 +57,7 @@ async def _show_waitlist(
         actor_from_telegram(target.from_user),
         PageRequest(page=page_number, page_size=8),
     )
-    lines = [
-        f"#{item.id} · {item.service_name} · "
-        f"{item.date_from:%d.%m}–{item.date_to:%d.%m} · {item.status.value}"
-        for item in page.items
-    ]
+    lines = [_render_waitlist_line(item) for item in page.items]
     text = f"Ваш лист ожидания · страница {page.page} из {page.pages}:\n" + (
         "\n".join(lines) if lines else "Пока нет запросов."
     )

@@ -34,13 +34,21 @@ def ensure_admin(actor: AdminActor, admin_telegram_ids: frozenset[int]) -> None:
         raise AuthorizationError("Administrative access denied")
 
 
-def ensure_owner_admin(actor: AdminActor, admin_telegram_ids: frozenset[int]) -> None:
+def ensure_owner_admin(
+    actor: AdminActor,
+    admin_telegram_ids: frozenset[int],
+    *,
+    business_id: int | None = None,
+) -> None:
     """Restrict irreversible destructive actions to a verified business owner."""
 
     ensure_admin(actor, admin_telegram_ids)
     context = get_staff_context()
-    if context is not None and context.role is not StaffRole.OWNER:
-        raise AuthorizationError("Принудительное удаление доступно только владельцу бизнеса.")
+    if context is not None:
+        if context.role is not StaffRole.OWNER:
+            raise AuthorizationError("Принудительное удаление доступно только владельцу бизнеса.")
+        if business_id is not None and context.business_id != business_id:
+            raise AuthorizationError("Принудительное удаление недоступно для другого бизнеса.")
 
 
 def ensure_owner(appointment: Appointment, client: User) -> None:

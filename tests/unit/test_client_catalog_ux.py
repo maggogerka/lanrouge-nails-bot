@@ -56,6 +56,27 @@ async def test_service_catalog_uses_one_paginated_message_instead_of_message_per
 
 
 @pytest.mark.asyncio
+async def test_service_card_shows_photo_immediately_without_photo_button() -> None:
+    message = MagicMock(spec=Message)
+    message.answer = AsyncMock()
+    message.answer_photo = AsyncMock()
+    message.photo = None
+    state = MagicMock(spec=FSMContext)
+    state.set_state = AsyncMock()
+    state.update_data = AsyncMock()
+    service = service_view().model_copy(update={"telegram_photo_file_id": "service-photo"})
+
+    await show_service_cards(message, state, [service])
+
+    message.answer_photo.assert_awaited_once()
+    assert message.answer_photo.await_args.args[0] == "service-photo"
+    markup = message.answer_photo.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data or "" for row in markup.inline_keyboard for button in row]
+    assert all("service_photo" not in value for value in callbacks)
+    assert any("service:" in value for value in callbacks)
+
+
+@pytest.mark.asyncio
 async def test_master_card_opens_generic_booking_flow() -> None:
     callback = MagicMock(spec=CallbackQuery)
     callback.from_user = User(id=12, is_bot=False, first_name="Тест")

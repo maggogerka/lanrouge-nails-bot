@@ -7,8 +7,9 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app.domain.enums import BusinessType
 from app.domain.errors import DomainError
@@ -34,7 +35,8 @@ from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
 from app.utils.pagination import paginate_sequence
 from app.utils.pricing import format_rub_price
-from app.utils.telegram import edit_text_safely
+from app.utils.telegram import answer_photo_with_html, edit_text_safely
+from app.utils.telegram_text import fits_telegram_caption, require_telegram_message
 
 router = Router(name="client.booking_browse")
 date_picker_service = DatePickerService()
@@ -94,13 +96,12 @@ def _service_card_text(service: ServiceView, *, page: int, pages: int) -> str:
         if service.duration_min_minutes == service.duration_max_minutes
         else f"{service.duration_min_minutes}–{service.duration_max_minutes} мин."
     )
-    photo_hint = "\n🖼 Фотография доступна по кнопке ниже." if service.telegram_photo_file_id else ""
     return (
         f"<b>Услуга {page} из {pages}</b>\n\n"
         f"<b>{escape(service.name)}</b>\n"
         f"{description}\n"
         f"Цена: {format_rub_price(service.price)}\n"
-        f"Длительность: {duration}{photo_hint}"
+        f"Длительность: {duration}"
     )
 
 
@@ -118,12 +119,28 @@ async def _render_service_card(
         service.id,
         page=current.page,
         pages=current.pages,
-        has_photo=bool(service.telegram_photo_file_id),
     )
-    if edit and not message.photo:
+    photo_file_id = service.telegram_photo_file_id
+    if not edit:
+        if photo_file_id:
+            await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
+        return
+    if message.photo and photo_file_id and fits_telegram_caption(text, html=True):
+        require_telegram_message(text, html=True)
+        await message.edit_media(
+            InputMediaPhoto(media=photo_file_id, caption=text, parse_mode=ParseMode.HTML),
+            reply_markup=keyboard,
+        )
+    elif not message.photo and not photo_file_id:
         await edit_text_safely(message, text, reply_markup=keyboard)
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await message.edit_reply_markup(reply_markup=None)
+        if photo_file_id:
+            await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.text == CLIENT_BOOK_TEXT)
