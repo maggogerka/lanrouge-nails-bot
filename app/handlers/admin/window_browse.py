@@ -16,7 +16,12 @@ from app.keyboards.admin.windows import (
     window_details_keyboard,
     window_list_keyboard,
 )
+from app.schemas.authorization import StaffContext
 from app.schemas.service import AdminActor
+from app.security.destructive_confirmation import (
+    DestructiveConfirmationService,
+    DestructiveObjectType,
+)
 from app.services.availability_service import AvailabilityService
 from app.utils.pagination import paginate_sequence
 from app.utils.telegram import edit_text_safely
@@ -222,7 +227,18 @@ async def confirm_window_deletion(
 async def prompt_force_window_deletion(
     callback: CallbackQuery,
     callback_data: WindowCallback,
+    destructive_confirmation_service: DestructiveConfirmationService,
+    staff_context: StaffContext,
 ) -> None:
+    try:
+        await destructive_confirmation_service.issue(
+            staff_context,
+            DestructiveObjectType.WINDOW,
+            callback_data.window_id,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             "⚠️ Последнее подтверждение. Окно и вся связанная с ним история будут "
@@ -237,10 +253,17 @@ async def confirm_force_window_deletion(
     callback: CallbackQuery,
     callback_data: WindowCallback,
     availability_service: AvailabilityService,
+    destructive_confirmation_service: DestructiveConfirmationService,
+    staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
     actor = actor_from_telegram(callback.from_user)
     try:
+        await destructive_confirmation_service.consume(
+            staff_context,
+            DestructiveObjectType.WINDOW,
+            callback_data.window_id,
+        )
         deleted_appointments = await availability_service.force_delete_window(
             actor,
             callback_data.window_id,

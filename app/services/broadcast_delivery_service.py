@@ -117,6 +117,7 @@ class BroadcastDeliveryService:
                 recipient_user_id=user.id,
                 recipient_telegram_id=user.telegram_id,
                 attempts=recipient.attempts,
+                media_checkpoint_message_id=recipient.telegram_message_id,
                 text=broadcast.text,
                 button_type=broadcast.button_type,
                 button_text=broadcast.button_text,
@@ -131,6 +132,24 @@ class BroadcastDeliveryService:
                     for item in media
                 ],
             )
+
+    async def mark_media_sent(
+        self,
+        recipient_id: int,
+        worker_id: str,
+        *,
+        telegram_message_id: int,
+    ) -> bool:
+        """Persist the media phase before a fallible follow-up text/button send."""
+
+        async with self._unit_of_work_factory() as uow:
+            recipient = await self._claimed(uow, recipient_id, worker_id)
+            if recipient is None:
+                return False
+            recipient.telegram_message_id = recipient.telegram_message_id or telegram_message_id
+            await uow.session.flush()
+            await uow.commit()
+            return True
 
     async def mark_sent(
         self, recipient_id: int, worker_id: str, *, telegram_message_id: int

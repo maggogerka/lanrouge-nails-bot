@@ -1,18 +1,20 @@
-# Развёртывание v0.4.1
+# Развёртывание v0.4.3
 
 ## Подготовка
 
-Скопируйте `.env.example` в `.env`. Обязательны `BOT_TOKEN`, `POSTGRES_PASSWORD`,
-`DATABASE_URL`, `REDIS_URL`, опубликованный `PRIVACY_POLICY_URL` и хотя бы один числовой
-`ADMIN_TELEGRAM_IDS`. Пароль пользователя в `DATABASE_URL` должен совпадать с
-`POSTGRES_PASSWORD`. `.env`, дампы и логи с персональными данными не коммитятся.
+Скопируйте `.env.example` в `.env`. Обязательны `BOT_TOKEN`, URL PostgreSQL/Redis,
+опубликованный `PRIVACY_POLICY_URL` и числовой `ADMIN_TELEGRAM_IDS` для первоначального
+bootstrap владельца. Настоящие пароли PostgreSQL/Redis храните в `.secrets/postgres_password`
+и `.secrets/redis_password`; пароль в URL остаётся placeholder и заменяется из смонтированного
+file secret. После bootstrap runtime-права сотрудников берутся только из БД. `.env`, secrets,
+дампы и логи с персональными данными не коммитятся.
 
 ```powershell
 docker compose config
 docker compose build
 docker compose up -d
 docker compose ps
-docker compose logs bot notification-worker broadcast-worker reference-cleanup-worker privacy-deletion-worker migrate
+docker compose logs bot notification-worker broadcast-worker reference-cleanup-worker privacy-deletion-worker reservation-worker migrate
 docker compose run --rm bot python -m app.healthcheck
 ```
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Encrypted PostgreSQL backup for Telegram CRM
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=telegram-crm-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/telegram-crm-bot
+EnvironmentFile=/etc/telegram-crm/backup.env
+ExecStart=/usr/bin/docker compose --project-name ${COMPOSE_PROJECT_NAME} --env-file ${ENV_FILE} -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile backup run --rm backup python -m app.maintenance.backup_restore backup --require-enabled
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

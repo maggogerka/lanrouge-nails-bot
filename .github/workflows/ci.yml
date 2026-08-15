@@ -6,6 +6,8 @@ on:
     branches:
       - main
       - feature/**
+      - fix/**
+      - release/**
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -153,8 +155,11 @@ jobs:
       POSTGRES_USER: app_user
       POSTGRES_DB: app_db
       POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/postgres_password
+      RESTORE_POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/restore_postgres_password
       REDIS_PASSWORD_SECRET_FILE: .ci-secrets/redis_password
       RESTIC_PASSWORD_SECRET_FILE: .ci-secrets/restic_password
+      YOOKASSA_SHOP_ID_SECRET_FILE: .ci-secrets/yookassa_shop_id
+      YOOKASSA_SECRET_KEY_SECRET_FILE: .ci-secrets/yookassa_secret_key
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Prepare non-production Compose secrets
@@ -162,8 +167,11 @@ jobs:
           mkdir -p .ci-secrets
           mkdir -p .ci-backup-repository
           printf '%s' 'ci-postgres-password-only' > .ci-secrets/postgres_password
+          printf '%s' 'ci-restore-password-only' > .ci-secrets/restore_postgres_password
           printf '%s' 'ci_redis_password_0123456789abcdef' > .ci-secrets/redis_password
           printf '%s' 'ci-restic-password-only' > .ci-secrets/restic_password
+          printf '%s' 'ci-shop-id' > .ci-secrets/yookassa_shop_id
+          printf '%s' 'ci-yookassa-secret-key' > .ci-secrets/yookassa_secret_key
           # Compose file secrets are bind mounts: non-root containers need the
           # files readable, while the 0700 parent keeps other host users out.
           chmod 700 .ci-secrets
@@ -171,8 +179,8 @@ jobs:
           chmod 777 .ci-backup-repository
       - name: Validate all Compose files and profiles
         run: |
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --quiet
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup config --format json | jq -e '
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example --profile api --profile backup config --quiet
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example --profile api --profile backup config --format json | jq -e '
             ((.services.postgres.ports // []) | length) == 0 and
             ((.services.redis.ports // []) | length) == 0 and
             ((.services.api.ports // []) | length) == 0 and
@@ -188,11 +196,21 @@ jobs:
             .services["reservation-worker"].environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
             .services["reservation-worker"].environment.REDIS_PASSWORD_FILE == "/run/secrets/redis_password" and
             .services.backup.environment.DATABASE_PASSWORD_FILE == "/run/secrets/postgres_password" and
+            .services.backup.environment.RESTORE_DATABASE_PASSWORD_FILE == "/run/secrets/restore_postgres_password" and
             ([.services.api.secrets[].source] | index("postgres_password") != null) and
             ([.services.api.secrets[].source] | index("redis_password") != null) and
             ([.services["reservation-worker"].secrets[].source] | index("postgres_password") != null) and
             ([.services["reservation-worker"].secrets[].source] | index("redis_password") != null) and
             ([.services.backup.secrets[].source] | index("postgres_password") != null)
+            and ([.services.backup.secrets[].source] | index("restore_postgres_password") != null)
+            and .services.bot.environment.YOOKASSA_SHOP_ID_FILE == "/run/secrets/yookassa_shop_id"
+            and .services.bot.environment.YOOKASSA_SECRET_KEY_FILE == "/run/secrets/yookassa_secret_key"
+            and .services.api.environment.YOOKASSA_SHOP_ID_FILE == "/run/secrets/yookassa_shop_id"
+            and .services.api.environment.YOOKASSA_SECRET_KEY_FILE == "/run/secrets/yookassa_secret_key"
+            and ([.services.bot.secrets[].source] | index("yookassa_shop_id") != null)
+            and ([.services.bot.secrets[].source] | index("yookassa_secret_key") != null)
+            and ([.services.api.secrets[].source] | index("yookassa_shop_id") != null)
+            and ([.services.api.secrets[].source] | index("yookassa_secret_key") != null)
           '
       - name: Smoke PostgreSQL and authenticated Redis
         run: |
@@ -202,34 +220,53 @@ jobs:
       - name: Build runtime services, test, and backup images
         run: |
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml --profile api --profile backup build bot api reservation-worker backup
-          docker build --target runtime --tag lanrouge-nails-bot:ci .
-          docker build --target test --tag lanrouge-nails-bot-test:ci .
-          docker build --target backup --tag lanrouge-nails-backup:ci .
+          docker build --target runtime --tag telegram-crm-bot:ci .
+          docker build --target test --tag telegram-crm-bot-test:ci .
+          docker build --target backup --tag telegram-crm-backup:ci .
       - name: Smoke file-secret API and reservation worker
         run: |
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api up -d --wait api reservation-worker
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/postgres_password
-          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T api test -r /run/secrets/redis_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml --profile api up -d --wait api reservation-worker
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml exec -T api test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml exec -T api test -r /run/secrets/redis_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml exec -T api test -r /run/secrets/yookassa_shop_id
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml exec -T api test -r /run/secrets/yookassa_secret_key
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.yookassa.yml.example -f compose.ci.yml run --rm --no-deps bot python -c 'from app.config import get_settings; s=get_settings(); assert s.yookassa_runtime_ready'
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/postgres_password
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml exec -T reservation-worker test -r /run/secrets/redis_password
       - name: Verify backup tools and explicit disabled mode
         run: |
-          docker run --rm --entrypoint pg_dump lanrouge-nails-backup:ci --version
-          docker run --rm --entrypoint pg_restore lanrouge-nails-backup:ci --version
-          docker run --rm --entrypoint restic lanrouge-nails-backup:ci version
-          docker run --rm lanrouge-nails-backup:ci
+          docker run --rm --entrypoint pg_dump telegram-crm-backup:ci --version
+          docker run --rm --entrypoint pg_restore telegram-crm-backup:ci --version
+          docker run --rm --entrypoint restic telegram-crm-backup:ci version
+          docker run --rm telegram-crm-backup:ci
+          if docker run --rm telegram-crm-backup:ci python -m app.maintenance.backup_restore backup --require-enabled; then exit 1; fi
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup id -u)" = "10001"
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup test -r /run/secrets/postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup test -r /run/secrets/restore_postgres_password
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup test -r /run/secrets/restic_password
+      - name: Restore secret fails fast when missing or unreadable
+        run: |
+          chmod 000 .ci-secrets/restore_postgres_password
+          if docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test --require-enabled; then exit 1; fi
+          chmod 644 .ci-secrets/restore_postgres_password
+          mv .ci-secrets/restore_postgres_password .ci-secrets/restore_postgres_password.missing
+          if docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test --require-enabled; then exit 1; fi
+          mv .ci-secrets/restore_postgres_password.missing .ci-secrets/restore_postgres_password
       - name: Run encrypted backup and restore smoke test
         run: |
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm --entrypoint restic backup init
           docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_db -v ON_ERROR_STOP=1 -c "CREATE TABLE ci_backup_marker (value text NOT NULL); INSERT INTO ci_backup_marker VALUES ('restored');"
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup
-          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres createdb -U app_user app_restore_test
+          docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore check-freshness
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE restore_user LOGIN PASSWORD 'ci-restore-password-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT; REVOKE CONNECT ON DATABASE app_db FROM PUBLIC; GRANT CONNECT ON DATABASE app_db TO app_user;"
+          docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres createdb -U app_user --owner restore_user app_restore_test
+          if docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup sh -ec 'PGPASSWORD="$(cat "$RESTORE_DATABASE_PASSWORD_FILE")" psql --no-password -h postgres -U restore_user -d app_db -c "SELECT 1"'; then exit 1; fi
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup python -m app.maintenance.backup_restore restore-test
-          test "$(docker compose -f docker-compose.yml -f compose.production.yml exec -T postgres psql -U app_user -d app_restore_test -tAc 'SELECT value FROM ci_backup_marker')" = "restored"
+          test "$(docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile backup run --rm backup sh -ec 'PGPASSWORD="$(cat "$RESTORE_DATABASE_PASSWORD_FILE")" psql --no-password -h postgres -U restore_user -d app_restore_test -tAc "SELECT value FROM ci_backup_marker"')" = "restored"
       - name: Trivy runtime image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: lanrouge-nails-bot:ci
+          image-ref: telegram-crm-bot:ci
           format: table
           exit-code: "1"
           ignore-unfixed: true
@@ -238,7 +275,7 @@ jobs:
       - name: Trivy backup image scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: lanrouge-nails-backup:ci
+          image-ref: telegram-crm-backup:ci
           format: table
           exit-code: "1"
           ignore-unfixed: true

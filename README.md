@@ -10,10 +10,10 @@
 - [Установка экземпляра для клиента](DEPLOYMENT_FOR_CLIENT.md) — отдельный регламент продавца и администратора VPS.
 
 Production-ready Telegram CRM и онлайн-запись для частного мастера или салона.
-Текущая версия — **v0.4.1**. Runtime-интерфейс получает бренд и опубликованное
+Текущая версия — **v0.4.3**. Runtime-интерфейс получает бренд и опубликованное
 приветствие из БД.
 
-## Что умеет v0.4.1
+## Что умеет v0.4.3
 
 - один владелец-мастер или несколько мастеров с индивидуальными услугами и расписанием;
 - роли `OWNER`, `MANAGER`, `MASTER`, `RECEPTIONIST` с проверкой членства в БД на каждом действии;
@@ -42,7 +42,8 @@ Set-Content -NoNewline .secrets/redis_password "replace_with_32_byte_url_safe_se
 ```
 
 В `.env` обязательно задайте `BOT_TOKEN`, `PRIVACY_POLICY_URL`, `DATABASE_URL` и
-аутентифицированный `REDIS_URL`. Пароли внутри URL должны совпадать с файлами в `.secrets`.
+аутентифицированный `REDIS_URL`. В Docker пароль URL является placeholder: Compose безопасно
+заменяет его значением соответствующего file secret.
 Настоящие `.env` и `.secrets` игнорируются Git; не отправляйте их в чат и не коммитьте.
 
 ```powershell
@@ -67,6 +68,8 @@ docker compose -f docker-compose.yml -f compose.production.yml up -d
 ```
 
 Полные команды и границы секретов: [docs/deployment-v0.4.md](docs/deployment-v0.4.md).
+Для backup/restore дополнительно обязательны отдельные `restic_password` и
+`restore_postgres_password`; настройка описана в [docs/backup-restore.md](docs/backup-restore.md).
 
 ## Полная очистка локальной базы
 
@@ -223,6 +226,8 @@ Compose/Docker, gitleaks и Trivy. См. [docs/testing-v0.4.md](docs/testing-v0.
 - [production deployment](docs/deployment-v0.4.md)
 - [платежи](docs/payments.md) и [YooKassa](docs/yookassa.md)
 - [backup/restore](docs/backup-restore.md)
+- [подключение YooKassa для разработчика](docs/yookassa.md)
+- [инструкция владельцу бизнеса по YooKassa](YOOKASSA_CLIENT_GUIDE.md)
 - [мониторинг](docs/monitoring.md)
 - [ротация секретов](docs/secrets-rotation.md)
 - [incident response](docs/incident-response.md)

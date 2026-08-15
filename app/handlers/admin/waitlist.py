@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
@@ -17,11 +19,22 @@ from app.keyboards.admin.waitlist import (
     admin_waitlist_keyboard,
 )
 from app.schemas.pagination import PageRequest
+from app.schemas.waitlist import AdminWaitlistView
 from app.services.waitlist_service import WaitlistService
 from app.states.waitlist import AdminWaitlistFlow
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.waitlist")
+
+
+def _render_entry(entry: AdminWaitlistView) -> str:
+    return (
+        f"Запрос #{entry.id}\nКлиент: {escape(entry.client_name)}\n"
+        f"Telegram ID: {entry.client_telegram_id}\n"
+        f"Услуга: {escape(entry.service_name)}\n"
+        f"Даты: {entry.date_from:%d.%m.%Y}–{entry.date_to:%d.%m.%Y}\n"
+        f"Статус: {entry.status.value}"
+    )
 
 
 async def _show(
@@ -88,10 +101,7 @@ async def view_admin_waitlist(
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            f"Запрос #{entry.id}\nКлиент: {entry.client_name}\n"
-            f"Telegram ID: {entry.client_telegram_id}\nУслуга: {entry.service_name}\n"
-            f"Даты: {entry.date_from:%d.%m.%Y}–{entry.date_to:%d.%m.%Y}\n"
-            f"Статус: {entry.status.value}",
+            _render_entry(entry),
             reply_markup=admin_waitlist_entry_keyboard(entry.id),
         )
     await callback.answer()
@@ -123,11 +133,15 @@ async def send_waitlist_message(
             actor_from_telegram(message.from_user), int(data["waitlist_entry_id"])
         )
     except (DomainError, KeyError, ValueError) as exc:
-        await message.answer(str(exc))
+        await message.answer(str(exc), parse_mode=None)
         await state.clear()
         return
     try:
-        await bot.send_message(entry.client_telegram_id, (message.text or "").strip())
+        await bot.send_message(
+            entry.client_telegram_id,
+            (message.text or "").strip(),
+            parse_mode=None,
+        )
     except TelegramAPIError:
         await message.answer("Не удалось доставить сообщение.")
         return
@@ -160,7 +174,7 @@ async def offer_waitlist_window(
             int((message.text or "").strip()),
         )
     except (DomainError, KeyError, ValueError) as exc:
-        await message.answer(str(exc))
+        await message.answer(str(exc), parse_mode=None)
         return
     await state.clear()
     await message.answer(

@@ -421,7 +421,7 @@ async def write_client(
         await message.answer("Сообщение должно содержать от 1 до 4000 символов.")
         return
     try:
-        await bot.send_message(card.telegram_id, text)
+        await bot.send_message(card.telegram_id, text, parse_mode=None)
     except TelegramAPIError:
         await message.answer("Не удалось отправить сообщение: клиент недоступен в Telegram.")
         return

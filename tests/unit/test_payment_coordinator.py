@@ -27,6 +27,7 @@ from app.domain.payments import PaymentStateError, PaymentType, WebhookProcessin
 from app.payments.providers.base import (
     PaymentProvider,
     PaymentProviderProtocolError,
+    PaymentProviderUnavailableError,
     ProviderPayment,
     ProviderRefund,
     ProviderWebhookEvent,
@@ -67,12 +68,15 @@ class FakeUnitOfWork:
         self.audit.business_id = business_id
         self.audit.add = AsyncMock()
         self.commit_count = 0
+        self.active = False
 
     async def __aenter__(self) -> FakeUnitOfWork:
+        self.active = True
         return self
 
     async def __aexit__(self, *args: object) -> None:
         del args
+        self.active = False
 
     async def commit(self) -> None:
         self.commit_count += 1
@@ -223,11 +227,23 @@ async def test_webhook_lifecycle_locks_payment_refetches_and_consumes_reservatio
 
     inbox_uow.payments.add_webhook_if_absent = AsyncMock(side_effect=insert_event)
     inbox_uow.payments.get_by_provider_id = AsyncMock(return_value=local_payment)
+    apply_uow = FakeUnitOfWork()
+    apply_uow.payments.get_webhook_by_event_key = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: captured[0]
+    )
+    apply_uow.payments.get_by_provider_id = AsyncMock(return_value=local_payment)
     reconcile_uow = FakeUnitOfWork()
     reconcile_uow.payments.get = AsyncMock(return_value=local_payment)
     reconcile_uow.reservations.get_active_for_appointment = AsyncMock(return_value=reservation())
+
+    async def fetch_without_transaction(_provider_payment_id: str) -> ProviderPayment:
+        assert not inbox_uow.active
+        assert not apply_uow.active
+        return authoritative
+
+    provider.get_payment.side_effect = fetch_without_transaction
     coordinator = YooKassaWebhookLifecycleCoordinator(
-        uow_factory(inbox_uow, reconcile_uow),
+        uow_factory(inbox_uow, apply_uow, reconcile_uow),
         service,
         business_id=7,
     )
@@ -246,6 +262,8 @@ async def test_webhook_lifecycle_locks_payment_refetches_and_consumes_reservatio
     assert local_payment.status is PaymentStatus.SUCCEEDED
     assert captured[0].status is WebhookProcessingStatus.PROCESSED
     provider.get_payment.assert_awaited_once_with("provider-payment-31")
+    assert not inbox_uow.active
+    assert not apply_uow.active
     inbox_uow.payments.get_by_provider_id.assert_awaited_once_with(
         PaymentMode.YOOKASSA,
         "provider-payment-31",
@@ -257,6 +275,7 @@ async def test_webhook_lifecycle_locks_payment_refetches_and_consumes_reservatio
     )
     consume.assert_awaited_once()
     assert inbox_uow.commit_count == 1
+    assert apply_uow.commit_count == 1
     assert reconcile_uow.commit_count == 1
 
 
@@ -322,8 +341,13 @@ async def test_webhook_wrong_authoritative_money_is_terminal_and_never_consumed(
 
     inbox_uow.payments.add_webhook_if_absent = AsyncMock(side_effect=insert_event)
     inbox_uow.payments.get_by_provider_id = AsyncMock(return_value=local_payment)
+    apply_uow = FakeUnitOfWork()
+    apply_uow.payments.get_webhook_by_event_key = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: captured[0]
+    )
+    apply_uow.payments.get_by_provider_id = AsyncMock(return_value=local_payment)
     coordinator = YooKassaWebhookLifecycleCoordinator(
-        uow_factory(inbox_uow),
+        uow_factory(inbox_uow, apply_uow),
         service,
         business_id=7,
     )
@@ -339,6 +363,7 @@ async def test_webhook_wrong_authoritative_money_is_terminal_and_never_consumed(
     assert local_payment.status is PaymentStatus.PENDING
     assert captured[0].status is WebhookProcessingStatus.FAILED
     assert inbox_uow.commit_count == 1
+    assert apply_uow.commit_count == 1
 
 
 @pytest.mark.asyncio
@@ -373,6 +398,50 @@ async def test_webhook_tenant_lookup_miss_stays_pending_for_safe_retry() -> None
     assert captured[0].attempts == 1
     provider.get_payment.assert_not_awaited()
     assert inbox_uow.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_provider_failure_is_persisted_after_transaction_closes() -> None:
+    local_payment = payment()
+    service, provider = provider_service(mode=PaymentMode.YOOKASSA)
+    inbox_uow = FakeUnitOfWork()
+    failure_uow = FakeUnitOfWork()
+    captured: list[PaymentWebhookEvent] = []
+
+    async def insert_event(event: PaymentWebhookEvent) -> tuple[PaymentWebhookEvent, bool]:
+        event.id = 81
+        captured.append(event)
+        return event, True
+
+    async def fail_without_transaction(_provider_payment_id: str) -> ProviderPayment:
+        assert not inbox_uow.active
+        assert not failure_uow.active
+        raise PaymentProviderUnavailableError("provider_timeout")
+
+    inbox_uow.payments.add_webhook_if_absent = AsyncMock(side_effect=insert_event)
+    inbox_uow.payments.get_by_provider_id = AsyncMock(return_value=local_payment)
+    failure_uow.payments.get_webhook_by_event_key = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: captured[0]
+    )
+    provider.get_payment.side_effect = fail_without_transaction
+    coordinator = YooKassaWebhookLifecycleCoordinator(
+        uow_factory(inbox_uow, failure_uow),
+        service,
+        business_id=7,
+    )
+
+    with pytest.raises(WebhookProcessingError) as raised:
+        await coordinator.process_untrusted_notification(
+            webhook_event(),
+            correlation_id="request-123",
+            now=NOW,
+        )
+
+    assert raised.value.retryable
+    assert captured[0].status is WebhookProcessingStatus.PENDING
+    assert captured[0].last_error_code == "provider_timeout"
+    assert inbox_uow.commit_count == 1
+    assert failure_uow.commit_count == 1
 
 
 @pytest.mark.asyncio
@@ -504,8 +573,19 @@ async def test_refund_locks_payment_reserves_pending_sum_and_submits_once() -> N
     submit_uow = FakeUnitOfWork()
     submit_uow.payments.get = AsyncMock(return_value=local_payment)
     submit_uow.payments.get_refund = AsyncMock(side_effect=lambda *_args, **_kwargs: captured[0])
+    apply_uow = FakeUnitOfWork()
+    apply_uow.payments.get = AsyncMock(return_value=local_payment)
+    apply_uow.payments.get_refund = AsyncMock(side_effect=lambda *_args, **_kwargs: captured[0])
+
+    async def submit_without_transaction(_command: object) -> ProviderRefund:
+        assert not create_uow.active
+        assert not submit_uow.active
+        assert not apply_uow.active
+        return provider_result
+
+    provider.refund_payment.side_effect = submit_without_transaction
     coordinator = RefundCoordinator(
-        uow_factory(create_uow, submit_uow),
+        uow_factory(create_uow, submit_uow, apply_uow),
         auth,
         service,
     )
@@ -523,16 +603,19 @@ async def test_refund_locks_payment_reserves_pending_sum_and_submits_once() -> N
     assert outcome.refund.status is RefundStatus.SUCCEEDED
     assert outcome.refund.amount == Decimal("300.00")
     assert local_payment.refunded_amount == Decimal("300.00")
-    appointment = await submit_uow.reservations.get_appointment_for_update(11)
+    appointment = await apply_uow.reservations.get_appointment_for_update(11)
     assert appointment.status is AppointmentStatus.PARTIALLY_REFUNDED
-    submit_uow.reservations.add_history.assert_awaited_once()
+    apply_uow.reservations.add_history.assert_awaited_once()
     create_uow.payments.get.assert_awaited_once_with(31, for_update=True)
     create_uow.payments.sum_pending_refunds.assert_awaited_once_with(31)
     submit_uow.payments.get.assert_awaited_once_with(31, for_update=True)
     submit_uow.payments.get_refund.assert_awaited_once_with(51, for_update=True)
+    apply_uow.payments.get.assert_awaited_once_with(31, for_update=True)
+    apply_uow.payments.get_refund.assert_awaited_once_with(51, for_update=True)
     provider.refund_payment.assert_awaited_once()
     assert create_uow.commit_count == 1
     assert submit_uow.commit_count == 1
+    assert apply_uow.commit_count == 1
 
 
 @pytest.mark.asyncio
@@ -616,8 +699,11 @@ async def test_provider_refund_amount_mismatch_fails_and_restores_payment() -> N
     submit_uow = FakeUnitOfWork()
     submit_uow.payments.get = AsyncMock(return_value=local_payment)
     submit_uow.payments.get_refund = AsyncMock(side_effect=lambda *_args, **_kwargs: captured[0])
+    apply_uow = FakeUnitOfWork()
+    apply_uow.payments.get = AsyncMock(return_value=local_payment)
+    apply_uow.payments.get_refund = AsyncMock(side_effect=lambda *_args, **_kwargs: captured[0])
     coordinator = RefundCoordinator(
-        uow_factory(create_uow, submit_uow),
+        uow_factory(create_uow, submit_uow, apply_uow),
         auth,
         service,
     )
@@ -636,7 +722,8 @@ async def test_provider_refund_amount_mismatch_fails_and_restores_payment() -> N
     assert local_payment.status is PaymentStatus.SUCCEEDED
     assert local_payment.refunded_amount == Decimal("0.00")
     assert submit_uow.commit_count == 1
-    submit_uow.audit.add.assert_not_awaited()
+    assert apply_uow.commit_count == 1
+    apply_uow.audit.add.assert_not_awaited()
 
 
 @pytest.mark.asyncio

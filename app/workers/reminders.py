@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import socket
+from html import escape
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,14 @@ from app.services.waitlist_delivery_service import WaitlistDeliveryService
 from app.workers.reminder_messages import reminder_keyboard, render_reminder
 
 logger = logging.getLogger(__name__)
+
+
+def render_waitlist_offer(delivery: WaitlistDelivery) -> str:
+    local = delivery.start_at.astimezone(ZoneInfo(delivery.timezone))
+    return (
+        f"Освободилось подходящее время для услуги «{escape(delivery.service_name)}»: "
+        f"{local:%d.%m.%Y в %H:%M}. Окно получит первый клиент, завершивший запись."
+    )
 
 
 def worker_identity() -> str:
@@ -107,12 +116,10 @@ async def process_waitlist_delivery(
     delivery: WaitlistDelivery,
     worker_id: str,
 ) -> None:
-    local = delivery.start_at.astimezone(ZoneInfo(delivery.timezone))
     try:
         await bot.send_message(
             delivery.recipient_telegram_id,
-            f"Освободилось подходящее время для услуги «{delivery.service_name}»: "
-            f"{local:%d.%m.%Y в %H:%M}. Окно получит первый клиент, завершивший запись.",
+            render_waitlist_offer(delivery),
             reply_markup=waitlist_offer_keyboard(delivery.entry_id, delivery.window_id),
         )
     except TelegramRetryAfter as exc:
@@ -182,7 +189,7 @@ async def run_delivery_cycle(
 
 
 async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     try:
         service = NotificationService(
             lambda: SqlAlchemyUnitOfWork(database.sessions),

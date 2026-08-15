@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from typing import cast
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -30,6 +31,10 @@ from app.runtime_health import (
     BOT_HEARTBEAT_INTERVAL_SECONDS,
     RuntimeHeartbeat,
     open_component_heartbeat,
+)
+from app.security.destructive_confirmation import (
+    ConfirmationRedis,
+    DestructiveConfirmationService,
 )
 from app.services import (
     AcquisitionAdministrationService,
@@ -88,6 +93,10 @@ def create_dispatcher(
         settings.redis_url.get_secret_value(),
         state_ttl=settings.reference_draft_retention_hours * 60 * 60,
         data_ttl=settings.reference_draft_retention_hours * 60 * 60,
+    )
+    destructive_confirmation_service = DestructiveConfirmationService(
+        cast(ConfirmationRedis, storage.redis),
+        namespace=settings.redis_namespace,
     )
     service_catalog = ServiceCatalog(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
@@ -211,12 +220,7 @@ def create_dispatcher(
     feature_flag_service = FeatureFlagService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         FeaturePrerequisites(
-            yookassa_ready=bool(
-                settings.yookassa_shop_id.get_secret_value()
-                and settings.yookassa_secret_key.get_secret_value()
-                and settings.yookassa_business_id > 0
-                and settings.yookassa_return_url is not None
-            ),
+            yookassa_ready=settings.yookassa_runtime_ready,
             mini_app_ready=bool(
                 settings.mini_app_allowed_origins
                 and settings.api_session_signing_key.get_secret_value()
@@ -269,6 +273,7 @@ def create_dispatcher(
         presentation_service=presentation_service,
         vendor_support_service=vendor_support_service,
         reference_cleanup_service=reference_cleanup_service,
+        destructive_confirmation_service=destructive_confirmation_service,
     )
     dispatcher.update.outer_middleware(CorrelationIdMiddleware())
     dispatcher.update.outer_middleware(RuntimeAuthorizationMiddleware())
@@ -289,7 +294,7 @@ async def run_polling(settings: Settings) -> None:
 async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
     """Own Telegram and database resources under heartbeat supervision."""
 
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     dispatcher: Dispatcher | None = None
     payment_transport: AioHttpTransport | None = None
     if not settings.admin_telegram_ids:
@@ -312,11 +317,7 @@ async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
         payment_services: dict[PaymentMode, PaymentService] = {
             PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())
         }
-        if (
-            settings.yookassa_shop_id.get_secret_value()
-            and settings.yookassa_secret_key.get_secret_value()
-            and settings.yookassa_return_url is not None
-        ):
+        if settings.yookassa_runtime_ready:
             payment_transport = AioHttpTransport()
             await payment_transport.start()
             payment_services[PaymentMode.YOOKASSA] = PaymentService(

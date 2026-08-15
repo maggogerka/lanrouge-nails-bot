@@ -1,0 +1,7 @@
+[Unit]
+Description=Report failed Telegram CRM backup unit %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/telegram-crm/backup.env
+ExecStart=/usr/local/sbin/telegram-crm-backup-alert %i

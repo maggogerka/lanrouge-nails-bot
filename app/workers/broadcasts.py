@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections.abc import Awaitable, Callable
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -28,6 +29,7 @@ from app.repositories import SqlAlchemyUnitOfWork
 from app.runtime_health import RuntimeHeartbeat, open_component_heartbeat
 from app.schemas.broadcast import BroadcastDelivery
 from app.services.broadcast_delivery_service import BroadcastDeliveryService
+from app.utils.telegram_text import fits_telegram_caption, require_telegram_message
 from app.workers.reminders import retry_delay_seconds, worker_identity
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,16 @@ def delivery_keyboard(delivery: BroadcastDelivery) -> InlineKeyboardMarkup | Non
     return InlineKeyboardMarkup(inline_keyboard=[[button]])
 
 
-async def send_delivery(bot: Bot, delivery: BroadcastDelivery) -> int:
+MediaCheckpoint = Callable[[int], Awaitable[None]]
+
+
+async def send_delivery(
+    bot: Bot,
+    delivery: BroadcastDelivery,
+    *,
+    checkpoint_media: MediaCheckpoint | None = None,
+) -> int:
+    require_telegram_message(delivery.text)
     markup = delivery_keyboard(delivery)
     if not delivery.media:
         message = await bot.send_message(
@@ -61,25 +72,58 @@ async def send_delivery(bot: Bot, delivery: BroadcastDelivery) -> int:
         )
         return message.message_id
     if len(delivery.media) == 1:
-        message = await bot.send_photo(
+        if fits_telegram_caption(delivery.text):
+            if delivery.media_checkpoint_message_id is not None:
+                return delivery.media_checkpoint_message_id
+            message = await bot.send_photo(
+                delivery.recipient_telegram_id,
+                delivery.media[0].telegram_file_id,
+                caption=delivery.text,
+                reply_markup=markup,
+                parse_mode=None,
+            )
+            if checkpoint_media is not None:
+                await checkpoint_media(message.message_id)
+            return message.message_id
+        if delivery.media_checkpoint_message_id is None:
+            media_message = await bot.send_photo(
+                delivery.recipient_telegram_id,
+                delivery.media[0].telegram_file_id,
+                parse_mode=None,
+            )
+            if checkpoint_media is not None:
+                await checkpoint_media(media_message.message_id)
+        text_message = await bot.send_message(
             delivery.recipient_telegram_id,
-            delivery.media[0].telegram_file_id,
-            caption=delivery.text,
+            delivery.text,
             reply_markup=markup,
             parse_mode=None,
         )
-        return message.message_id
-    messages = await bot.send_media_group(
-        delivery.recipient_telegram_id,
-        [
-            InputMediaPhoto(
-                media=item.telegram_file_id,
-                caption=delivery.text if index == 0 else None,
-                parse_mode=None,
-            )
-            for index, item in enumerate(delivery.media)
-        ],
-    )
+        return text_message.message_id
+    caption = delivery.text if fits_telegram_caption(delivery.text) else None
+    messages = []
+    if delivery.media_checkpoint_message_id is None:
+        messages = await bot.send_media_group(
+            delivery.recipient_telegram_id,
+            [
+                InputMediaPhoto(
+                    media=item.telegram_file_id,
+                    caption=caption if index == 0 else None,
+                    parse_mode=None,
+                )
+                for index, item in enumerate(delivery.media)
+            ],
+        )
+        if checkpoint_media is not None:
+            await checkpoint_media(messages[0].message_id)
+    if caption is None:
+        text_message = await bot.send_message(
+            delivery.recipient_telegram_id,
+            delivery.text,
+            reply_markup=markup,
+            parse_mode=None,
+        )
+        return text_message.message_id
     if markup is not None:
         await bot.send_message(
             delivery.recipient_telegram_id,
@@ -87,7 +131,11 @@ async def send_delivery(bot: Bot, delivery: BroadcastDelivery) -> int:
             reply_markup=markup,
             parse_mode=None,
         )
-    return messages[0].message_id
+    if messages:
+        return messages[0].message_id
+    if delivery.media_checkpoint_message_id is None:
+        raise RuntimeError("broadcast media checkpoint is missing")
+    return delivery.media_checkpoint_message_id
 
 
 async def process_delivery(
@@ -96,8 +144,17 @@ async def process_delivery(
     delivery: BroadcastDelivery,
     worker_id: str,
 ) -> None:
+    async def checkpoint_media(message_id: int) -> None:
+        stored = await service.mark_media_sent(
+            delivery.recipient_id,
+            worker_id,
+            telegram_message_id=message_id,
+        )
+        if not stored:
+            raise RuntimeError("broadcast media checkpoint lease was lost")
+
     try:
-        message_id = await send_delivery(bot, delivery)
+        message_id = await send_delivery(bot, delivery, checkpoint_media=checkpoint_media)
     except TelegramRetryAfter as exc:
         await service.retry(
             delivery.recipient_id,
@@ -161,7 +218,7 @@ async def run_delivery_cycle(
 
 
 async def _run_worker(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
-    database = Database.create(settings.database_url.get_secret_value())
+    database = Database.from_settings(settings)
     try:
         async with SqlAlchemyUnitOfWork(database.sessions) as uow:
             business_settings = await uow.settings.get()

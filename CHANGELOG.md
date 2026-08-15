@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.4.3] - 2026-08-16
+
+### Fixed
+
+- maximum-length service and master cards are split into valid balanced Telegram HTML messages;
+- service-card navigation handles identical pages, media/text transitions and an empty catalog
+  without stale active controls;
+- YooKassa file secrets are mounted into both `bot` and `api`, while unconfirmed production
+  fiscalization remains fail-closed and does not disable manual prepayments;
+- production backup jobs fail when disabled, reject an unexpected/empty database and use explicit
+  Compose project/environment bindings;
+- irreversible actions use atomic actor/business/object-bound confirmations with a short TTL;
+- retries of composite broadcasts do not resend a media phase already persisted in PostgreSQL;
+  Telegram does not support idempotency keys, so a crash between the API response and that
+  checkpoint still has a narrow duplicate-delivery window rather than an exactly-once guarantee;
+- backup/restore Compose uses a dedicated `restore_postgres_password` and a separate restricted
+  restore database account instead of reusing the production application password.
+
+### Operations
+
+- CI now runs automatically for `fix/**` and `release/**` and validates the YooKassa override;
+- neutral `telegram-crm-backup*` systemd units replace legacy branded names, including freshness,
+  monthly restore-test and an `OnFailure` alert hook.
+- the legacy Python distribution/package identity remains internal for compatibility; a complete
+  rename is deferred to a separate tested release and is not shown in user-facing bot copy.
+- no container registry target or credentials are configured in the repository; publishing a
+  client image by immutable digest remains an explicit deployment blocker and must not be replaced
+  with a floating `latest` tag.
+
+## [0.4.2] - 2026-08-15
+
+### Changed
+
+- service photographs are shown immediately in the paginated client catalog while booking and
+  navigation actions remain on the active card;
+- PostgreSQL pools and server-side statement, lock and idle-transaction timeouts are bounded and
+  configurable per process; dependency health checks use non-persistent connections;
+- YooKassa webhook verification and refund submission now use short prepare/apply transactions and
+  never hold row locks during provider HTTP calls;
+- long Telegram media cards and broadcasts keep their full text by sending media separately when
+  the 1024-character caption limit is exceeded;
+- production assertions in repeat booking were replaced with explicit user-safe invariant handling;
+- backup operations include a 26-hour freshness check and persistent systemd timer examples.
+
+### Security
+
+- dynamic HTML values in waitlist, reminder, repeat-booking and CRM flows are escaped, while
+  arbitrary staff and broadcast messages are sent without Telegram HTML parsing;
+- permanent review, service and availability deletion is restricted to a verified owner in the
+  same business and remains separately confirmed and audited;
+- documentation now consistently describes `ADMIN_TELEGRAM_IDS` as bootstrap-only.
+
 ## [0.4.1] - 2026-08-15
 
 ### Added

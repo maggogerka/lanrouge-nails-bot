@@ -57,15 +57,11 @@ def create_application(settings: Settings | None = None) -> ApiApplication:
     runtime = settings or get_settings()
     runtime.validate_api_runtime()
 
-    yookassa_values_present = bool(
-        runtime.yookassa_shop_id.get_secret_value()
-        or runtime.yookassa_secret_key.get_secret_value()
-        or runtime.yookassa_return_url is not None
-    )
+    yookassa_values_present = runtime.yookassa_values_present
     if yookassa_values_present:
         runtime.validate_yookassa_runtime()
 
-    database = Database.create(runtime.database_url.get_secret_value())
+    database = Database.from_settings(runtime)
     redis = Redis.from_url(
         runtime.redis_url.get_secret_value(),
         socket_connect_timeout=3,
@@ -218,7 +214,7 @@ def run() -> None:
             host=settings.api_host,
             port=settings.api_port,
             proxy_headers=True,
-            forwarded_allow_ips=["127.0.0.1", "::1"],
+            forwarded_allow_ips=list(settings.api_trusted_proxy_ips),
             server_header=False,
             access_log=False,
             log_config=None,

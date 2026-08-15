@@ -9,6 +9,7 @@ from app.keyboards.client.main import CLIENT_MASTER_PROFILE_TEXT
 from app.keyboards.client.master_profile import master_profile_links_keyboard
 from app.schemas.master_profile import MasterProfileView
 from app.services.master_profile_service import MasterProfileService
+from app.utils.telegram import answer_html_safely, answer_photo_with_html
 
 router = Router(name="client.master_profile")
 
@@ -25,11 +26,14 @@ async def show_master_profile(
     text = _render_profile(profile)
     keyboard = master_profile_links_keyboard(profile)
     if profile.telegram_photo_file_id:
-        await message.answer_photo(
-            profile.telegram_photo_file_id, caption=text, reply_markup=keyboard
+        await answer_photo_with_html(
+            message,
+            profile.telegram_photo_file_id,
+            text,
+            reply_markup=keyboard,
         )
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await answer_html_safely(message, text, reply_markup=keyboard)
 
 
 def _render_profile(profile: MasterProfileView) -> str:

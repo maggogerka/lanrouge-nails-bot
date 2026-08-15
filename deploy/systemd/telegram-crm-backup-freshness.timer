@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Telegram CRM backup freshness every hour
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5m
+Unit=telegram-crm-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

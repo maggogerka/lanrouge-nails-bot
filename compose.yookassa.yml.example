@@ -1,0 +1,32 @@
+# Copy to a non-versioned compose.yookassa.yml only on the target VPS.
+# Keep YOOKASSA_SHOP_ID= and YOOKASSA_SECRET_KEY= empty in .env when this override is used.
+services:
+  bot:
+    environment:
+      YOOKASSA_SHOP_ID: ""
+      YOOKASSA_SECRET_KEY: ""
+      YOOKASSA_SHOP_ID_FILE: /run/secrets/yookassa_shop_id
+      YOOKASSA_SECRET_KEY_FILE: /run/secrets/yookassa_secret_key
+    secrets:
+      - postgres_password
+      - redis_password
+      - yookassa_shop_id
+      - yookassa_secret_key
+
+  api:
+    environment:
+      YOOKASSA_SHOP_ID: ""
+      YOOKASSA_SECRET_KEY: ""
+      YOOKASSA_SHOP_ID_FILE: /run/secrets/yookassa_shop_id
+      YOOKASSA_SECRET_KEY_FILE: /run/secrets/yookassa_secret_key
+    secrets:
+      - postgres_password
+      - redis_password
+      - yookassa_shop_id
+      - yookassa_secret_key
+
+secrets:
+  yookassa_shop_id:
+    file: ${YOOKASSA_SHOP_ID_SECRET_FILE:-./.secrets/yookassa_shop_id}
+  yookassa_secret_key:
+    file: ${YOOKASSA_SECRET_KEY_SECRET_FILE:-./.secrets/yookassa_secret_key}

@@ -12,7 +12,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import IO, Protocol
@@ -33,6 +33,7 @@ _OFFSITE_REPOSITORY_PREFIXES = (
 _RESTORE_ACKNOWLEDGEMENT = "RESTORE_TO_SEPARATE_TEST_DATABASE"
 _SAFE_DATABASE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 _MAX_SECRET_FILE_BYTES = 16_384
+_MAX_SNAPSHOT_JSON_BYTES = 1_048_576
 _SYSTEM_ENVIRONMENT_KEYS = {
     "COMSPEC",
     "HOME",
@@ -64,6 +65,7 @@ _RESTIC_ENVIRONMENT_KEYS = {
 class MaintenanceOperation(StrEnum):
     BACKUP = "backup"
     RESTORE_TEST = "restore_test"
+    CHECK_FRESHNESS = "check_freshness"
 
 
 class MaintenanceStatus(StrEnum):
@@ -111,6 +113,8 @@ class BackupSettings:
     keep_weekly: int = 5
     keep_monthly: int = 12
     command_timeout_seconds: int = 3_600
+    max_age_hours: int = 26
+    expected_database_name: str = ""
     allow_local_repository_for_tests: bool = False
     process_environment: Mapping[str, str] = field(default_factory=dict, repr=False)
 
@@ -119,7 +123,8 @@ class BackupSettings:
             "BackupSettings(enabled="
             f"{self.enabled}, keep_daily={self.keep_daily}, keep_weekly={self.keep_weekly}, "
             f"keep_monthly={self.keep_monthly}, command_timeout_seconds="
-            f"{self.command_timeout_seconds}, secrets=<redacted>)"
+            f"{self.command_timeout_seconds}, max_age_hours={self.max_age_hours}, "
+            "secrets=<redacted>)"
         )
 
     @classmethod
@@ -134,11 +139,19 @@ class BackupSettings:
             url_file_name="DATABASE_URL_FILE",
             password_file_name="DATABASE_PASSWORD_FILE",
         )
-        restore_database_url = _resolve_connection_url(
-            source,
-            url_name="RESTORE_DATABASE_URL",
-            url_file_name="RESTORE_DATABASE_URL_FILE",
-            password_file_name="RESTORE_DATABASE_PASSWORD_FILE",
+        restore_url_configured = bool(
+            source.get("RESTORE_DATABASE_URL", "").strip()
+            or source.get("RESTORE_DATABASE_URL_FILE", "").strip()
+        )
+        restore_database_url = (
+            _resolve_connection_url(
+                source,
+                url_name="RESTORE_DATABASE_URL",
+                url_file_name="RESTORE_DATABASE_URL_FILE",
+                password_file_name="RESTORE_DATABASE_PASSWORD_FILE",
+            )
+            if restore_url_configured
+            else ""
         )
         allow_local_repository_for_tests = _boolean(
             source.get("BACKUP_ALLOW_LOCAL_REPOSITORY_FOR_TESTS", ""),
@@ -164,6 +177,13 @@ class BackupSettings:
                 minimum=60,
                 maximum=86_400,
             ),
+            max_age_hours=_bounded_integer(
+                source,
+                "BACKUP_MAX_AGE_HOURS",
+                default=26,
+                maximum=168,
+            ),
+            expected_database_name=source.get("BACKUP_EXPECTED_DATABASE_NAME", "").strip(),
             allow_local_repository_for_tests=allow_local_repository_for_tests,
             process_environment=source,
         )
@@ -185,7 +205,15 @@ class BackupSettings:
             or self.process_environment.get("RESTIC_PASSWORD_FILE", "").strip()
         ):
             raise BackupConfigurationError("restic encryption password is required")
-        return DatabaseTarget.from_url(self.database_url)
+        source = DatabaseTarget.from_url(self.database_url)
+        if self.process_environment.get("APP_ENV", "").strip() == "production":
+            if not self.expected_database_name:
+                raise BackupConfigurationError(
+                    "BACKUP_EXPECTED_DATABASE_NAME is required in production"
+                )
+            if source.database != self.expected_database_name:
+                raise BackupConfigurationError("backup database name does not match expectation")
+        return source
 
     def validate_restore(self) -> tuple[DatabaseTarget, DatabaseTarget]:
         source = self.validate_backup()
@@ -336,6 +364,7 @@ class BackupRestoreService:
         try:
             source = self._settings.validate_backup()
             with _secure_temporary_dump() as dump_path:
+                self._verify_source(source)
                 self._pg_dump(source, dump_path)
                 _require_nonempty_dump(dump_path, error_code="backup_dump_empty")
                 self._restic_backup(dump_path)
@@ -386,6 +415,51 @@ class BackupRestoreService:
             None,
         )
 
+    def check_freshness(self) -> MaintenanceHealth:
+        """Fail when the newest encrypted database snapshot is older than the RPO bound."""
+
+        started = self._now()
+        if not self._settings.enabled:
+            return self._health(
+                MaintenanceOperation.CHECK_FRESHNESS,
+                MaintenanceStatus.DISABLED,
+                started,
+                "backup_disabled",
+            )
+        try:
+            self._settings.validate_backup()
+            with _secure_temporary_file(suffix=".json") as output_path:
+                self._restic_snapshot_list(output_path)
+                newest = _newest_snapshot_time(output_path)
+            if newest > started + timedelta(minutes=5):
+                raise _OperationFailure("backup_snapshot_time_invalid")
+            if started - newest > timedelta(hours=self._settings.max_age_hours):
+                raise _OperationFailure("backup_snapshot_stale")
+        except BackupConfigurationError:
+            return self._failed(
+                MaintenanceOperation.CHECK_FRESHNESS,
+                started,
+                "backup_configuration_invalid",
+            )
+        except _OperationFailure as exc:
+            return self._failed(
+                MaintenanceOperation.CHECK_FRESHNESS,
+                started,
+                exc.error_code,
+            )
+        except Exception:
+            return self._failed(
+                MaintenanceOperation.CHECK_FRESHNESS,
+                started,
+                "backup_freshness_unexpected_error",
+            )
+        return self._health(
+            MaintenanceOperation.CHECK_FRESHNESS,
+            MaintenanceStatus.SUCCEEDED,
+            started,
+            None,
+        )
+
     def _pg_dump(self, target: DatabaseTarget, dump_path: Path) -> None:
         self._run(
             CommandSpec(
@@ -402,6 +476,26 @@ class BackupRestoreService:
                 timeout_seconds=self._settings.command_timeout_seconds,
             ),
             "pg_dump_failed",
+        )
+
+    def _verify_source(self, target: DatabaseTarget) -> None:
+        """Reject an empty/wrong database before creating a misleading snapshot."""
+
+        self._run(
+            CommandSpec(
+                argv=(
+                    "psql",
+                    "--no-password",
+                    "--no-psqlrc",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--command",
+                    "SELECT 1 / COUNT(*) FROM public.alembic_version",
+                ),
+                environment=_postgres_environment(self._settings.process_environment, target),
+                timeout_seconds=self._settings.command_timeout_seconds,
+            ),
+            "backup_source_schema_missing",
         )
 
     def _restic_backup(self, dump_path: Path) -> None:
@@ -449,6 +543,28 @@ class BackupRestoreService:
                 timeout_seconds=self._settings.command_timeout_seconds,
             ),
             "restic_retention_failed",
+        )
+
+    def _restic_snapshot_list(self, output_path: Path) -> None:
+        self._run(
+            CommandSpec(
+                argv=(
+                    "restic",
+                    "snapshots",
+                    "--json",
+                    "--latest",
+                    "1",
+                    "--tag",
+                    "telegram-crm-postgres",
+                ),
+                environment=_restic_environment(
+                    self._settings.process_environment,
+                    repository=self._settings.restic_repository,
+                ),
+                timeout_seconds=self._settings.command_timeout_seconds,
+                stdout_path=output_path,
+            ),
+            "restic_snapshot_list_failed",
         )
 
     def _restic_dump(self, dump_path: Path) -> None:
@@ -570,8 +686,8 @@ class BackupRestoreService:
 
 
 @contextmanager
-def _secure_temporary_dump() -> Iterator[Path]:
-    descriptor, raw_path = tempfile.mkstemp(prefix="telegram-crm-backup-", suffix=".dump")
+def _secure_temporary_file(*, suffix: str) -> Iterator[Path]:
+    descriptor, raw_path = tempfile.mkstemp(prefix="telegram-crm-backup-", suffix=suffix)
     path = Path(raw_path)
     try:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
@@ -586,9 +702,37 @@ def _secure_temporary_dump() -> Iterator[Path]:
         path.unlink(missing_ok=True)
 
 
+@contextmanager
+def _secure_temporary_dump() -> Iterator[Path]:
+    with _secure_temporary_file(suffix=".dump") as path:
+        yield path
+
+
 def _require_nonempty_dump(path: Path, *, error_code: str) -> None:
     if not path.is_file() or path.stat().st_size <= 0:
         raise _OperationFailure(error_code)
+
+
+def _newest_snapshot_time(path: Path) -> datetime:
+    try:
+        if path.stat().st_size > _MAX_SNAPSHOT_JSON_BYTES:
+            raise _OperationFailure("backup_snapshot_list_invalid")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list) or not payload:
+            raise _OperationFailure("backup_snapshot_missing")
+        timestamps: list[datetime] = []
+        for item in payload:
+            if not isinstance(item, dict) or not isinstance(item.get("time"), str):
+                raise _OperationFailure("backup_snapshot_list_invalid")
+            parsed = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise _OperationFailure("backup_snapshot_list_invalid")
+            timestamps.append(parsed.astimezone(UTC))
+        return max(timestamps)
+    except _OperationFailure:
+        raise
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        raise _OperationFailure("backup_snapshot_list_invalid") from exc
 
 
 def _system_environment(source: Mapping[str, str]) -> dict[str, str]:
@@ -731,16 +875,21 @@ def _configuration_failure(operation: MaintenanceOperation) -> MaintenanceHealth
         finished_at=now,
         duration_seconds=0.0,
         error_code=(
-            "backup_configuration_invalid"
-            if operation is MaintenanceOperation.BACKUP
-            else "restore_configuration_invalid"
+            "restore_configuration_invalid"
+            if operation is MaintenanceOperation.RESTORE_TEST
+            else "backup_configuration_invalid"
         ),
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Encrypted PostgreSQL backup operations")
-    parser.add_argument("operation", choices=("backup", "restore-test"))
+    parser.add_argument("operation", choices=("backup", "restore-test", "check-freshness"))
+    parser.add_argument(
+        "--require-enabled",
+        action="store_true",
+        help="fail when BACKUP_ENABLED is false (required for production schedulers)",
+    )
     return parser
 
 
@@ -750,23 +899,28 @@ def run_cli(
     environment: Mapping[str, str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    operation = (
-        MaintenanceOperation.BACKUP
-        if args.operation == "backup"
-        else MaintenanceOperation.RESTORE_TEST
-    )
+    operation = {
+        "backup": MaintenanceOperation.BACKUP,
+        "restore-test": MaintenanceOperation.RESTORE_TEST,
+        "check-freshness": MaintenanceOperation.CHECK_FRESHNESS,
+    }[args.operation]
     try:
         settings = BackupSettings.from_environment(environment)
     except BackupConfigurationError:
         result = _configuration_failure(operation)
     else:
         service = BackupRestoreService(settings)
-        result = (
-            service.backup() if operation is MaintenanceOperation.BACKUP else service.restore_test()
-        )
+        if operation is MaintenanceOperation.BACKUP:
+            result = service.backup()
+        elif operation is MaintenanceOperation.RESTORE_TEST:
+            result = service.restore_test()
+        else:
+            result = service.check_freshness()
     print(json.dumps(result.as_dict(), ensure_ascii=False, separators=(",", ":")))
-    if result.status in {MaintenanceStatus.SUCCEEDED, MaintenanceStatus.DISABLED}:
+    if result.status is MaintenanceStatus.SUCCEEDED:
         return 0
+    if result.status is MaintenanceStatus.DISABLED:
+        return 2 if args.require_enabled else 0
     return 2 if result.error_code and "configuration" in result.error_code else 1
 
 

@@ -78,7 +78,6 @@ def service_card_keyboard(
     action_text: str = "✨ Записаться на эту услугу",
     page: int = 1,
     pages: int = 1,
-    has_photo: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -90,17 +89,6 @@ def service_card_keyboard(
             )
         ]
     ]
-    if has_photo:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🖼 Посмотреть фотографию",
-                    callback_data=BookingCallback(
-                        action="service_photo", object_id=service_id, page=page
-                    ).pack(),
-                )
-            ]
-        )
     if pages > 1:
         navigation: list[InlineKeyboardButton] = []
         if page > 1:

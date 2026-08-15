@@ -10,7 +10,8 @@
 даже тогда, когда HTTP API не используется. API остаётся отдельным профилем. Оба процесса получают
 PostgreSQL/Redis file secrets и проходят собственные healthcheck.
 
-Backup-профиль получает PostgreSQL и restic secrets раздельно. Репозиторий содержит CI smoke,
+Backup-профиль получает основной PostgreSQL, отдельный restore PostgreSQL и restic secrets.
+Репозиторий содержит CI smoke,
 который запускает API и reservation-worker с file secrets, создаёт зашифрованный backup и
 восстанавливает его в отдельную тестовую БД. Это проверяет программный wiring, но для каждого
 покупателя всё равно нужно отдельно проверить его настоящий offsite backend, права доступа,
@@ -135,14 +136,19 @@ mkdir -p .secrets
 chmod 700 .secrets
 openssl rand -base64 48 | tr '+/' '_-' | tr -d '=\n' > .secrets/postgres_password
 openssl rand -base64 48 | tr '+/' '_-' | tr -d '=\n' > .secrets/redis_password
+openssl rand -base64 48 | tr '+/' '_-' | tr -d '=\n' > .secrets/restore_postgres_password
+openssl rand -base64 48 | tr '+/' '_-' | tr -d '=\n' > .secrets/restic_password
 chmod 600 .env
-chmod 644 .secrets/postgres_password .secrets/redis_password
+chmod 644 .secrets/postgres_password .secrets/redis_password \
+  .secrets/restore_postgres_password .secrets/restic_password
 ```
 
 Redis-пароль должен содержать только `A-Z`, `a-z`, `0-9`, `_`, `-` и иметь не менее 32 символов.
 Compose file secrets являются read-only bind mounts. Каталог с режимом `0700` закрывает их от
 других пользователей VPS, а режим файлов `0644` позволяет непривилегированному UID приложения
 прочитать mount внутри контейнера. Не ослабляйте права родительского каталога.
+То же правило применяется к `yookassa_shop_id` и `yookassa_secret_key`: оба файла нужны UID
+`10001` одновременно в контейнерах `bot` и `api`; права `0600 root:root` сделают их нечитаемыми.
 В `.env` задайте как минимум:
 
 - `BOT_TOKEN`;
@@ -166,6 +172,8 @@ export COMPOSE_PROJECT_NAME=crm_client_name
 export ENV_FILE=.env
 export POSTGRES_PASSWORD_SECRET_FILE=.secrets/postgres_password
 export REDIS_PASSWORD_SECRET_FILE=.secrets/redis_password
+export RESTORE_POSTGRES_PASSWORD_SECRET_FILE=.secrets/restore_postgres_password
+export RESTIC_PASSWORD_SECRET_FILE=.secrets/restic_password
 ```
 
 Проверьте конфигурацию и запустите базовый стек:
@@ -250,11 +258,11 @@ docker compose -f docker-compose.yml -f compose.production.yml logs --tail 100 m
 Секреты передаются отдельно по защищённому каналу. В акте или рабочем журнале не записывают сами
 пароли — только факт передачи и ответственного владельца.
 
-## 12. Как дать Codex доступ к VPS позже
+## 12. Настройка VPS с помощью Codex
 
-Самый понятный вариант — подключиться к Ubuntu 24.04 через VS Code Remote SSH, открыть удалённый
-каталог репозитория и запустить Codex в этом удалённом workspace. Тогда команды выполняются на
-VPS, а не на локальном компьютере.
+Подключайтесь к Ubuntu 24.04 через VS Code Remote SSH под отдельным непривилегированным
+пользователем, откройте удалённый каталог конкретного экземпляра и запускайте Codex только из
+этого workspace. Тогда видимый Codex репозиторий и команды ограничены серверным checkout.
 
 Подготовьте:
 
@@ -264,10 +272,36 @@ VPS, а не на локальном компьютере.
 - путь к отдельному экземпляру проекта;
 - возможность `sudo` только для согласованных административных действий.
 
-Альтернативно можно создать локальный Docker context поверх SSH по официальной инструкции
-Docker, но для правки файлов и диагностики Remote SSH удобнее.
+После SSH-подключения установите Codex CLI командой из
+[официальной документации OpenAI](https://learn.chatgpt.com/docs/codex/cli), перейдите в checkout
+и запустите его. При первом запуске используйте предложенный CLI способ входа; не сохраняйте
+данные авторизации в каталоге проекта:
 
-Не присылайте пароль root, приватный SSH-ключ, `.env` или содержимое `.secrets` в чат. Ключ должен
-храниться у вас локально. Сначала попросите выполнить read-only аудит (`docker compose ps`, логи,
-версии, свободное место), затем отдельно разрешайте обновление, перезапуск или миграции. Доступ
-можно отозвать удалением публичного ключа из `authorized_keys`.
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+cd /opt/telegram-crm/client-name
+codex
+```
+
+До разрешения изменений попросите выполнить только read-only аудит:
+
+```bash
+git rev-parse HEAD
+git status --short
+docker compose -f docker-compose.yml -f compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f compose.production.yml ps
+systemctl --no-pager --full status telegram-crm-backup.timer telegram-crm-backup-freshness.timer
+df -h
+docker system df
+```
+
+Разворачивайте строго проверенный Git tag/commit либо образ по неизменяемому digest, никогда
+плавающий `main`/`latest`. Перед миграциями и обновлением сначала создайте backup и подтвердите
+restore-test. Миграция, restart, изменение firewall/systemd, ротация secret и удаление файлов
+выполняются только после отдельного явного подтверждения владельца.
+
+Не присылайте Codex пароль root, приватный SSH-ключ, `.env` или содержимое `.secrets`. Передавайте
+на сервер только публичный SSH-ключ. Пользователю развёртывания выдавайте минимальные файловые
+права и ограниченный список `sudo`-операций вместо `sudo ALL`; административные команды должны
+оставаться подтверждаемыми. После настройки удалите временный публичный ключ из
+`authorized_keys`, отзовите временное правило `sudo` и проверьте журнал SSH-входов.

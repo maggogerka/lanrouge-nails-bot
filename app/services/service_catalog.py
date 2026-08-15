@@ -376,6 +376,11 @@ class ServiceCatalog:
 
         ensure_owner_admin(actor, self._admin_telegram_ids)
         async with self._unit_of_work_factory() as unit_of_work:
+            ensure_owner_admin(
+                actor,
+                self._admin_telegram_ids,
+                business_id=unit_of_work.business_id,
+            )
             actor_user = await unit_of_work.users.get_or_create_admin(actor)
             service = await self._get_required(unit_of_work, service_id, for_update=True)
             before = self._audit_values(service)

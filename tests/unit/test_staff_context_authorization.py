@@ -14,12 +14,17 @@ from app.middlewares.staff_context import RuntimeAuthorizationMiddleware, StaffC
 from app.schemas.authorization import StaffContext
 from app.schemas.service import AdminActor
 from app.security import get_staff_context, staff_authorization_scope
-from app.services.appointment_common import ensure_admin
+from app.services.appointment_common import ensure_admin, ensure_owner_admin
 
 
-def context(role: StaffRole, *, telegram_id: int = 101) -> StaffContext:
+def context(
+    role: StaffRole,
+    *,
+    telegram_id: int = 101,
+    business_id: int = 1,
+) -> StaffContext:
     return StaffContext(
-        business_id=1,
+        business_id=business_id,
         staff_member_id=2,
         user_id=3,
         telegram_id=telegram_id,
@@ -62,6 +67,20 @@ def test_runtime_context_must_match_actor_even_if_actor_is_in_env() -> None:
     with staff_authorization_scope(context(StaffRole.OWNER, telegram_id=101)):
         with pytest.raises(AuthorizationError):
             ensure_admin(AdminActor(telegram_id=202), frozenset({202}))
+
+
+def test_permanent_delete_requires_owner_in_same_business() -> None:
+    actor = AdminActor(telegram_id=101)
+    with staff_authorization_scope(context(StaffRole.MANAGER)):
+        with pytest.raises(AuthorizationError, match="только владельцу"):
+            ensure_owner_admin(actor, frozenset(), business_id=1)
+
+    with staff_authorization_scope(context(StaffRole.OWNER, business_id=2)):
+        with pytest.raises(AuthorizationError, match="другого бизнеса"):
+            ensure_owner_admin(actor, frozenset(), business_id=1)
+
+    with staff_authorization_scope(context(StaffRole.OWNER, business_id=1)):
+        ensure_owner_admin(actor, frozenset(), business_id=1)
 
 
 @pytest.mark.asyncio
