@@ -1,9 +1,0 @@
-[extend]
-useDefault = true
-
-[[allowlists]]
-description = "Deterministic fake payment idempotency keys used by tests"
-regexTarget = "secret"
-regexes = [
-  '''^(?:cancel-1234567890123456|refund-1234567890123456|refund-9876543210987654|payment-123456789012345|reservation-1234567890)$''',
-]
