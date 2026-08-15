@@ -23,9 +23,14 @@ from app.keyboards.admin.windows import window_list_keyboard
 from app.keyboards.client.appointments import appointment_list_keyboard
 from app.keyboards.client.booking import BookingCallback, service_card_keyboard
 from app.keyboards.master.portfolio import master_portfolio_menu
+from app.keyboards.master.workspace import (
+    master_appointment_actions,
+    master_payment_actions,
+)
 from app.schemas.appointment import AdminAppointmentView, AppointmentView
 from app.schemas.availability import AvailabilityWindowView
-from app.schemas.payment import PaymentAdminSection, PaymentAdminView
+from app.schemas.master_workspace import MasterAppointmentView
+from app.schemas.payment import PaymentAdminSection, PaymentAdminView, PaymentView
 from app.schemas.portfolio import PortfolioItemView
 from app.schemas.service import ServiceView
 from app.schemas.workstation import WorkstationServiceView, WorkstationView
@@ -197,3 +202,52 @@ def test_master_portfolio_management_is_bounded() -> None:
 
     assert len(keyboard.inline_keyboard) <= 10
     assert any(button.text == "2/5" for row in keyboard.inline_keyboard for button in row)
+
+
+def test_master_workspace_lists_are_bounded_and_navigable() -> None:
+    appointments = tuple(
+        MasterAppointmentView(
+            appointment_id=index,
+            service_name=f"Service {index}",
+            client_name=f"Client {index}",
+            client_phone=None,
+            start_at=NOW + timedelta(days=1, hours=index),
+            end_at=NOW + timedelta(days=1, hours=index + 1),
+            timezone="Europe/Moscow",
+            status=AppointmentStatus.CONFIRMED,
+        )
+        for index in range(1, 9)
+    )
+    payments = tuple(
+        PaymentView(
+            id=index,
+            business_id=1,
+            appointment_id=index,
+            provider=PaymentMode.MANUAL,
+            provider_payment_id=None,
+            amount=Decimal("500"),
+            refunded_amount=Decimal("0"),
+            currency="RUB",
+            status=PaymentStatus.PENDING,
+            payment_type=PaymentType.DEPOSIT,
+            confirmation_url=None,
+            expires_at=None,
+            paid_at=None,
+            cancelled_at=None,
+            refunded_at=None,
+            manual_status=ManualPaymentStatus.REVIEW_PENDING,
+        )
+        for index in range(1, 9)
+    )
+
+    appointment_keyboard = master_appointment_actions(appointments, now=NOW, page=2, pages=5)
+    payment_keyboard = master_payment_actions(payments, page=2, pages=5)
+
+    assert appointment_keyboard is not None
+    assert payment_keyboard is not None
+    assert len(appointment_keyboard.inline_keyboard) <= 9
+    assert len(payment_keyboard.inline_keyboard) <= 9
+    assert any(
+        button.text == "2/5" for row in appointment_keyboard.inline_keyboard for button in row
+    )
+    assert any(button.text == "2/5" for row in payment_keyboard.inline_keyboard for button in row)

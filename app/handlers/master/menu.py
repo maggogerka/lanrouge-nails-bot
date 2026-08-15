@@ -40,6 +40,8 @@ from app.services.master_workspace_service import MasterWorkspaceService
 from app.services.payment_admin_service import PaymentAdministrationService
 from app.services.presentation_service import PresentationService
 from app.services.vendor_support_service import VendorSupportService
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="master.menu")
 
@@ -68,11 +70,34 @@ async def show_own_appointments(
     staff_context: StaffContext,
     master_workspace_service: MasterWorkspaceService,
 ) -> None:
-    appointments = await master_workspace_service.list_workspace_appointments(staff_context)
-    await message.answer(
-        _render_appointments(appointments),
-        reply_markup=master_appointment_actions(appointments),
+    appointments = await master_workspace_service.list_workspace_appointments(
+        staff_context, limit=50
     )
+    page = paginate_sequence(appointments, page=1, page_size=8)
+    await message.answer(
+        _render_appointments(page.items),
+        reply_markup=master_appointment_actions(page.items, page=page.page, pages=page.pages),
+    )
+
+
+@router.callback_query(MasterAppointmentCallback.filter(F.action == "page"))
+async def show_own_appointments_page(
+    callback: CallbackQuery,
+    callback_data: MasterAppointmentCallback,
+    staff_context: StaffContext,
+    master_workspace_service: MasterWorkspaceService,
+) -> None:
+    appointments = await master_workspace_service.list_workspace_appointments(
+        staff_context, limit=50
+    )
+    page = paginate_sequence(appointments, page=callback_data.page, page_size=8)
+    if isinstance(callback.message, Message):
+        await edit_text_safely(
+            callback.message,
+            _render_appointments(page.items),
+            reply_markup=master_appointment_actions(page.items, page=page.page, pages=page.pages),
+        )
+    await callback.answer()
 
 
 @router.callback_query(
@@ -181,10 +206,34 @@ async def show_own_prepayments(
     except (DomainError, PaymentStateError) as exc:
         await message.answer(str(exc))
         return
+    pending = _pending_prepayments(payments)
+    page = paginate_sequence(pending, page=1, page_size=8)
     await message.answer(
-        _render_prepayments(payments),
-        reply_markup=master_payment_actions(payments),
+        _render_prepayments(page.items),
+        reply_markup=master_payment_actions(page.items, page=page.page, pages=page.pages),
     )
+
+
+@router.callback_query(MasterPaymentCallback.filter(F.action == "page"))
+async def show_own_prepayments_page(
+    callback: CallbackQuery,
+    callback_data: MasterPaymentCallback,
+    staff_context: StaffContext,
+    payment_admin_service: PaymentAdministrationService,
+) -> None:
+    try:
+        payments = await payment_admin_service.list_recent(staff_context, limit=50)
+    except (DomainError, PaymentStateError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    page = paginate_sequence(_pending_prepayments(payments), page=callback_data.page, page_size=8)
+    if isinstance(callback.message, Message):
+        await edit_text_safely(
+            callback.message,
+            _render_prepayments(page.items),
+            reply_markup=master_payment_actions(page.items, page=page.page, pages=page.pages),
+        )
+    await callback.answer()
 
 
 @router.callback_query(MasterPaymentCallback.filter(F.action == "approve_prompt"))
@@ -286,22 +335,25 @@ def _render_appointments(items: tuple[MasterAppointmentView, ...]) -> str:
 
 
 def _render_prepayments(items: tuple[PaymentView, ...]) -> str:
-    pending = [
-        item
-        for item in items
-        if item.manual_status is not None
-        and item.manual_status.value in {"client_reported", "review_pending"}
-    ]
-    if not pending:
+    if not items:
         return "Предоплат по вашим записям, ожидающих проверки, нет."
     rows = ["<b>Предоплаты моих записей</b>"]
     rows.extend(
         f"№{item.id} · запись №{item.appointment_id} · "
         f"{item.amount:.2f} {escape(item.currency)}"
         + (" · чек приложен" if item.has_receipt else "")
-        for item in pending
+        for item in items
     )
     return "\n".join(rows)
+
+
+def _pending_prepayments(items: tuple[PaymentView, ...]) -> tuple[PaymentView, ...]:
+    return tuple(
+        item
+        for item in items
+        if item.manual_status is not None
+        and item.manual_status.value in {"client_reported", "review_pending"}
+    )
 
 
 def _render_schedule(schedule: MasterScheduleView) -> str:

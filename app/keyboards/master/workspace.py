@@ -17,11 +17,13 @@ class MasterScheduleCallback(CallbackData, prefix="master_schedule"):
 class MasterAppointmentCallback(CallbackData, prefix="master_appt"):
     action: str
     appointment_id: int
+    page: int = 1
 
 
 class MasterPaymentCallback(CallbackData, prefix="master_pay"):
     action: str
     payment_id: int
+    page: int = 1
 
 
 def master_schedule_actions(*, is_paused: bool) -> InlineKeyboardMarkup:
@@ -59,6 +61,8 @@ def master_appointment_actions(
     appointments: tuple[MasterAppointmentView, ...],
     *,
     now: datetime | None = None,
+    page: int = 1,
+    pages: int = 1,
 ) -> InlineKeyboardMarkup | None:
     """Expose actions only when their time/state preconditions can currently succeed."""
 
@@ -76,6 +80,7 @@ def master_appointment_actions(
                         callback_data=MasterAppointmentCallback(
                             action="request_complete",
                             appointment_id=item.appointment_id,
+                            page=page,
                         ).pack(),
                     ),
                     InlineKeyboardButton(
@@ -83,6 +88,7 @@ def master_appointment_actions(
                         callback_data=MasterAppointmentCallback(
                             action="request_no_show",
                             appointment_id=item.appointment_id,
+                            page=page,
                         ).pack(),
                     ),
                 ]
@@ -95,10 +101,40 @@ def master_appointment_actions(
                         callback_data=MasterAppointmentCallback(
                             action="request_cancel",
                             appointment_id=item.appointment_id,
+                            page=page,
                         ).pack(),
                     )
                 ]
             )
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=MasterAppointmentCallback(
+                        action="page", appointment_id=0, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=MasterAppointmentCallback(
+                    action="page", appointment_id=0, page=page
+                ).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=MasterAppointmentCallback(
+                        action="page", appointment_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -136,7 +172,9 @@ def master_appointment_confirmation(
     )
 
 
-def master_payment_actions(payments: tuple[PaymentView, ...]) -> InlineKeyboardMarkup | None:
+def master_payment_actions(
+    payments: tuple[PaymentView, ...], *, page: int = 1, pages: int = 1
+) -> InlineKeyboardMarkup | None:
     rows = [
         [
             InlineKeyboardButton(
@@ -144,6 +182,7 @@ def master_payment_actions(payments: tuple[PaymentView, ...]) -> InlineKeyboardM
                 callback_data=MasterPaymentCallback(
                     action="approve_prompt",
                     payment_id=payment.id,
+                    page=page,
                 ).pack(),
             )
         ]
@@ -151,6 +190,33 @@ def master_payment_actions(payments: tuple[PaymentView, ...]) -> InlineKeyboardM
         if payment.manual_status is not None
         and payment.manual_status.value in {"client_reported", "review_pending"}
     ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=MasterPaymentCallback(
+                        action="page", payment_id=0, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=MasterPaymentCallback(action="page", payment_id=0, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=MasterPaymentCallback(
+                        action="page", payment_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 

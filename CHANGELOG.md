@@ -22,6 +22,7 @@
 - one-tap skip controls and safe Telegram profile links in CRM cards.
 - negotiated-price services via an explicit zero price, with automatic fixed-prepayment reset;
 - bounded pagination for growing administrative and client lists.
+- a complete Russian operator guide covering client, master and administrative workflows.
 
 ### Changed
 
@@ -65,6 +66,7 @@
   item as a separate chat message;
 - appointments, windows, services, add-ons, broadcasts, reviews, waitlists, privacy requests and
   active/payment-history screens retain their actions while navigating between bounded pages.
+- master workspace appointments and pending prepayments are also bounded and paginated.
 
 ### Security
 

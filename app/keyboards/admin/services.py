@@ -314,7 +314,6 @@ def addon_photo_keyboard(addon: ServiceAddonView) -> InlineKeyboardMarkup:
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def service_details_keyboard(service: ServiceView) -> InlineKeyboardMarkup:
