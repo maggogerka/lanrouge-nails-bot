@@ -13,6 +13,7 @@ class PaymentAdminCallback(CallbackData, prefix="payadm"):
     action: str
     payment_id: int = 0
     mode: str = "none"
+    page: int = 1
 
 
 def payment_admin_home_keyboard(
@@ -58,6 +59,9 @@ def payment_admin_home_keyboard(
 def payment_admin_list_keyboard(
     payments: tuple[PaymentAdminView, ...],
     section: PaymentAdminSection,
+    *,
+    page: int = 1,
+    pages: int = 1,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for payment in payments:
@@ -74,10 +78,34 @@ def payment_admin_list_keyboard(
                         action="view",
                         payment_id=payment.id,
                         mode=section.value,
+                        page=page,
                     ).pack(),
                 )
             ]
         )
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=PaymentAdminCallback(action=section.value, page=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=PaymentAdminCallback(action=section.value, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=PaymentAdminCallback(action=section.value, page=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -96,6 +124,7 @@ def payment_admin_details_keyboard(
     can_manage: bool,
     can_reject: bool,
     can_refund: bool,
+    page: int = 1,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if payment.client_telegram_id:
@@ -157,7 +186,7 @@ def payment_admin_details_keyboard(
                 text=(
                     "⬅️ К действующим" if section is PaymentAdminSection.ACTIVE else "⬅️ К истории"
                 ),
-                callback_data=PaymentAdminCallback(action=section.value).pack(),
+                callback_data=PaymentAdminCallback(action=section.value, page=page).pack(),
             )
         ]
     )

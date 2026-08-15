@@ -9,6 +9,7 @@ from html import escape
 from aiogram.types import User as TelegramUser
 
 from app.schemas.service import AdminActor, ServiceView
+from app.utils.pricing import format_rub_price
 
 DURATION_RANGE = re.compile(r"^\s*(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?\s*$")
 
@@ -34,7 +35,7 @@ def render_service(service: ServiceView) -> str:
         f"ID услуги: <code>{service.id}</code>\n"
         f"Статус: {status}\n"
         f"Описание: {description}\n"
-        f"Стоимость: {service.price:.2f} ₽\n"
+        f"Стоимость: {format_rub_price(service.price)}\n"
         "Продолжительность: "
         f"{service.duration_min_minutes}–{service.duration_max_minutes} мин.\n"
         "Предоплата: "

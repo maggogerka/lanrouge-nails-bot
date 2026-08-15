@@ -1,5 +1,6 @@
 """Implemented client information and catalog menu sections."""
 
+from collections.abc import Sequence
 from html import escape
 
 from aiogram import F, Router
@@ -25,10 +26,13 @@ from app.keyboards.client.main import (
 from app.keyboards.client.masters import PublicMasterCallback, public_master_keyboard
 from app.keyboards.client.presentation import business_links_keyboard, privacy_links_keyboard
 from app.schemas.features import FeatureName
+from app.schemas.presentation import PublicMasterPresentation
 from app.services.booking_service import BookingService
 from app.services.feature_flag_service import FeatureFlagService
 from app.services.menu_service import MenuService
 from app.services.presentation_service import PresentationService
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.menu")
 
@@ -91,22 +95,76 @@ async def show_masters(
     if not masters:
         await message.answer("Доступные мастера пока не опубликованы.")
         return
-    for master in masters:
-        lines = [f"<b>{escape(master.display_name)}</b>"]
-        if master.specialization:
-            lines.append(escape(master.specialization))
-        if master.bio:
-            lines.append(escape(master.bio))
-        text = "\n".join(lines)
-        keyboard = public_master_keyboard(master.staff_member_id, master.social_links)
-        if master.telegram_photo_file_id:
-            await message.answer_photo(
-                master.telegram_photo_file_id,
-                caption=text[:1024],
-                reply_markup=keyboard,
-            )
-        else:
-            await message.answer(text[:4096], reply_markup=keyboard)
+    await _render_master_card(message, masters, page=1, edit=False)
+
+
+async def _render_master_card(
+    message: Message,
+    masters: Sequence[PublicMasterPresentation],
+    *,
+    page: int,
+    edit: bool,
+) -> None:
+    paged = paginate_sequence(masters, page=page, page_size=1)
+    master = paged.items[0]
+    lines = [
+        f"<b>Мастер {paged.page} из {paged.pages}</b>",
+        f"<b>{escape(master.display_name)}</b>",
+    ]
+    if master.specialization:
+        lines.append(escape(master.specialization))
+    if master.bio:
+        lines.append(escape(master.bio))
+    if master.telegram_photo_file_id:
+        lines.append("🖼 Фотография доступна по кнопке ниже.")
+    text = "\n".join(lines)
+    keyboard = public_master_keyboard(
+        master.staff_member_id,
+        master.social_links,
+        page=paged.page,
+        pages=paged.pages,
+        has_photo=bool(master.telegram_photo_file_id),
+    )
+    if edit and not message.photo:
+        await edit_text_safely(message, text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(PublicMasterCallback.filter(F.action == "page"))
+async def browse_masters(
+    callback: CallbackQuery,
+    callback_data: PublicMasterCallback,
+    presentation_service: PresentationService,
+) -> None:
+    masters = await presentation_service.list_bookable_masters()
+    if not masters:
+        await callback.answer("Мастера больше не доступны.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await _render_master_card(callback.message, masters, page=callback_data.page, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(PublicMasterCallback.filter(F.action == "photo"))
+async def show_master_photo(
+    callback: CallbackQuery,
+    callback_data: PublicMasterCallback,
+    presentation_service: PresentationService,
+) -> None:
+    masters = await presentation_service.list_bookable_masters()
+    master = next(
+        (item for item in masters if item.staff_member_id == callback_data.staff_member_id), None
+    )
+    if master is None or not master.telegram_photo_file_id:
+        await callback.answer("Фотография больше не доступна.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer_photo(
+            master.telegram_photo_file_id,
+            caption=f"<b>{escape(master.display_name)}</b>",
+        )
+    await callback.answer()
 
 
 @router.callback_query(PublicMasterCallback.filter(F.action == "book"))

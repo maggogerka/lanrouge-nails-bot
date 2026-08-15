@@ -11,10 +11,10 @@ from aiogram.utils.deep_linking import create_start_link
 
 from app.domain.enums import PortfolioDisplayMode
 from app.domain.errors import DomainError
-from app.handlers.client.booking_browse import start_booking
+from app.handlers.client.booking_browse import show_service_cards, start_booking
 from app.handlers.client.booking_common import available_dates
 from app.handlers.client.common import actor_from_telegram
-from app.keyboards.client.booking import dates_keyboard, services_keyboard
+from app.keyboards.client.booking import dates_keyboard
 from app.keyboards.client.main import CLIENT_PORTFOLIO_TEXT, client_main_keyboard
 from app.keyboards.client.portfolio import (
     PortfolioClientCallback,
@@ -159,20 +159,15 @@ async def start_booking_from_portfolio(
     await state.clear()
     await state.update_data(design_reference_id=item.id, design_title=item.title)
     if item.linked_service_id is None:
-        await state.set_state(BookingFlow.service)
-        await callback.message.answer(
-            "Выберите услугу для этого дизайна:",
-            reply_markup=services_keyboard(services),
-        )
+        await show_service_cards(callback.message, state, services)
         await callback.answer()
         return
     linked = next((value for value in services if value.id == item.linked_service_id), None)
     if linked is None:
-        await state.set_state(BookingFlow.service)
         await callback.message.answer(
-            "Связанная услуга сейчас недоступна. Выберите другую действующую услугу:",
-            reply_markup=services_keyboard(services),
+            "Связанная услуга сейчас недоступна. Выберите другую действующую услугу:"
         )
+        await show_service_cards(callback.message, state, services)
         await callback.answer()
         return
     availability = await booking_service.list_availability(

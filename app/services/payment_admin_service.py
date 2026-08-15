@@ -23,6 +23,7 @@ from app.domain.payments import PaymentStateError, aware_utc, require_payment_tr
 from app.domain.reservations import ensure_reservation_transition
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.authorization import StaffContext, StaffPermission
+from app.schemas.pagination import Page, PageRequest
 from app.schemas.payment import (
     PaymentAdminSection,
     PaymentAdminView,
@@ -281,6 +282,50 @@ class PaymentAdministrationService:
             return tuple(
                 self._admin_view(payment, appointment, client, settings.timezone)
                 for payment, appointment, client in rows
+            )
+
+    async def list_panel_page(
+        self,
+        actor: StaffContext,
+        section: PaymentAdminSection,
+        page: PageRequest,
+    ) -> Page[PaymentAdminView]:
+        live_actor = await self._authorization.authorize(
+            business_id=actor.business_id,
+            telegram_id=actor.telegram_id,
+            permission=StaffPermission.VIEW_PREPAYMENTS,
+        )
+        statuses = (
+            _ACTIVE_PAYMENT_STATUSES
+            if section is PaymentAdminSection.ACTIVE
+            else _HISTORY_PAYMENT_STATUSES
+        )
+        staff_member_id = (
+            live_actor.staff_member_id if live_actor.role is StaffRole.MASTER else None
+        )
+        async with self._unit_of_work_factory() as unit_of_work:
+            if unit_of_work.business_id != live_actor.business_id:
+                raise RuntimeError("payment unit of work tenant mismatch")
+            settings = await unit_of_work.settings.get()
+            if settings is None:
+                raise EntityNotFoundError("Настройки бизнеса не найдены.")
+            total = await unit_of_work.payments.count_with_context(
+                statuses=statuses, staff_member_id=staff_member_id
+            )
+            rows = await unit_of_work.payments.list_recent_with_context(
+                statuses=statuses,
+                staff_member_id=staff_member_id,
+                limit=page.page_size,
+                offset=page.offset,
+            )
+            return Page(
+                items=[
+                    self._admin_view(payment, appointment, client, settings.timezone)
+                    for payment, appointment, client in rows
+                ],
+                total=total,
+                page=page.page,
+                page_size=page.page_size,
             )
 
     async def get_panel_payment(

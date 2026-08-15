@@ -14,31 +14,60 @@ from app.handlers.client.common import actor_from_telegram
 from app.keyboards.client.main import CLIENT_REVIEWS_TEXT
 from app.keyboards.client.reviews import (
     ReviewCallback,
+    public_reviews_keyboard,
     review_confirmation_keyboard,
     review_publication_keyboard,
     review_rating_keyboard,
     review_skip_text_keyboard,
 )
+from app.schemas.pagination import PageRequest
 from app.schemas.review import ReviewCreate
 from app.services.review_service import ReviewService
 from app.states.review import ReviewFlow
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.reviews")
 
 
+async def _show_public_reviews(
+    target: Message | CallbackQuery,
+    review_service: ReviewService,
+    *,
+    page_number: int = 1,
+) -> None:
+    page = await review_service.list_public(PageRequest(page=page_number, page_size=1))
+    if not page.items:
+        message = target.message if isinstance(target, CallbackQuery) else target
+        if isinstance(message, Message):
+            await message.answer("Опубликованных отзывов пока нет.")
+        return
+    review = page.items[0]
+    text = (
+        f"<b>Отзыв {page.page} из {page.pages}</b>\n\n"
+        f"{'⭐' * review.rating} · {escape(review.client_name)}\n"
+        f"{escape(review.text or 'Без текста')}"
+    )
+    keyboard = public_reviews_keyboard(page=page.page, pages=page.pages)
+    if isinstance(target, CallbackQuery):
+        if isinstance(target.message, Message):
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
+
+
 @router.message(F.text == CLIENT_REVIEWS_TEXT)
 async def show_public_reviews(message: Message, review_service: ReviewService) -> None:
-    page = await review_service.list_public()
-    if not page.items:
-        await message.answer("Опубликованных отзывов пока нет.")
-        return
-    await message.answer(
-        "\n\n".join(
-            f"{'⭐' * review.rating} · {escape(review.client_name)}\n"
-            f"{escape(review.text or 'Без текста')}"
-            for review in page.items
-        )
-    )
+    await _show_public_reviews(message, review_service)
+
+
+@router.callback_query(ReviewCallback.filter(F.action == "public_page"))
+async def show_public_reviews_page(
+    callback: CallbackQuery,
+    callback_data: ReviewCallback,
+    review_service: ReviewService,
+) -> None:
+    await _show_public_reviews(callback, review_service, page_number=callback_data.page)
+    await callback.answer()
 
 
 @router.callback_query(ReviewCallback.filter(F.action == "start"))

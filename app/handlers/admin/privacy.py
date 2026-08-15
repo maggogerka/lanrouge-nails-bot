@@ -16,6 +16,8 @@ from app.keyboards.admin.privacy import (
     deletion_requests_keyboard,
 )
 from app.services.privacy_service import DeletionRequestView, PrivacyDeletionRuntimeService
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.privacy")
 
@@ -58,14 +60,23 @@ def _render(request: DeletionRequestView) -> str:
     return "\n".join(lines)
 
 
-async def _show_list(message: Message, service: PrivacyDeletionRuntimeService) -> None:
-    if message.from_user is None:
+async def _show_list(
+    target: Message | CallbackQuery,
+    service: PrivacyDeletionRuntimeService,
+    *,
+    page: int = 1,
+) -> None:
+    if target.from_user is None:
         return
-    requests = await service.list_requests(actor_from_telegram(message.from_user))
-    await message.answer(
-        f"Запросы на удаление данных: {len(requests)}",
-        reply_markup=deletion_requests_keyboard(requests),
-    )
+    requests = await service.list_requests(actor_from_telegram(target.from_user))
+    paged = paginate_sequence(requests, page=page, page_size=8)
+    text = f"Запросы на удаление данных: {paged.total} · страница {paged.page} из {paged.pages}."
+    keyboard = deletion_requests_keyboard(paged.items, page=paged.page, pages=paged.pages)
+    if isinstance(target, CallbackQuery):
+        if isinstance(target.message, Message):
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.text == ADMIN_PRIVACY_TEXT)
@@ -80,14 +91,19 @@ async def show_deletion_requests(
 
 @router.callback_query(AdminDeletionCallback.filter(F.action == "list"))
 async def show_deletion_requests_callback(
-    callback: CallbackQuery, privacy_deletion_service: PrivacyDeletionRuntimeService
+    callback: CallbackQuery,
+    callback_data: AdminDeletionCallback,
+    privacy_deletion_service: PrivacyDeletionRuntimeService,
 ) -> None:
-    if isinstance(callback.message, Message):
-        try:
-            await _show_list(callback.message, privacy_deletion_service)
-        except DomainError as exc:
-            await callback.answer(str(exc), show_alert=True)
-            return
+    try:
+        await _show_list(
+            callback,
+            privacy_deletion_service,
+            page=callback_data.request_id or 1,
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await callback.answer()
 
 

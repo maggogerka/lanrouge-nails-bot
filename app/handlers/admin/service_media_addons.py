@@ -34,6 +34,8 @@ from app.schemas.service import (
 )
 from app.services.service_catalog import ServiceCatalog
 from app.states.admin_service import AdminAddonCreate, AdminAddonEdit, AdminServiceEdit
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.service_media_addons")
 
@@ -163,10 +165,20 @@ async def show_addons(
     addons = await service_catalog.list_addons(
         actor_from_telegram(callback.from_user), callback_data.service_id
     )
+    paged = paginate_sequence(addons, page=callback_data.page, page_size=8)
     text = "Дополнительных услуг пока нет." if not addons else "Дополнительные услуги:"
+    if addons:
+        text += f"\nСтраница {paged.page} из {paged.pages} · всего {paged.total}."
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            text, reply_markup=addon_list_keyboard(callback_data.service_id, addons)
+        await edit_text_safely(
+            callback.message,
+            text,
+            reply_markup=addon_list_keyboard(
+                callback_data.service_id,
+                list(paged.items),
+                page=paged.page,
+                pages=paged.pages,
+            ),
         )
     await callback.answer()
 

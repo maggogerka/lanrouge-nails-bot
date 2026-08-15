@@ -19,9 +19,11 @@ from app.keyboards.admin.main import ADMIN_TODAY_TEXT, ADMIN_UPCOMING_TEXT
 from app.schemas.appointment import AdminAppointmentView
 from app.services.appointment_service import AppointmentService
 from app.services.reference_cleanup_service import ReferenceCleanupService
+from app.utils.pagination import paginate_sequence
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.appointment_browse")
+_APPOINTMENTS_PAGE_SIZE = 8
 
 
 async def _show_schedule(
@@ -29,6 +31,7 @@ async def _show_schedule(
     appointment_service: AppointmentService,
     *,
     today: bool,
+    page: int = 1,
 ) -> None:
     if target.from_user is None:
         return
@@ -38,6 +41,7 @@ async def _show_schedule(
         if today
         else await appointment_service.list_admin_upcoming(actor)
     )
+    paged = paginate_sequence(appointments, page=page, page_size=_APPOINTMENTS_PAGE_SIZE)
     label = "Записей на сегодня нет." if today else "Ближайших записей нет."
     if appointments:
         label = (
@@ -45,9 +49,12 @@ async def _show_schedule(
             if today
             else "🗓 Ближайшие записи сгруппированы по дням:"
         )
+        label += f"\nСтраница {paged.page} из {paged.pages} · всего {paged.total}."
     keyboard = admin_appointment_list_keyboard(
-        appointments,
+        list(paged.items),
         list_action="today" if today else "upcoming",
+        page=paged.page,
+        pages=paged.pages,
     )
     if isinstance(target, CallbackQuery):
         changed = True
@@ -75,17 +82,19 @@ async def show_upcoming(message: Message, appointment_service: AppointmentServic
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "today"))
 async def show_today_callback(
     callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
     appointment_service: AppointmentService,
 ) -> None:
-    await _show_schedule(callback, appointment_service, today=True)
+    await _show_schedule(callback, appointment_service, today=True, page=callback_data.page)
 
 
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "upcoming"))
 async def show_upcoming_callback(
     callback: CallbackQuery,
+    callback_data: AdminAppointmentCallback,
     appointment_service: AppointmentService,
 ) -> None:
-    await _show_schedule(callback, appointment_service, today=False)
+    await _show_schedule(callback, appointment_service, today=False, page=callback_data.page)
 
 
 @router.callback_query(AdminAppointmentCallback.filter(F.action == "day_label"))

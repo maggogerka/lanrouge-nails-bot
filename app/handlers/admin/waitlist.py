@@ -19,27 +19,37 @@ from app.keyboards.admin.waitlist import (
 from app.schemas.pagination import PageRequest
 from app.services.waitlist_service import WaitlistService
 from app.states.waitlist import AdminWaitlistFlow
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.waitlist")
 
 
 async def _show(
-    message: Message,
+    target: Message | CallbackQuery,
     service: WaitlistService,
     *,
     status: WaitlistStatus | None,
+    page_number: int = 1,
 ) -> None:
-    if message.from_user is None:
+    if target.from_user is None:
         return
     page = await service.list_admin(
-        actor_from_telegram(message.from_user),
+        actor_from_telegram(target.from_user),
         status=status,
-        page=PageRequest(page_size=20),
+        page=PageRequest(page=page_number, page_size=8),
     )
-    await message.answer(
-        f"Лист ожидания: {page.total} запросов.",
-        reply_markup=admin_waitlist_keyboard(page.items),
+    text = f"Лист ожидания: {page.total} запросов · страница {page.page} из {page.pages}."
+    keyboard = admin_waitlist_keyboard(
+        page.items,
+        page=page.page,
+        pages=page.pages,
+        list_action="active" if status is WaitlistStatus.ACTIVE else "all",
     )
+    if isinstance(target, CallbackQuery):
+        if isinstance(target.message, Message):
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.text == ADMIN_WAITLIST_TEXT)
@@ -55,9 +65,10 @@ async def filter_admin_waitlist(
 ) -> None:
     if isinstance(callback.message, Message):
         await _show(
-            callback.message,
+            callback,
             waitlist_service,
             status=WaitlistStatus.ACTIVE if callback_data.action == "active" else None,
+            page_number=callback_data.page,
         )
     await callback.answer()
 
@@ -68,12 +79,12 @@ async def view_admin_waitlist(
     callback_data: AdminWaitlistCallback,
     waitlist_service: WaitlistService,
 ) -> None:
-    page = await waitlist_service.list_admin(
-        actor_from_telegram(callback.from_user), page=PageRequest(page_size=50)
-    )
-    entry = next((item for item in page.items if item.id == callback_data.entry_id), None)
-    if entry is None:
-        await callback.answer("Запрос не найден.", show_alert=True)
+    try:
+        entry = await waitlist_service.get_admin(
+            actor_from_telegram(callback.from_user), callback_data.entry_id
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
         return
     if isinstance(callback.message, Message):
         await callback.message.answer(
@@ -107,12 +118,12 @@ async def send_waitlist_message(
     if message.from_user is None or not (message.text or "").strip():
         return
     data = await state.get_data()
-    page = await waitlist_service.list_admin(
-        actor_from_telegram(message.from_user), page=PageRequest(page_size=50)
-    )
-    entry = next((item for item in page.items if item.id == int(data["waitlist_entry_id"])), None)
-    if entry is None:
-        await message.answer("Запрос не найден.")
+    try:
+        entry = await waitlist_service.get_admin(
+            actor_from_telegram(message.from_user), int(data["waitlist_entry_id"])
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await message.answer(str(exc))
         await state.clear()
         return
     try:

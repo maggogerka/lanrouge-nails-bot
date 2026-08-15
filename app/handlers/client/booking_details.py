@@ -17,6 +17,7 @@ from app.domain.booking import normalize_phone
 from app.domain.enums import AppointmentStatus, PaymentMode
 from app.domain.errors import BookingConflictError, DomainError
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
+from app.handlers.client.booking_browse import show_service_cards
 from app.handlers.client.booking_common import (
     available_dates,
     render_admin_new_booking,
@@ -34,7 +35,6 @@ from app.keyboards.client.booking import (
     confirmation_keyboard,
     dates_keyboard,
     reference_media_keyboard,
-    services_keyboard,
     windows_keyboard,
 )
 from app.keyboards.client.main import client_main_keyboard
@@ -349,12 +349,8 @@ async def change_booking(
 ) -> None:
     services = await booking_service.list_active_services(actor_from_telegram(callback.from_user))
     await state.clear()
-    await state.set_state(BookingFlow.service)
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "Выберите услугу заново:",
-            reply_markup=services_keyboard(services),
-        )
+        await show_service_cards(callback.message, state, services)
     await callback.answer()
 
 

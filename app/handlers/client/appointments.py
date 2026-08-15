@@ -36,23 +36,35 @@ from app.services.appointment_service import AppointmentService
 from app.services.presentation_service import PresentationService
 from app.services.reschedule_service import RescheduleService
 from app.states.booking import BookingReferenceEdit
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.appointments")
+_APPOINTMENTS_PAGE_SIZE = 8
 
 
 async def show_my_list(
     target: Message | CallbackQuery,
     appointment_service: AppointmentService,
+    *,
+    page: int = 1,
 ) -> None:
     if target.from_user is None:
         return
     actor = actor_from_telegram(target.from_user)
     appointments = await appointment_service.list_my(actor)
-    text = "У вас пока нет будущих записей." if not appointments else "Ваши будущие записи:"
-    keyboard = appointment_list_keyboard(appointments)
+    paged = paginate_sequence(appointments, page=page, page_size=_APPOINTMENTS_PAGE_SIZE)
+    text = (
+        "У вас пока нет будущих записей."
+        if not appointments
+        else (
+            f"Ваши будущие записи · страница {paged.page} из {paged.pages} · всего {paged.total}:"
+        )
+    )
+    keyboard = appointment_list_keyboard(list(paged.items), page=paged.page, pages=paged.pages)
     if isinstance(target, CallbackQuery):
         if isinstance(target.message, Message):
-            await target.message.edit_text(text, reply_markup=keyboard)
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
         await target.answer()
     else:
         await target.answer(text, reply_markup=keyboard)
@@ -71,9 +83,10 @@ async def list_my_appointments(
 @router.callback_query(AppointmentCallback.filter(F.action == "list"))
 async def list_my_appointments_callback(
     callback: CallbackQuery,
+    callback_data: AppointmentCallback,
     appointment_service: AppointmentService,
 ) -> None:
-    await show_my_list(callback, appointment_service)
+    await show_my_list(callback, appointment_service, page=callback_data.page)
 
 
 @router.callback_query(AppointmentCallback.filter(F.action == "view"))

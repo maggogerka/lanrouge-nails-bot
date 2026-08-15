@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from app.domain.enums import AppointmentStatus, PaymentMode
 from app.schemas.booking import BookingReceipt, BookingWindowView, BusinessInfo
 from app.schemas.service import ServiceAddonView, ServiceView
+from app.utils.pricing import format_rub_price
 
 
 def format_duration_range(minimum: int, maximum: int) -> str:
@@ -73,9 +74,9 @@ def render_booking_confirmation(
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{format_duration_range(duration_min, duration_max)}\n"
-        f"Основная услуга: {base_price:.2f} ₽\n"
+        f"Основная услуга: {format_rub_price(base_price)}\n"
         f"{addons_block}"
-        f"Итоговая стоимость: {price:.2f} ₽\n"
+        f"Итоговая стоимость: {format_rub_price(price) if base_price > 0 else 'договорная'}\n"
         f"{prepayment_line}"
         f"{design_line}"
         f"{reference_line}"
@@ -130,9 +131,10 @@ def render_booking_receipt(receipt: BookingReceipt) -> str:
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{format_duration_range(receipt.duration_min_minutes, receipt.duration_max_minutes)}\n"
-        f"Основная услуга: {base_price:.2f} ₽\n"
+        f"Основная услуга: {format_rub_price(base_price)}\n"
         f"{addons_block}"
-        f"Итоговая стоимость: {receipt.price:.2f} ₽\n"
+        f"Итоговая стоимость: "
+        f"{format_rub_price(receipt.price) if base_price > 0 else 'договорная'}\n"
         f"{payment_block}"
         f"{expiry_line}"
         f"{design_line}"

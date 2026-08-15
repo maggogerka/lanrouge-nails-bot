@@ -15,6 +15,9 @@ class AdminDeletionCallback(CallbackData, prefix="adel"):
 
 def deletion_requests_keyboard(
     requests: tuple[DeletionRequestView, ...],
+    *,
+    page: int = 1,
+    pages: int = 1,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -25,6 +28,29 @@ def deletion_requests_keyboard(
         ]
         for item in requests
     ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=AdminDeletionCallback(action="list", request_id=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=AdminDeletionCallback(action="list", request_id=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=AdminDeletionCallback(action="list", request_id=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(

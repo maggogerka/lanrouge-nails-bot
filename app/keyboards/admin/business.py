@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.domain.enums import BusinessType
 from app.schemas.public_links import PublicLink
 from app.schemas.workstation import WorkstationView
+from app.utils.pagination import paginate_sequence
 
 
 class BusinessProfileCallback(CallbackData, prefix="biz"):
@@ -29,6 +30,7 @@ class WorkstationCallback(CallbackData, prefix="wst"):
     action: str
     workstation_id: int = 0
     service_id: int = 0
+    page: int = 1
 
 
 def business_profile_keyboard(
@@ -107,6 +109,9 @@ def business_support_keyboard(links: tuple[PublicLink, ...]) -> InlineKeyboardMa
 
 def workstation_list_keyboard(
     workstations: tuple[WorkstationView, ...],
+    *,
+    page: int = 1,
+    pages: int = 1,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -115,11 +120,35 @@ def workstation_list_keyboard(
                 callback_data=WorkstationCallback(
                     action="view",
                     workstation_id=item.id,
+                    page=page,
                 ).pack(),
             )
         ]
         for item in workstations
     ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=WorkstationCallback(action="list", page=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=WorkstationCallback(action="list", page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=WorkstationCallback(action="list", page=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -131,7 +160,9 @@ def workstation_list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def workstation_details_keyboard(item: WorkstationView) -> InlineKeyboardMarkup:
+def workstation_details_keyboard(item: WorkstationView, *, page: int = 1) -> InlineKeyboardMarkup:
+    services = tuple(service for service in item.services if service.service_active)
+    paged = paginate_sequence(services, page=page, page_size=8)
     rows = [
         [
             InlineKeyboardButton(
@@ -140,12 +171,41 @@ def workstation_details_keyboard(item: WorkstationView) -> InlineKeyboardMarkup:
                     action="service_off" if service.enabled else "service_on",
                     workstation_id=item.id,
                     service_id=service.service_id,
+                    page=paged.page,
                 ).pack(),
             )
         ]
-        for service in item.services
-        if service.service_active
+        for service in paged.items
     ]
+    if paged.pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if paged.page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=WorkstationCallback(
+                        action="view", workstation_id=item.id, page=paged.page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{paged.page}/{paged.pages}",
+                callback_data=WorkstationCallback(
+                    action="view", workstation_id=item.id, page=paged.page
+                ).pack(),
+            )
+        )
+        if paged.page < paged.pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=WorkstationCallback(
+                        action="view", workstation_id=item.id, page=paged.page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [

@@ -19,9 +19,12 @@ class AppointmentCallback(CallbackData, prefix="appt"):
     action: str
     appointment_id: int
     object_id: int
+    page: int = 1
 
 
-def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyboardMarkup:
+def appointment_list_keyboard(
+    appointments: list[AppointmentView], *, page: int = 1, pages: int = 1
+) -> InlineKeyboardMarkup:
     rows = []
     for appointment in appointments:
         local = appointment.start_at.astimezone(ZoneInfo(appointment.timezone))
@@ -33,10 +36,40 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
                         action="view",
                         appointment_id=appointment.id,
                         object_id=0,
+                        page=page,
                     ).pack(),
                 )
             ]
         )
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=AppointmentCallback(
+                        action="list", appointment_id=0, object_id=0, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=AppointmentCallback(
+                    action="list", appointment_id=0, object_id=0, page=page
+                ).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=AppointmentCallback(
+                        action="list", appointment_id=0, object_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(
@@ -45,6 +78,7 @@ def appointment_list_keyboard(appointments: list[AppointmentView]) -> InlineKeyb
                     action="list",
                     appointment_id=0,
                     object_id=0,
+                    page=page,
                 ).pack(),
             )
         ]

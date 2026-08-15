@@ -62,6 +62,35 @@ def test_confirmation_uses_local_time_and_escapes_client_values() -> None:
     assert format_duration_range(120, 180) == "примерно 2 ч.–3 ч."
 
 
+def test_zero_price_is_rendered_as_negotiated_in_booking_confirmation() -> None:
+    service = ServiceView(
+        id=3,
+        name="Сложный дизайн",
+        description=None,
+        price=Decimal("0.00"),
+        duration_min_minutes=60,
+        duration_max_minutes=90,
+        is_active=True,
+    )
+    window = BookingWindowView(
+        id=7,
+        start_at=datetime(2026, 7, 23, 7, tzinfo=UTC),
+        end_at=datetime(2026, 7, 23, 9, tzinfo=UTC),
+        timezone="Europe/Moscow",
+    )
+    info = BusinessInfo(
+        business_name="Example Studio",
+        address="Адрес",
+        map_url="https://example.com/map",
+        master_telegram_url="https://t.me/example_studio",
+    )
+
+    rendered = render_booking_confirmation(service, window, info, client_name="Анна")
+
+    assert "Основная услуга: договорная" in rendered
+    assert "Итоговая стоимость: договорная" in rendered
+
+
 def test_booking_callbacks_fit_telegram_limit() -> None:
     callback = BookingCallback(
         action="window",

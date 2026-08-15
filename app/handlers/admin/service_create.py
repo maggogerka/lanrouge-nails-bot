@@ -57,7 +57,11 @@ async def capture_service_description(message: Message, state: FSMContext) -> No
         return
     await state.update_data(description=description)
     await state.set_state(AdminServiceCreate.price)
-    await message.answer("Введите стоимость в рублях, например 2500 или 2500.50:")
+    await message.answer(
+        "Введите стоимость в рублях, например 2500 или 2500.50.\n"
+        "Если точная стоимость обсуждается с мастером лично, отправьте <code>0</code> — "
+        "клиент увидит «Цена договорная»."
+    )
 
 
 @router.message(AdminServiceCreate.price)

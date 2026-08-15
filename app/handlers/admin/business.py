@@ -42,6 +42,8 @@ from app.services.business_service import BusinessAdministrationService
 from app.services.subscription_service import SubscriptionService
 from app.services.workstation_service import WorkstationService
 from app.states.business import BusinessProfileStates, BusinessWorkstationStates
+from app.utils.pagination import paginate_sequence
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.business")
 
@@ -172,10 +174,16 @@ async def show_timezone_settings(callback: CallbackQuery) -> None:
 @router.callback_query(WorkstationCallback.filter(F.action == "list"))
 async def show_workstations(
     callback: CallbackQuery,
+    callback_data: BusinessProfileCallback | WorkstationCallback,
     workstation_service: WorkstationService,
     staff_context: StaffContext,
 ) -> None:
     items = await workstation_service.list_all(staff_context)
+    paged = paginate_sequence(
+        items,
+        page=callback_data.page if isinstance(callback_data, WorkstationCallback) else 1,
+        page_size=8,
+    )
     text = (
         "<b>Рабочие места</b>\n\n"
         "Рабочее место — физический стол или кабинет. Одновременно может быть "
@@ -185,9 +193,10 @@ async def show_workstations(
     if not items:
         text += "\n\nРабочих мест пока нет. Создайте первое, затем назначьте ему услуги."
     if isinstance(callback.message, Message):
-        await callback.message.answer(
+        await edit_text_safely(
+            callback.message,
             text,
-            reply_markup=workstation_list_keyboard(items),
+            reply_markup=workstation_list_keyboard(paged.items, page=paged.page, pages=paged.pages),
         )
     await callback.answer()
 
@@ -245,7 +254,7 @@ async def show_workstation(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _render_workstation(item),
-            reply_markup=workstation_details_keyboard(item),
+            reply_markup=workstation_details_keyboard(item, page=callback_data.page),
         )
     await callback.answer()
 
@@ -272,7 +281,7 @@ async def toggle_workstation_service(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _render_workstation(item),
-            reply_markup=workstation_details_keyboard(item),
+            reply_markup=workstation_details_keyboard(item, page=callback_data.page),
         )
     await callback.answer("Настройка услуг сохранена.")
 
@@ -298,7 +307,7 @@ async def toggle_workstation_status(
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             _render_workstation(item),
-            reply_markup=workstation_details_keyboard(item),
+            reply_markup=workstation_details_keyboard(item, page=callback_data.page),
         )
     await callback.answer("Статус рабочего места обновлён.")
 

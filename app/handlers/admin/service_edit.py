@@ -87,7 +87,7 @@ async def begin_edit_price(
         state,
         callback_data.service_id,
         AdminServiceEdit.price,
-        "Введите новую стоимость:",
+        "Введите новую стоимость. Отправьте 0, чтобы показывать клиентам «Цена договорная»:",
     )
 
 

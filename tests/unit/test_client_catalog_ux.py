@@ -8,6 +8,7 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
+from app.handlers.client.booking_browse import show_service_cards
 from app.handlers.client.menu import book_with_master, refresh_stale_optional_menu
 from app.keyboards.client.main import CLIENT_REVIEWS_TEXT
 from app.keyboards.client.masters import PublicMasterCallback, public_master_keyboard
@@ -34,6 +35,24 @@ def test_master_card_has_direct_booking_action() -> None:
 
     assert "Записаться" in button.text
     assert "9" in str(button.callback_data)
+
+
+@pytest.mark.asyncio
+async def test_service_catalog_uses_one_paginated_message_instead_of_message_per_service() -> None:
+    message = MagicMock(spec=Message)
+    message.answer = AsyncMock()
+    message.photo = None
+    state = MagicMock(spec=FSMContext)
+    state.set_state = AsyncMock()
+    state.update_data = AsyncMock()
+    services = [service_view().model_copy(update={"id": index}) for index in range(1, 21)]
+
+    await show_service_cards(message, state, services)
+
+    message.answer.assert_awaited_once()
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    callbacks = [button.callback_data or "" for row in markup.inline_keyboard for button in row]
+    assert any("service_page" in value for value in callbacks)
 
 
 @pytest.mark.asyncio

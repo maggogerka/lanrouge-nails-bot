@@ -20,6 +20,8 @@
 - service add-ons, duration ranges, media and immutable appointment snapshots;
 - rolling future-booking quota with audited permissioned override;
 - one-tap skip controls and safe Telegram profile links in CRM cards.
+- negotiated-price services via an explicit zero price, with automatic fixed-prepayment reset;
+- bounded pagination for growing administrative and client lists.
 
 ### Changed
 
@@ -59,6 +61,10 @@
 - manual prepayment lifecycle is transactional and concurrency safe;
 - staff roles, bootstrap ownership and solo/salon transitions are enforced in PostgreSQL;
 - runtime copy and test fixtures are vertical-neutral and white-label.
+- the client service catalog and master directory use one navigable card instead of sending every
+  item as a separate chat message;
+- appointments, windows, services, add-ons, broadcasts, reviews, waitlists, privacy requests and
+  active/payment-history screens retain their actions while navigating between bounded pages.
 
 ### Security
 

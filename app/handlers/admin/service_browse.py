@@ -17,9 +17,11 @@ from app.keyboards.admin.services import (
 )
 from app.schemas.service import AdminActor
 from app.services.service_catalog import ServiceCatalog
+from app.utils.pagination import paginate_sequence
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.service_browse")
+_SERVICES_PAGE_SIZE = 8
 
 
 async def show_list_message(
@@ -28,10 +30,17 @@ async def show_list_message(
     actor: AdminActor,
 ) -> None:
     services = await catalog.list_services(actor, include_archived=False)
-    text = "Активных услуг пока нет." if not services else "🛠 Активные услуги:"
+    paged = paginate_sequence(services, page=1, page_size=_SERVICES_PAGE_SIZE)
+    text = (
+        "Активных услуг пока нет."
+        if not services
+        else (f"🛠 Активные услуги · страница {paged.page} из {paged.pages} · всего {paged.total}:")
+    )
     await message.answer(
         text,
-        reply_markup=service_list_keyboard(services, include_archived=False),
+        reply_markup=service_list_keyboard(
+            list(paged.items), include_archived=False, page=paged.page, pages=paged.pages
+        ),
     )
 
 
@@ -41,21 +50,27 @@ async def show_list_callback(
     actor: AdminActor,
     *,
     include_archived: bool = False,
+    page: int = 1,
     answer_text: str | None = None,
 ) -> None:
     services = await catalog.list_services(actor, include_archived=include_archived)
+    paged = paginate_sequence(services, page=page, page_size=_SERVICES_PAGE_SIZE)
     if include_archived:
         text = "Услуг пока нет." if not services else "🛠 Все услуги: ✅ активна, ⏸ архив."
     else:
         text = "Активных услуг пока нет." if not services else "🛠 Активные услуги:"
+    if services:
+        text += f"\nСтраница {paged.page} из {paged.pages} · всего {paged.total}."
     changed = True
     if isinstance(callback.message, Message):
         changed = await edit_text_safely(
             callback.message,
             text,
             reply_markup=service_list_keyboard(
-                services,
+                list(paged.items),
                 include_archived=include_archived,
+                page=paged.page,
+                pages=paged.pages,
             ),
         )
     await callback.answer(answer_text or (None if changed else "Список уже актуален."))
@@ -90,18 +105,21 @@ async def show_service_list(message: Message, service_catalog: ServiceCatalog) -
 @router.callback_query(ServiceCallback.filter(F.action == "list"))
 async def show_service_list_callback(
     callback: CallbackQuery,
+    callback_data: ServiceCallback,
     service_catalog: ServiceCatalog,
 ) -> None:
     await show_list_callback(
         callback,
         service_catalog,
         actor_from_telegram(callback.from_user),
+        page=callback_data.page,
     )
 
 
 @router.callback_query(ServiceCallback.filter(F.action == "list_archived"))
 async def show_archived_service_list_callback(
     callback: CallbackQuery,
+    callback_data: ServiceCallback,
     service_catalog: ServiceCatalog,
 ) -> None:
     await show_list_callback(
@@ -109,6 +127,7 @@ async def show_archived_service_list_callback(
         service_catalog,
         actor_from_telegram(callback.from_user),
         include_archived=True,
+        page=callback_data.page,
     )
 
 

@@ -8,6 +8,35 @@ class ReviewCallback(CallbackData, prefix="rev"):
     action: str
     appointment_id: int = 0
     value: int = 0
+    page: int = 1
+
+
+def public_reviews_keyboard(*, page: int, pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️ Предыдущий",
+                    callback_data=ReviewCallback(action="public_page", page=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=ReviewCallback(action="public_page", page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="Следующий ▶️",
+                    callback_data=ReviewCallback(action="public_page", page=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def review_request_keyboard(appointment_id: int) -> InlineKeyboardMarkup:

@@ -11,6 +11,7 @@ class BroadcastCallback(CallbackData, prefix="bc"):
     action: str
     broadcast_id: int = 0
     value: str = ""
+    page: int = 1
 
 
 def broadcasts_menu_keyboard() -> InlineKeyboardMarkup:
@@ -164,18 +165,51 @@ def preview_keyboard(broadcast_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def broadcast_list_keyboard(items: list[BroadcastView]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"#{item.id} · {item.title} · {item.status.value}",
-                    callback_data=BroadcastCallback(action="result", broadcast_id=item.id).pack(),
-                )
-            ]
-            for item in items
+def broadcast_list_keyboard(
+    items: list[BroadcastView],
+    *,
+    page: int = 1,
+    pages: int = 1,
+    status: str = "",
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"#{item.id} · {item.title} · {item.status.value}",
+                callback_data=BroadcastCallback(action="result", broadcast_id=item.id).pack(),
+            )
         ]
-        + [
+        for item in items
+    ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=BroadcastCallback(
+                        action="list", value=status, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=BroadcastCallback(action="list", value=status, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=BroadcastCallback(
+                        action="list", value=status, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="← Меню рассылок", callback_data=BroadcastCallback(action="menu").pack()
@@ -183,6 +217,7 @@ def broadcast_list_keyboard(items: list[BroadcastView]) -> InlineKeyboardMarkup:
             ]
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def result_keyboard(broadcast: BroadcastView) -> InlineKeyboardMarkup:

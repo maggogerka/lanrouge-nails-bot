@@ -9,34 +9,70 @@ from app.schemas.review import ReviewView
 class AdminReviewCallback(CallbackData, prefix="arev"):
     action: str
     review_id: int = 0
+    page: int = 1
 
 
-def admin_reviews_keyboard(reviews: list[ReviewView]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"#{review.id} · {review.rating}★ · {review.client_name}",
-                    callback_data=AdminReviewCallback(action="view", review_id=review.id).pack(),
-                )
-            ]
-            for review in reviews
+def admin_reviews_keyboard(
+    reviews: list[ReviewView],
+    *,
+    page: int = 1,
+    pages: int = 1,
+    deleted_only: bool = False,
+) -> InlineKeyboardMarkup:
+    list_action = "deleted" if deleted_only else "list"
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"#{review.id} · {review.rating}★ · {review.client_name}",
+                callback_data=AdminReviewCallback(
+                    action="view", review_id=review.id, page=page
+                ).pack(),
+            )
         ]
-        + [
+        for review in reviews
+    ]
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=AdminReviewCallback(action=list_action, page=page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=AdminReviewCallback(action=list_action, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=AdminReviewCallback(action=list_action, page=page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
-                    text="🗑 Удалённые отзывы",
-                    callback_data=AdminReviewCallback(action="deleted").pack(),
+                    text="↩️ К активным" if deleted_only else "🗑 Удалённые отзывы",
+                    callback_data=AdminReviewCallback(
+                        action="list" if deleted_only else "deleted"
+                    ).pack(),
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="Обновить",
-                    callback_data=AdminReviewCallback(action="list").pack(),
+                    callback_data=AdminReviewCallback(action=list_action, page=page).pack(),
                 )
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_review_actions(review: ReviewView) -> InlineKeyboardMarkup:

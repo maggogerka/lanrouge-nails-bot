@@ -27,12 +27,14 @@ from app.keyboards.admin.payments import (
 )
 from app.keyboards.admin.services import cancel_keyboard
 from app.schemas.authorization import StaffContext, StaffPermission
+from app.schemas.pagination import PageRequest
 from app.schemas.payment import PaymentAdminSection, PaymentAdminView
 from app.services.payment_admin_service import PaymentAdministrationService
 from app.states.payments import PaymentSettingsForm
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.payments")
+_PAYMENTS_PAGE_SIZE = 8
 
 
 def _render(payment: PaymentAdminView) -> str:
@@ -93,8 +95,12 @@ async def _show(
     service: PaymentAdministrationService,
     actor: StaffContext,
 ) -> None:
-    active = await service.list_panel(actor, PaymentAdminSection.ACTIVE, limit=100)
-    history = await service.list_panel(actor, PaymentAdminSection.HISTORY, limit=100)
+    active = await service.list_panel_page(
+        actor, PaymentAdminSection.ACTIVE, PageRequest(page_size=1)
+    )
+    history = await service.list_panel_page(
+        actor, PaymentAdminSection.HISTORY, PageRequest(page_size=1)
+    )
     settings = await service.get_settings(actor)
     await message.answer(
         f"<b>Предоплаты</b>\n\nРежим: {settings.mode.value}\n"
@@ -103,8 +109,8 @@ async def _show(
         f"{'настроена' if settings.manual_payment_instructions else 'не настроена'}\n\n"
         "Действующие предоплаты и завершённые операции находятся в отдельных списках.",
         reply_markup=payment_admin_home_keyboard(
-            active_count=len(active),
-            history_count=len(history),
+            active_count=active.total,
+            history_count=history.total,
             can_configure=_can_configure(actor),
         ),
     )
@@ -157,7 +163,11 @@ async def show_payment_section(
     await state.clear()
     section = PaymentAdminSection(callback_data.action)
     try:
-        payments = await payment_admin_service.list_panel(staff_context, section, limit=100)
+        payments = await payment_admin_service.list_panel_page(
+            staff_context,
+            section,
+            PageRequest(page=callback_data.page, page_size=_PAYMENTS_PAGE_SIZE),
+        )
     except (DomainError, PaymentStateError) as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -167,14 +177,18 @@ async def show_payment_section(
     text = f"<b>{title}</b>\n\n"
     text += (
         "Выберите предоплату по дате записи и клиенту."
-        if payments
+        if payments.items
         else "В этом разделе пока нет операций."
     )
+    if payments.items:
+        text += f"\nСтраница {payments.page} из {payments.pages} · всего {payments.total}."
     if isinstance(callback.message, Message):
         await edit_text_safely(
             callback.message,
             text,
-            reply_markup=payment_admin_list_keyboard(payments, section),
+            reply_markup=payment_admin_list_keyboard(
+                tuple(payments.items), section, page=payments.page, pages=payments.pages
+            ),
         )
     await callback.answer()
 
@@ -246,6 +260,7 @@ async def view_payment(
                 can_manage=staff_context.has_permission(StaffPermission.APPROVE_PREPAYMENTS),
                 can_reject=staff_context.has_permission(StaffPermission.REJECT_PREPAYMENTS),
                 can_refund=staff_context.has_permission(StaffPermission.REFUND_PAYMENTS),
+                page=callback_data.page,
             ),
         )
         receipt = await payment_admin_service.get_manual_receipt(

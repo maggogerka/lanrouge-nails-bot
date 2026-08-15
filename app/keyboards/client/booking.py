@@ -17,6 +17,8 @@ from app.keyboards.client.payments import manual_payment_report_button
 from app.schemas.booking import BookableMasterView, BookingWindowView
 from app.schemas.service import ServiceAddonView, ServiceView
 from app.services.date_picker_service import DatePickerPage
+from app.utils.pagination import paginate_sequence
+from app.utils.pricing import format_rub_price
 
 BOOKING_BACK_TEXT = "⬅️ Назад"
 BOOKING_CANCEL_TEXT = "❌ Отменить оформление"
@@ -27,6 +29,7 @@ class BookingCallback(CallbackData, prefix="book"):
 
     action: str
     object_id: int
+    page: int = 1
 
 
 class BookingReferenceCallback(CallbackData, prefix="bref"):
@@ -40,6 +43,7 @@ class BookingAddonCallback(CallbackData, prefix="badd"):
 
     action: str
     addon_id: int = 0
+    page: int = 1
 
 
 class BookingDateCallback(CallbackData, prefix="bcal"):
@@ -51,7 +55,7 @@ def services_keyboard(services: list[ServiceView]) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{service.name} — {service.price:.2f} ₽",
+                text=f"{service.name} — {format_rub_price(service.price)}",
                 callback_data=BookingCallback(action="service", object_id=service.id).pack(),
             )
         ]
@@ -72,36 +76,108 @@ def service_card_keyboard(
     service_id: int,
     *,
     action_text: str = "✨ Записаться на эту услугу",
+    page: int = 1,
+    pages: int = 1,
+    has_photo: bool = False,
 ) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=action_text,
+                callback_data=BookingCallback(
+                    action="service", object_id=service_id, page=page
+                ).pack(),
+            )
+        ]
+    ]
+    if has_photo:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=action_text,
-                    callback_data=BookingCallback(action="service", object_id=service_id).pack(),
+                    text="🖼 Посмотреть фотографию",
+                    callback_data=BookingCallback(
+                        action="service_photo", object_id=service_id, page=page
+                    ).pack(),
                 )
-            ],
-            [
+            ]
+        )
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
                 InlineKeyboardButton(
-                    text=BOOKING_CANCEL_TEXT,
-                    callback_data=BookingCallback(action="cancel", object_id=0).pack(),
+                    text="◀️",
+                    callback_data=BookingCallback(
+                        action="service_page", object_id=0, page=page - 1
+                    ).pack(),
                 )
-            ],
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=BookingCallback(action="service_page", object_id=0, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=BookingCallback(
+                        action="service_page", object_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=BOOKING_CANCEL_TEXT,
+                callback_data=BookingCallback(action="cancel", object_id=0).pack(),
+            )
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def addons_keyboard(addons: list[ServiceAddonView], selected_ids: set[int]) -> InlineKeyboardMarkup:
+def addons_keyboard(
+    addons: list[ServiceAddonView], selected_ids: set[int], *, page: int = 1
+) -> InlineKeyboardMarkup:
+    paged = paginate_sequence(addons, page=page, page_size=7)
     rows = [
         [
             InlineKeyboardButton(
                 text=("✅ " if addon.id in selected_ids else "➕ ")
                 + f"{addon.name} — {addon.price:.2f} ₽",
-                callback_data=BookingAddonCallback(action="toggle", addon_id=addon.id).pack(),
+                callback_data=BookingAddonCallback(
+                    action="toggle", addon_id=addon.id, page=paged.page
+                ).pack(),
             )
         ]
-        for addon in addons
+        for addon in paged.items
     ]
+    if paged.pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if paged.page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=BookingAddonCallback(action="page", page=paged.page - 1).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{paged.page}/{paged.pages}",
+                callback_data=BookingAddonCallback(action="page", page=paged.page).pack(),
+            )
+        )
+        if paged.page < paged.pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=BookingAddonCallback(action="page", page=paged.page + 1).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.extend(
         [
             [
@@ -128,8 +204,9 @@ def addons_keyboard(addons: list[ServiceAddonView], selected_ids: set[int]) -> I
 
 
 def masters_keyboard(
-    masters: list[BookableMasterView], *, back_action: str = "back_services"
+    masters: list[BookableMasterView], *, back_action: str = "back_services", page: int = 1
 ) -> InlineKeyboardMarkup:
+    paged = paginate_sequence(masters, page=page, page_size=7)
     rows = [
         [
             InlineKeyboardButton(
@@ -147,9 +224,38 @@ def masters_keyboard(
                     ).pack(),
                 )
             ]
-            for master in masters
+            for master in paged.items
         ],
     ]
+    if paged.pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if paged.page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=BookingCallback(
+                        action="master_page", object_id=0, page=paged.page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{paged.page}/{paged.pages}",
+                callback_data=BookingCallback(
+                    action="master_page", object_id=0, page=paged.page
+                ).pack(),
+            )
+        )
+        if paged.page < paged.pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=BookingCallback(
+                        action="master_page", object_id=0, page=paged.page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.extend(_inline_navigation(back_action))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -212,9 +318,12 @@ def booking_date_calendar_keyboard(
 def windows_keyboard(
     windows: list[BookingWindowView],
     local_date: date,
+    *,
+    page: int = 1,
 ) -> InlineKeyboardMarkup:
+    paged = paginate_sequence(windows, page=page, page_size=8)
     rows = []
-    for window in windows:
+    for window in paged.items:
         local = window.start_at.astimezone(ZoneInfo(window.timezone))
         master_suffix = f" · {window.master_name}" if window.master_name else ""
         rows.append(
@@ -224,10 +333,46 @@ def windows_keyboard(
                     callback_data=BookingCallback(
                         action="window",
                         object_id=window.id,
+                        page=paged.page,
                     ).pack(),
                 )
             ]
         )
+    if paged.pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if paged.page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=BookingCallback(
+                        action="window_page",
+                        object_id=local_date.toordinal(),
+                        page=paged.page - 1,
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{paged.page}/{paged.pages}",
+                callback_data=BookingCallback(
+                    action="window_page",
+                    object_id=local_date.toordinal(),
+                    page=paged.page,
+                ).pack(),
+            )
+        )
+        if paged.page < paged.pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=BookingCallback(
+                        action="window_page",
+                        object_id=local_date.toordinal(),
+                        page=paged.page + 1,
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.extend(_inline_navigation("back_dates", local_date.toordinal()))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

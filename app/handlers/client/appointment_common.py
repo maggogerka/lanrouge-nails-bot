@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from app.handlers.client.booking_common import format_duration_range
 from app.schemas.appointment import AppointmentView
+from app.utils.pricing import format_rub_price
 
 _STATUS_LABELS = {
     "pending_payment": "ожидает оплаты",
@@ -38,7 +39,7 @@ def render_appointment(appointment: AppointmentView) -> str:
         f"Время: {local:%H:%M}\n"
         "Продолжительность: "
         f"{duration}\n"
-        f"Стоимость: {appointment.price:.2f} ₽\n"
+        f"Стоимость: {format_rub_price(appointment.price)}\n"
         f"Адрес: {escape(appointment.address)}\n"
         f"Статус: {status}"
     )

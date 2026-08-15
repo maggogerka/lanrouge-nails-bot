@@ -143,10 +143,14 @@ class ServiceCatalog:
                     else service.duration_max_minutes
                 ),
                 prepayment_amount=(
-                    patch.prepayment_amount
-                    if "prepayment_amount" in patch.model_fields_set
-                    and patch.prepayment_amount is not None
-                    else service.prepayment_amount
+                    Decimal("0.00")
+                    if "price" in patch.model_fields_set and patch.price == 0
+                    else (
+                        patch.prepayment_amount
+                        if "prepayment_amount" in patch.model_fields_set
+                        and patch.prepayment_amount is not None
+                        else service.prepayment_amount
+                    )
                 ),
                 telegram_photo_file_id=(
                     patch.telegram_photo_file_id

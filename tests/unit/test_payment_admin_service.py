@@ -25,6 +25,7 @@ from app.keyboards.admin.payments import (
     payments_keyboard,
 )
 from app.schemas.authorization import StaffContext, StaffPermission
+from app.schemas.pagination import PageRequest
 from app.schemas.payment import PaymentAdminSection
 from app.services.payment_admin_service import PaymentAdministrationService
 
@@ -153,6 +154,38 @@ async def test_active_payment_panel_contains_appointment_and_client_context() ->
         PaymentStatus.PENDING
         in unit_of_work.payments.list_recent_with_context.await_args.kwargs["statuses"]
     )
+
+
+@pytest.mark.asyncio
+async def test_payment_panel_page_uses_database_count_and_offset() -> None:
+    authorization = MagicMock()
+    authorization.authorize = AsyncMock(return_value=actor())
+    unit_of_work = MagicMock()
+    unit_of_work.business_id = 1
+    unit_of_work.__aenter__ = AsyncMock(return_value=unit_of_work)
+    unit_of_work.__aexit__ = AsyncMock(return_value=None)
+    appointment, client = payment_context()
+    unit_of_work.settings.get = AsyncMock(return_value=SimpleNamespace(timezone="Europe/Moscow"))
+    unit_of_work.payments.count_with_context = AsyncMock(return_value=17)
+    unit_of_work.payments.list_recent_with_context = AsyncMock(
+        return_value=[(payment(), appointment, client)]
+    )
+    service = PaymentAdministrationService(
+        lambda: unit_of_work,  # type: ignore[arg-type]
+        authorization,
+        MagicMock(),
+    )
+
+    result = await service.list_panel_page(
+        actor(), PaymentAdminSection.ACTIVE, PageRequest(page=2, page_size=8)
+    )
+
+    assert result.total == 17
+    assert result.page == 2
+    assert result.pages == 3
+    assert result.items[0].id == 10
+    assert unit_of_work.payments.list_recent_with_context.await_args.kwargs["limit"] == 8
+    assert unit_of_work.payments.list_recent_with_context.await_args.kwargs["offset"] == 8
 
 
 @pytest.mark.asyncio

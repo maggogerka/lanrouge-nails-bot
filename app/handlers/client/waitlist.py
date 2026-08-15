@@ -20,11 +20,13 @@ from app.keyboards.client.waitlist import (
     waitlist_services_keyboard,
     waitlist_time_keyboard,
 )
+from app.schemas.pagination import PageRequest
 from app.schemas.waitlist import WaitlistCreate
 from app.services.booking_service import BookingService
 from app.services.waitlist_service import WaitlistService
 from app.states.booking import BookingFlow
 from app.states.waitlist import WaitlistFlow
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.waitlist")
 
@@ -35,20 +37,47 @@ def _parse_date(value: str) -> date:
     )
 
 
-@router.message(F.text == CLIENT_WAITLIST_TEXT)
-async def show_waitlist(message: Message, waitlist_service: WaitlistService) -> None:
-    if message.from_user is None:
+async def _show_waitlist(
+    target: Message | CallbackQuery,
+    waitlist_service: WaitlistService,
+    *,
+    page_number: int = 1,
+) -> None:
+    if target.from_user is None:
         return
-    page = await waitlist_service.list_my(actor_from_telegram(message.from_user))
+    page = await waitlist_service.list_my(
+        actor_from_telegram(target.from_user),
+        PageRequest(page=page_number, page_size=8),
+    )
     lines = [
         f"#{item.id} · {item.service_name} · "
         f"{item.date_from:%d.%m}–{item.date_to:%d.%m} · {item.status.value}"
         for item in page.items
     ]
-    await message.answer(
-        "Ваш лист ожидания:\n" + ("\n".join(lines) if lines else "Пока нет запросов."),
-        reply_markup=waitlist_menu_keyboard(page.items),
+    text = f"Ваш лист ожидания · страница {page.page} из {page.pages}:\n" + (
+        "\n".join(lines) if lines else "Пока нет запросов."
     )
+    keyboard = waitlist_menu_keyboard(page.items, page=page.page, pages=page.pages)
+    if isinstance(target, CallbackQuery):
+        if isinstance(target.message, Message):
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
+
+
+@router.message(F.text == CLIENT_WAITLIST_TEXT)
+async def show_waitlist(message: Message, waitlist_service: WaitlistService) -> None:
+    await _show_waitlist(message, waitlist_service)
+
+
+@router.callback_query(WaitlistCallback.filter(F.action == "list"))
+async def show_waitlist_page(
+    callback: CallbackQuery,
+    callback_data: WaitlistCallback,
+    waitlist_service: WaitlistService,
+) -> None:
+    await _show_waitlist(callback, waitlist_service, page_number=callback_data.page)
+    await callback.answer()
 
 
 @router.callback_query(WaitlistCallback.filter(F.action == "add"))
@@ -75,6 +104,23 @@ async def choose_waitlist_service(
     await state.set_state(WaitlistFlow.date_from)
     if isinstance(callback.message, Message):
         await callback.message.answer("Введите первую подходящую дату в формате ДД.ММ.ГГГГ:")
+    await callback.answer()
+
+
+@router.callback_query(WaitlistCallback.filter(F.action == "service_page"))
+async def browse_waitlist_services(
+    callback: CallbackQuery,
+    callback_data: WaitlistCallback,
+    booking_service: BookingService,
+) -> None:
+    services = await booking_service.list_active_services(actor_from_telegram(callback.from_user))
+    if not services:
+        await callback.answer("Услуги больше не доступны.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(
+            reply_markup=waitlist_services_keyboard(services, page=callback_data.page)
+        )
     await callback.answer()
 
 

@@ -23,7 +23,6 @@ from app.keyboards.client.booking import (
     booking_navigation_keyboard,
     masters_keyboard,
     service_card_keyboard,
-    services_keyboard,
     windows_keyboard,
 )
 from app.keyboards.client.main import CLIENT_BOOK_TEXT
@@ -33,6 +32,9 @@ from app.services.booking_service import BookingService
 from app.services.date_picker_service import DatePickerPage, DatePickerService
 from app.services.presentation_service import PresentationService
 from app.states.booking import BookingFlow
+from app.utils.pagination import paginate_sequence
+from app.utils.pricing import format_rub_price
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="client.booking_browse")
 date_picker_service = DatePickerService()
@@ -78,33 +80,50 @@ async def show_service_cards(
     *,
     preferred_staff_member_id: int | None = None,
 ) -> None:
-    """Render reusable service cards and prepare the shared booking FSM."""
+    """Render one reusable, bounded service card and prepare the booking FSM."""
 
     await state.set_state(BookingFlow.service)
     await state.update_data(preferred_staff_member_id=preferred_staff_member_id)
-    await message.answer("Выберите услугу:")
-    for service in services:
-        description = escape(service.description or "Описание не добавлено.")
-        duration = (
-            f"{service.duration_min_minutes} мин."
-            if service.duration_min_minutes == service.duration_max_minutes
-            else f"{service.duration_min_minutes}–{service.duration_max_minutes} мин."
-        )
-        text = (
-            f"<b>{escape(service.name)}</b>\n"
-            f"{description}\n"
-            f"Стоимость: {service.price:.2f} ₽\n"
-            f"Длительность: {duration}"
-        )
-        keyboard = service_card_keyboard(service.id)
-        if service.telegram_photo_file_id:
-            await message.answer_photo(
-                service.telegram_photo_file_id,
-                caption=text[:1024],
-                reply_markup=keyboard,
-            )
-        else:
-            await message.answer(text[:4096], reply_markup=keyboard)
+    await _render_service_card(message, services, page=1, edit=False)
+
+
+def _service_card_text(service: ServiceView, *, page: int, pages: int) -> str:
+    description = escape(service.description or "Описание не добавлено.")
+    duration = (
+        f"{service.duration_min_minutes} мин."
+        if service.duration_min_minutes == service.duration_max_minutes
+        else f"{service.duration_min_minutes}–{service.duration_max_minutes} мин."
+    )
+    photo_hint = "\n🖼 Фотография доступна по кнопке ниже." if service.telegram_photo_file_id else ""
+    return (
+        f"<b>Услуга {page} из {pages}</b>\n\n"
+        f"<b>{escape(service.name)}</b>\n"
+        f"{description}\n"
+        f"Цена: {format_rub_price(service.price)}\n"
+        f"Длительность: {duration}{photo_hint}"
+    )
+
+
+async def _render_service_card(
+    message: Message,
+    services: list[ServiceView],
+    *,
+    page: int,
+    edit: bool,
+) -> None:
+    current = paginate_sequence(services, page=page, page_size=1)
+    service = current.items[0]
+    text = _service_card_text(service, page=current.page, pages=current.pages)
+    keyboard = service_card_keyboard(
+        service.id,
+        page=current.page,
+        pages=current.pages,
+        has_photo=bool(service.telegram_photo_file_id),
+    )
+    if edit and not message.photo:
+        await edit_text_safely(message, text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.text == CLIENT_BOOK_TEXT)
@@ -123,12 +142,63 @@ async def return_to_services(
     booking_service: BookingService,
 ) -> None:
     services = await booking_service.list_active_services(actor_from_telegram(callback.from_user))
-    await state.clear()
+    data = await state.get_data()
+    page = data.get("service_page", 1)
+    preferred = data.get("preferred_staff_member_id")
     await state.set_state(BookingFlow.service)
+    await state.set_data(
+        {
+            "service_page": page if isinstance(page, int) else 1,
+            "preferred_staff_member_id": preferred if isinstance(preferred, int) else None,
+        }
+    )
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "Выберите услугу:",
-            reply_markup=services_keyboard(services),
+        await _render_service_card(
+            callback.message,
+            services,
+            page=page if isinstance(page, int) else 1,
+            edit=True,
+        )
+    await callback.answer()
+
+
+@router.callback_query(BookingFlow.service, BookingCallback.filter(F.action == "service_page"))
+async def browse_service_page(
+    callback: CallbackQuery,
+    callback_data: BookingCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    services = await booking_service.list_active_services(actor_from_telegram(callback.from_user))
+    if not services:
+        await callback.answer("Услуги для записи больше не доступны.", show_alert=True)
+        return
+    await state.update_data(service_page=callback_data.page)
+    if isinstance(callback.message, Message):
+        await _render_service_card(
+            callback.message,
+            services,
+            page=callback_data.page,
+            edit=True,
+        )
+    await callback.answer()
+
+
+@router.callback_query(BookingFlow.service, BookingCallback.filter(F.action == "service_photo"))
+async def show_service_photo(
+    callback: CallbackQuery,
+    callback_data: BookingCallback,
+    booking_service: BookingService,
+) -> None:
+    services = await booking_service.list_active_services(actor_from_telegram(callback.from_user))
+    service = next((item for item in services if item.id == callback_data.object_id), None)
+    if service is None or not service.telegram_photo_file_id:
+        await callback.answer("Фотография больше не доступна.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.answer_photo(
+            service.telegram_photo_file_id,
+            caption=f"<b>{escape(service.name)}</b>",
         )
     await callback.answer()
 
@@ -153,6 +223,7 @@ async def select_service(
         return
     await state.update_data(
         service_id=callback_data.object_id,
+        service_page=callback_data.page,
         addon_ids=[],
         addons_shown=bool(addons),
     )
@@ -207,8 +278,17 @@ async def select_addons(
             selected.add(callback_data.addon_id)
         await state.update_data(addon_ids=[addon.id for addon in addons if addon.id in selected])
         if isinstance(callback.message, Message):
-            await callback.message.edit_reply_markup(reply_markup=addons_keyboard(addons, selected))
+            await callback.message.edit_reply_markup(
+                reply_markup=addons_keyboard(addons, selected, page=callback_data.page)
+            )
         await callback.answer("Выбор обновлён.")
+        return
+    if callback_data.action == "page":
+        if isinstance(callback.message, Message):
+            await callback.message.edit_reply_markup(
+                reply_markup=addons_keyboard(addons, selected, page=callback_data.page)
+            )
+        await callback.answer()
         return
     if callback_data.action != "continue":
         await callback.answer("Эта кнопка устарела.", show_alert=True)
@@ -360,6 +440,36 @@ async def select_master(
     )
     if should_answer:
         await callback.answer()
+
+
+@router.callback_query(
+    BookingFlow.master,
+    BookingCallback.filter(F.action == "master_page"),
+)
+async def browse_master_page(
+    callback: CallbackQuery,
+    callback_data: BookingCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    data = await state.get_data()
+    try:
+        service_id = int(str(data["service_id"]))
+        options = await booking_service.list_bookable_masters(
+            actor_from_telegram(callback.from_user), service_id
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(
+            reply_markup=masters_keyboard(
+                options.masters,
+                back_action=("back_addons" if data.get("addons_shown") else "back_services"),
+                page=callback_data.page,
+            )
+        )
+    await callback.answer()
 
 
 async def _show_dates(
@@ -604,6 +714,40 @@ async def return_to_dates(
                 set(available_dates(availability.windows)),
                 back_action=back_action,
             ),
+        )
+    await callback.answer()
+
+
+@router.callback_query(
+    BookingFlow.window,
+    BookingCallback.filter(F.action == "window_page"),
+)
+async def browse_window_page(
+    callback: CallbackQuery,
+    callback_data: BookingCallback,
+    state: FSMContext,
+    booking_service: BookingService,
+) -> None:
+    data = await state.get_data()
+    try:
+        service_id = int(str(data["service_id"]))
+        local_date = date.fromordinal(callback_data.object_id)
+        staff_member_id = (
+            int(str(data["staff_member_id"])) if data.get("staff_member_id") is not None else None
+        )
+        availability = await booking_service.list_availability(
+            actor_from_telegram(callback.from_user),
+            service_id,
+            addon_ids=_addon_ids(data),
+            staff_member_id=staff_member_id,
+            local_date=local_date,
+        )
+    except (DomainError, KeyError, ValueError) as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        await callback.message.edit_reply_markup(
+            reply_markup=windows_keyboard(availability.windows, local_date, page=callback_data.page)
         )
     await callback.answer()
 

@@ -22,6 +22,7 @@ from app.domain.enums import (
     WaitlistStatus,
 )
 from app.schemas.booking import ClientActor
+from app.schemas.service import AdminActor
 from app.schemas.waitlist import WaitlistCreate
 from app.services.waitlist_delivery_service import WaitlistDeliveryService
 from app.services.waitlist_matching import enqueue_waitlist_matches
@@ -211,6 +212,25 @@ async def test_cancelled_entry_cancels_unsent_notifications() -> None:
 
     assert result.status is WaitlistStatus.CANCELLED
     unit_of_work.waitlist.cancel_unsent.assert_awaited_once_with(target.id)
+
+
+@pytest.mark.asyncio
+async def test_admin_request_lookup_is_direct_and_not_limited_to_first_list_page() -> None:
+    unit_of_work = uow()
+    target = entry()
+    unit_of_work.waitlist.get = AsyncMock(return_value=target)
+    unit_of_work.users.get_by_id = AsyncMock(
+        return_value=User(id=5, telegram_id=101, first_name="Анна")
+    )
+    unit_of_work.services.get = AsyncMock(return_value=service())
+    waitlist = WaitlistService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    result = await waitlist.get_admin(AdminActor(telegram_id=900), target.id)
+
+    assert result.id == target.id
+    assert result.client_telegram_id == 101
+    unit_of_work.waitlist.get.assert_awaited_once_with(target.id, for_update=False)
+    unit_of_work.waitlist.list_page.assert_not_called()
 
 
 @pytest.mark.asyncio

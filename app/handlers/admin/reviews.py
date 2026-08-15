@@ -24,6 +24,7 @@ from app.schemas.pagination import PageRequest
 from app.schemas.review import ReviewAdminUpdate, ReviewView
 from app.services.review_service import ReviewService
 from app.states.review import AdminReviewEdit
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.reviews")
 
@@ -41,14 +42,32 @@ def _render(review: ReviewView) -> str:
     )
 
 
-async def _list(message: Message, service: ReviewService) -> None:
-    if message.from_user is None:
+async def _list(
+    target: Message | CallbackQuery,
+    service: ReviewService,
+    *,
+    page_number: int = 1,
+    deleted_only: bool = False,
+) -> None:
+    if target.from_user is None:
         return
     page = await service.list_admin(
-        actor_from_telegram(message.from_user),
-        page=PageRequest(page_size=20),
+        actor_from_telegram(target.from_user),
+        deleted_only=deleted_only,
+        page=PageRequest(page=page_number, page_size=8),
     )
-    await message.answer(f"Отзывы: {page.total}", reply_markup=admin_reviews_keyboard(page.items))
+    text = (
+        f"{'Удалённые отзывы' if deleted_only else 'Отзывы'}: {page.total} · "
+        f"страница {page.page} из {page.pages}."
+    )
+    keyboard = admin_reviews_keyboard(
+        page.items, page=page.page, pages=page.pages, deleted_only=deleted_only
+    )
+    if isinstance(target, CallbackQuery):
+        if isinstance(target.message, Message):
+            await edit_text_safely(target.message, text, reply_markup=keyboard)
+    else:
+        await target.answer(text, reply_markup=keyboard)
 
 
 @router.message(F.text == ADMIN_REVIEWS_TEXT)
@@ -57,27 +76,27 @@ async def show_reviews(message: Message, review_service: ReviewService) -> None:
 
 
 @router.callback_query(AdminReviewCallback.filter(F.action == "list"))
-async def show_reviews_callback(callback: CallbackQuery, review_service: ReviewService) -> None:
-    if isinstance(callback.message, Message):
-        await _list(callback.message, review_service)
+async def show_reviews_callback(
+    callback: CallbackQuery,
+    callback_data: AdminReviewCallback,
+    review_service: ReviewService,
+) -> None:
+    await _list(callback, review_service, page_number=callback_data.page)
     await callback.answer()
 
 
 @router.callback_query(AdminReviewCallback.filter(F.action == "deleted"))
 async def show_deleted_reviews(
     callback: CallbackQuery,
+    callback_data: AdminReviewCallback,
     review_service: ReviewService,
 ) -> None:
-    page = await review_service.list_admin(
-        actor_from_telegram(callback.from_user),
+    await _list(
+        callback,
+        review_service,
+        page_number=callback_data.page,
         deleted_only=True,
-        page=PageRequest(page_size=20),
     )
-    if isinstance(callback.message, Message):
-        await callback.message.answer(
-            f"Удалённые отзывы: {page.total}",
-            reply_markup=admin_reviews_keyboard(page.items),
-        )
     await callback.answer()
 
 

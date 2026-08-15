@@ -16,12 +16,15 @@ class WindowCallback(CallbackData, prefix="win"):
 
     action: str
     window_id: int
+    page: int = 1
 
 
 def window_list_keyboard(
     windows: list[AvailabilityWindowView],
     *,
     include_archived: bool = False,
+    page: int = 1,
+    pages: int = 1,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     status_markers = {
@@ -38,10 +41,40 @@ def window_list_keyboard(
             [
                 InlineKeyboardButton(
                     text=(f"{status_markers[window.status]} {local:%d.%m %H:%M}{master}")[:64],
-                    callback_data=WindowCallback(action="view", window_id=window.id).pack(),
+                    callback_data=WindowCallback(
+                        action="view", window_id=window.id, page=page
+                    ).pack(),
                 )
             ]
         )
+    list_action = "list_archived" if include_archived else "list"
+    if pages > 1:
+        navigation: list[InlineKeyboardButton] = []
+        if page > 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="◀️",
+                    callback_data=WindowCallback(
+                        action=list_action, window_id=0, page=page - 1
+                    ).pack(),
+                )
+            )
+        navigation.append(
+            InlineKeyboardButton(
+                text=f"{page}/{pages}",
+                callback_data=WindowCallback(action=list_action, window_id=0, page=page).pack(),
+            )
+        )
+        if page < pages:
+            navigation.append(
+                InlineKeyboardButton(
+                    text="▶️",
+                    callback_data=WindowCallback(
+                        action=list_action, window_id=0, page=page + 1
+                    ).pack(),
+                )
+            )
+        rows.append(navigation)
     rows.append(
         [
             InlineKeyboardButton(

@@ -16,6 +16,7 @@ from app.keyboards.client.waitlist import WaitlistCallback
 from app.services.booking_service import BookingService
 from app.services.repeat_booking_service import RepeatBookingService
 from app.states.booking import BookingFlow
+from app.utils.pricing import format_rub_price
 
 router = Router(name="client.repeat_booking")
 
@@ -70,9 +71,9 @@ async def _show_repeat_offer(
         return
     availability = await booking_service.list_availability(actor, offer.service_id)
     assert offer.current_price is not None
-    price_text = f"Текущая цена: {offer.current_price:.2f} ₽."
+    price_text = f"Текущая цена: {format_rub_price(offer.current_price)}."
     if offer.price_changed:
-        price_text += f" Ранее было {offer.previous_price:.2f} ₽."
+        price_text += f" Ранее было {format_rub_price(offer.previous_price)}."
     dates = available_dates(availability.windows)
     if not dates:
         await message.answer(

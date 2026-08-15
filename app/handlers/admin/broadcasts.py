@@ -41,6 +41,7 @@ from app.schemas.pagination import PageRequest
 from app.services.broadcast_service import BroadcastService
 from app.services.presentation_service import PresentationService
 from app.states.broadcast import BroadcastFlow
+from app.utils.telegram import edit_text_safely
 from app.workers.broadcasts import send_delivery
 
 router = Router(name="admin.broadcasts")
@@ -425,12 +426,18 @@ async def list_broadcasts(
     page = await broadcast_service.list_broadcasts(
         actor_from_telegram(callback.from_user),
         status=status,
-        page=PageRequest(page_size=20),
+        page=PageRequest(page=callback_data.page, page_size=8),
     )
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            f"Найдено рассылок: {page.total}",
-            reply_markup=broadcast_list_keyboard(page.items),
+        await edit_text_safely(
+            callback.message,
+            f"Найдено рассылок: {page.total} · страница {page.page} из {page.pages}.",
+            reply_markup=broadcast_list_keyboard(
+                page.items,
+                page=page.page,
+                pages=page.pages,
+                status=callback_data.value,
+            ),
         )
     await callback.answer()
 

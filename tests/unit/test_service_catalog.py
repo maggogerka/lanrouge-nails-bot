@@ -10,7 +10,7 @@ import pytest
 
 from app.database.models import Service, ServiceAddon
 from app.domain.errors import AuthorizationError, ServiceInUseError
-from app.schemas.service import AdminActor, ServiceAddonCreate, ServiceCreate
+from app.schemas.service import AdminActor, ServiceAddonCreate, ServiceCreate, ServicePatch
 from app.services.service_catalog import ServiceCatalog
 
 
@@ -91,6 +91,29 @@ async def test_create_service_audits_and_commits() -> None:
     audit_call = unit_of_work.audit.add.await_args.kwargs
     assert audit_call["action"] == "service.created"
     assert audit_call["correlation_id"] == "request-1"
+    unit_of_work.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_switching_to_negotiated_price_disables_fixed_prepayment() -> None:
+    unit_of_work = build_uow()
+    stored = Service(
+        id=7,
+        business_id=1,
+        name="Маникюр",
+        price=Decimal("2500.00"),
+        prepayment_amount=Decimal("500.00"),
+        duration_min_minutes=60,
+        duration_max_minutes=90,
+        is_active=True,
+    )
+    unit_of_work.services.get = AsyncMock(return_value=stored)
+    catalog = ServiceCatalog(lambda: unit_of_work, frozenset({101}))  # type: ignore[arg-type]
+
+    updated = await catalog.update_service(actor(), 7, ServicePatch(price=Decimal("0")))
+
+    assert updated.price == Decimal("0")
+    assert updated.prepayment_amount == Decimal("0.00")
     unit_of_work.commit.assert_awaited_once()
 
 

@@ -163,6 +163,21 @@ class WaitlistService:
                 )
             return Page(items=views, total=total, page=page.page, page_size=page.page_size)
 
+    async def get_admin(self, actor: AdminActor, entry_id: int) -> AdminWaitlistView:
+        """Return one tenant-scoped request without depending on its list page."""
+        self._ensure_admin(actor)
+        async with self._unit_of_work_factory() as uow:
+            entry = await self._entry(uow, entry_id, for_update=False)
+            client = await uow.users.get_by_id(entry.client_id)
+            if client is None:
+                raise EntityNotFoundError("Клиент заявки листа ожидания не найден.")
+            return AdminWaitlistView(
+                **self._view(entry, await self._service_name(uow, entry.service_id)).model_dump(),
+                client_id=client.id,
+                client_name=client.first_name or "—",
+                client_telegram_id=client.telegram_id,
+            )
+
     async def archive_admin(
         self,
         actor: AdminActor,

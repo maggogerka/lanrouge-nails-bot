@@ -117,6 +117,7 @@ class PaymentRepository(TenantScopedRepository):
         statuses: Collection[PaymentStatus],
         staff_member_id: int | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[tuple[Payment, Appointment, User]]:
         """Return one bounded, tenant-scoped staff-panel projection query."""
 
@@ -124,6 +125,8 @@ class PaymentRepository(TenantScopedRepository):
             return []
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
         statement = (
             select(Payment, Appointment, User)
             .join(
@@ -138,11 +141,32 @@ class PaymentRepository(TenantScopedRepository):
             )
             .order_by(Payment.created_at.desc(), Payment.id.desc())
             .limit(limit)
+            .offset(offset)
         )
         if staff_member_id is not None:
             statement = statement.where(Appointment.staff_member_id == staff_member_id)
         rows = await self._session.execute(statement)
         return [(row[0], row[1], row[2]) for row in rows.all()]
+
+    async def count_with_context(
+        self,
+        *,
+        statuses: Collection[PaymentStatus],
+        staff_member_id: int | None = None,
+    ) -> int:
+        if not statuses:
+            return 0
+        statement = select(func.count(Payment.id)).where(
+            Payment.business_id == self.business_id,
+            Payment.status.in_(statuses),
+        )
+        if staff_member_id is not None:
+            statement = statement.join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            ).where(Appointment.staff_member_id == staff_member_id)
+        return int((await self._session.scalar(statement)) or 0)
 
     async def get_with_context(
         self,

@@ -18,9 +18,11 @@ from app.keyboards.admin.windows import (
 )
 from app.schemas.service import AdminActor
 from app.services.availability_service import AvailabilityService
+from app.utils.pagination import paginate_sequence
 from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.window_browse")
+_WINDOWS_PAGE_SIZE = 8
 
 
 async def show_windows_message(
@@ -29,10 +31,13 @@ async def show_windows_message(
     actor: AdminActor,
 ) -> None:
     schedule = await service.list_windows(actor, include_archived=False)
+    paged = paginate_sequence(schedule.windows, page=1, page_size=_WINDOWS_PAGE_SIZE)
     text = "Активных будущих окон пока нет." if not schedule.windows else "Активные окна:"
     await message.answer(
         text,
-        reply_markup=window_list_keyboard(schedule.windows, include_archived=False),
+        reply_markup=window_list_keyboard(
+            list(paged.items), include_archived=False, page=paged.page, pages=paged.pages
+        ),
     )
 
 
@@ -42,21 +47,27 @@ async def show_windows_callback(
     actor: AdminActor,
     *,
     include_archived: bool = False,
+    page: int = 1,
     answer_text: str | None = None,
 ) -> None:
     schedule = await service.list_windows(actor, include_archived=include_archived)
+    paged = paginate_sequence(schedule.windows, page=page, page_size=_WINDOWS_PAGE_SIZE)
     if include_archived:
         text = "Будущих окон пока нет." if not schedule.windows else "Все будущие окна:"
     else:
         text = "Активных будущих окон пока нет." if not schedule.windows else "Активные окна:"
+    if schedule.windows:
+        text += f"\nСтраница {paged.page} из {paged.pages} · всего {paged.total}."
     changed = True
     if isinstance(callback.message, Message):
         changed = await edit_text_safely(
             callback.message,
             text,
             reply_markup=window_list_keyboard(
-                schedule.windows,
+                list(paged.items),
                 include_archived=include_archived,
+                page=paged.page,
+                pages=paged.pages,
             ),
         )
     await callback.answer(answer_text or (None if changed else "Список уже актуален."))
@@ -95,18 +106,21 @@ async def show_windows(message: Message, availability_service: AvailabilityServi
 @router.callback_query(WindowCallback.filter(F.action == "list"))
 async def show_windows_from_callback(
     callback: CallbackQuery,
+    callback_data: WindowCallback,
     availability_service: AvailabilityService,
 ) -> None:
     await show_windows_callback(
         callback,
         availability_service,
         actor_from_telegram(callback.from_user),
+        page=callback_data.page,
     )
 
 
 @router.callback_query(WindowCallback.filter(F.action == "list_archived"))
 async def show_archived_windows_from_callback(
     callback: CallbackQuery,
+    callback_data: WindowCallback,
     availability_service: AvailabilityService,
 ) -> None:
     await show_windows_callback(
@@ -114,6 +128,7 @@ async def show_archived_windows_from_callback(
         availability_service,
         actor_from_telegram(callback.from_user),
         include_archived=True,
+        page=callback_data.page,
     )
 
 
