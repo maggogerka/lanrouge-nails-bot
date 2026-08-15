@@ -248,4 +248,4 @@ jobs:
         if: always()
         run: |
           docker compose -f docker-compose.yml -f compose.production.yml -f compose.profiles.yml -f compose.ci.yml --profile api --profile backup down --volumes
-          rm -rf .ci-backup-repository
+          sudo rm -rf -- "$GITHUB_WORKSPACE/.ci-backup-repository"

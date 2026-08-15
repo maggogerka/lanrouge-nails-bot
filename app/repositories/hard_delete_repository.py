@@ -71,6 +71,9 @@ class HardDeleteRepository(TenantScopedRepository):
         )
         rows = list(appointment_rows.all())
         appointment_ids = [int(row.id) for row in rows]
+        appointment_window_ids = sorted(
+            {int(row.window_id) for row in rows if row.window_id is not None}
+        )
 
         waitlist_condition = WaitlistEntry.service_id == service_id
         if appointment_ids:
@@ -117,11 +120,17 @@ class HardDeleteRepository(TenantScopedRepository):
 
         await self._delete_appointments(appointment_ids)
 
+        window_filter = AvailabilityWindow.service_id == service_id
+        if appointment_window_ids:
+            window_filter = or_(
+                window_filter,
+                AvailabilityWindow.id.in_(appointment_window_ids),
+            )
         await self._session.execute(
             update(AvailabilityWindow)
             .where(
                 AvailabilityWindow.business_id == self.business_id,
-                AvailabilityWindow.service_id == service_id,
+                window_filter,
             )
             .values(
                 status=AvailabilityWindowStatus.CLOSED,

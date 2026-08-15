@@ -12,9 +12,12 @@ from app.database.models import (
     BusinessSettings,
     Service,
     StaffMember,
+    StaffServiceAssignment,
     User,
     WaitlistEntry,
     WaitlistNotification,
+    Workstation,
+    WorkstationService,
 )
 from app.domain.enums import AvailabilityWindowStatus, StaffRole, UserRole, WaitlistStatus
 from app.repositories import SqlAlchemyUnitOfWork
@@ -69,6 +72,36 @@ async def test_matching_filters_preferences_and_prevents_duplicate_jobs(
         )
         session.add_all([fitting, too_long])
         await session.flush()
+        session.add_all(
+            [
+                StaffServiceAssignment(
+                    business_id=1,
+                    staff_member_id=master.id,
+                    service_id=service.id,
+                    online_booking_enabled=True,
+                    is_active=True,
+                )
+                for service in (fitting, too_long)
+            ]
+        )
+        workstation = Workstation(
+            business_id=1,
+            name="Test workstation",
+            is_active=True,
+        )
+        session.add(workstation)
+        await session.flush()
+        session.add_all(
+            [
+                WorkstationService(
+                    business_id=1,
+                    workstation_id=workstation.id,
+                    service_id=service.id,
+                    is_active=True,
+                )
+                for service in (fitting, too_long)
+            ]
+        )
         target_date = date(2026, 7, 23)
         common = {
             "date_from": target_date,
