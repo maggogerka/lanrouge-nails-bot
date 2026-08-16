@@ -25,9 +25,9 @@
   monthly restore-test and an `OnFailure` alert hook.
 - the legacy Python distribution/package identity remains internal for compatibility; a complete
   rename is deferred to a separate tested release and is not shown in user-facing bot copy.
-- no container registry target or credentials are configured in the repository; publishing a
-  client image by immutable digest remains an explicit deployment blocker and must not be replaced
-  with a floating `latest` tag.
+- the manual `Release images` workflow publishes `bot` and `backup` images from an existing
+  annotated SemVer tag to GHCR, refuses to overwrite an existing version tag and records both
+  immutable digests; client deployments must never use floating `main` or `latest` tags.
 
 ## [0.4.2] - 2026-08-15
 
