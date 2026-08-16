@@ -1,0 +1,150 @@
+name: Release images
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing annotated SemVer tag to publish, for example v0.4.3
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-images-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      BOT_IMAGE: ghcr.io/${{ github.repository }}/bot
+      BACKUP_IMAGE: ghcr.io/${{ github.repository }}/backup
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate annotated release tag
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release_tag must be an exact vMAJOR.MINOR.PATCH tag" >&2
+            exit 1
+          fi
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          source_commit="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
+          test "$source_commit" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite published image tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_absent() {
+            local image_ref="$1"
+            local result
+            if result="$(docker buildx imagetools inspect "$image_ref" 2>&1)"; then
+              echo "Refusing to overwrite existing image tag: $image_ref" >&2
+              exit 1
+            fi
+            if ! grep -Eqi 'not found|manifest unknown|no such manifest' <<< "$result"; then
+              echo "Could not safely establish that $image_ref is absent" >&2
+              exit 1
+            fi
+          }
+          check_absent "$BOT_IMAGE:$RELEASE_TAG"
+          check_absent "$BACKUP_IMAGE:$RELEASE_TAG"
+
+      - name: Publish bot image
+        id: bot
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.BOT_IMAGE }}:${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.title=Telegram CRM bot
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.source_commit }}
+            org.opencontainers.image.licenses=MIT
+          provenance: mode=max
+          sbom: true
+
+      - name: Publish backup image
+        id: backup
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: backup
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.BACKUP_IMAGE }}:${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.title=Telegram CRM backup
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.source_commit }}
+            org.opencontainers.image.licenses=MIT
+          provenance: mode=max
+          sbom: true
+
+      - name: Verify and record immutable digests
+        env:
+          BOT_DIGEST: ${{ steps.bot.outputs.digest }}
+          BACKUP_DIGEST: ${{ steps.backup.outputs.digest }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.source_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_digest() {
+            docker buildx imagetools inspect "$1" --raw | sha256sum | awk '{print "sha256:" $1}'
+          }
+          test "$(manifest_digest "$BOT_IMAGE:$RELEASE_TAG")" = "$BOT_DIGEST"
+          test "$(manifest_digest "$BACKUP_IMAGE:$RELEASE_TAG")" = "$BACKUP_DIGEST"
+          {
+            printf 'source_tag=%s\n' "$RELEASE_TAG"
+            printf 'source_commit=%s\n' "$SOURCE_COMMIT"
+            printf 'bot=%s@%s\n' "$BOT_IMAGE" "$BOT_DIGEST"
+            printf 'backup=%s@%s\n' "$BACKUP_IMAGE" "$BACKUP_DIGEST"
+          } | tee image-digests.txt
+          {
+            echo '### Immutable release images'
+            echo
+            echo "- \`$BOT_IMAGE@$BOT_DIGEST\`"
+            echo "- \`$BACKUP_IMAGE@$BACKUP_DIGEST\`"
+            echo
+            echo 'No `main` or `latest` image tag was published.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload digest record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.release_tag }}-image-digests
+          path: image-digests.txt
+          if-no-files-found: error
+          retention-days: 90
