@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from pydantic import ValidationError
 
+from app.domain.enums import AppointmentStatus, PaymentMode, PaymentStatus
 from app.domain.errors import DomainError, FutureBookingLimitError
 from app.handlers.admin.service_common import actor_from_telegram
 from app.keyboards.admin.crm import (
@@ -18,6 +20,7 @@ from app.keyboards.admin.crm import (
     all_tags_keyboard,
     booking_limit_override_keyboard,
     client_card_keyboard,
+    client_history_keyboard,
     client_list_keyboard,
     client_tags_keyboard,
     notes_keyboard,
@@ -25,15 +28,22 @@ from app.keyboards.admin.crm import (
 from app.keyboards.admin.main import ADMIN_CLIENTS_TEXT
 from app.keyboards.common.optional_input import is_optional_skip, optional_input_keyboard
 from app.schemas.authorization import StaffContext, StaffPermission
-from app.schemas.crm import ClientCardView, ClientNoteCreate, ClientTagCreate
+from app.schemas.crm import (
+    ClientAppointmentHistoryView,
+    ClientCardView,
+    ClientNoteCreate,
+    ClientTagCreate,
+)
 from app.schemas.pagination import PageRequest
 from app.schemas.service import AdminActor
 from app.services.booking_service import BookingService
 from app.services.crm_service import CrmService
 from app.services.service_catalog import ServiceCatalog
 from app.states.admin_crm import AdminCrmFlow
+from app.utils.telegram import edit_text_safely
 
 router = Router(name="admin.crm")
+_CLIENT_HISTORY_PAGE_SIZE = 5
 
 
 @router.message(F.text == ADMIN_CLIENTS_TEXT)
@@ -118,20 +128,111 @@ async def show_client_history(
     callback_data: CrmCallback,
     crm_service: CrmService,
 ) -> None:
-    card = await crm_service.get_card(
-        actor_from_telegram(callback.from_user), callback_data.client_id
-    )
-    lines = [
-        f"№{item.id}: {item.start_at:%d.%m.%Y %H:%M} — "
-        f"{escape(item.service_name)} — {item.status.value}"
-        for item in card.appointments
-    ]
+    try:
+        history = await crm_service.list_history(
+            actor_from_telegram(callback.from_user),
+            callback_data.client_id,
+            PageRequest(page=callback_data.page, page_size=_CLIENT_HISTORY_PAGE_SIZE),
+        )
+    except DomainError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    text = "<b>История записей клиента</b>\n\n"
+    if history.items:
+        text += "\n\n".join(_render_history_item(item) for item in history.items)
+        text += f"\n\nСтраница {history.page} из {history.pages} · всего {history.total}."
+    else:
+        text += "Записей пока нет."
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            "История пуста." if not lines else "<b>Последние записи</b>\n" + "\n".join(lines),
-            reply_markup=client_card_keyboard(card),
+        await edit_text_safely(
+            callback.message,
+            text,
+            reply_markup=client_history_keyboard(
+                callback_data.client_id,
+                page=history.page,
+                pages=history.pages,
+            ),
         )
     await callback.answer()
+
+
+def _render_history_item(item: ClientAppointmentHistoryView) -> str:
+    zone = ZoneInfo(item.timezone)
+    start = item.start_at.astimezone(zone)
+    end = item.end_at.astimezone(zone)
+    status = {
+        AppointmentStatus.PENDING_PAYMENT: "⏳ ожидает оплаты",
+        AppointmentStatus.PENDING_MANUAL_CONFIRMATION: "🔎 предоплата на проверке",
+        AppointmentStatus.CONFIRMED: "✅ подтверждена",
+        AppointmentStatus.CLIENT_CONFIRMED: "✅ визит подтверждён клиентом",
+        AppointmentStatus.COMPLETED: "🏁 завершена",
+        AppointmentStatus.CANCELLED_BY_CLIENT: "❌ отменена клиентом",
+        AppointmentStatus.CANCELLED_BY_ADMIN: "❌ отменена сотрудником",
+        AppointmentStatus.NO_SHOW: "🚫 неявка",
+        AppointmentStatus.RESCHEDULED: "🔄 перенесена",
+        AppointmentStatus.PAYMENT_EXPIRED: "⌛ резерв оплаты истёк",
+        AppointmentStatus.REFUND_PENDING: "↩️ возврат выполняется",
+        AppointmentStatus.PARTIALLY_REFUNDED: "↩️ частичный возврат",
+        AppointmentStatus.REFUNDED: "↩️ возврат завершён",
+    }[item.status]
+    price = "договорная" if item.price == 0 else _format_money(item.price, item.currency)
+    lines = [
+        f"<b>Запись №{item.id}</b> · {status}",
+        f"Дата: {start:%d.%m.%Y}",
+        f"Время: {start:%H:%M}–{end:%H:%M} ({escape(item.timezone)})",
+        f"Услуга: {escape(item.service_name)}",
+        f"Мастер: {escape(item.master_name)}",
+        f"Стоимость записи: {price}",
+    ]
+    lines.extend(_payment_history_lines(item))
+    if item.completed_at is not None:
+        completed = item.completed_at.astimezone(zone)
+        lines.append(f"Завершена фактически: {completed:%d.%m.%Y %H:%M}")
+    if item.cancelled_at is not None:
+        cancelled = item.cancelled_at.astimezone(zone)
+        lines.append(f"Отменена: {cancelled:%d.%m.%Y %H:%M}")
+    return "\n".join(lines)
+
+
+def _payment_history_lines(item: ClientAppointmentHistoryView) -> list[str]:
+    if item.payment_mode is PaymentMode.DISABLED and item.payment_id is None:
+        return ["Предоплата через бота: не требовалась"]
+    expected = _format_money(item.prepayment_amount, item.currency)
+    if item.payment_id is None or item.payment_status is None:
+        return [f"Предоплата через бота: {expected} · платёж не найден"]
+    payment_status = {
+        PaymentStatus.CREATED: "создаётся",
+        PaymentStatus.PENDING: "ожидает оплаты или проверки",
+        PaymentStatus.SUCCEEDED: "подтверждена",
+        PaymentStatus.CANCELLED: "отменена",
+        PaymentStatus.FAILED: "отклонена или не прошла",
+        PaymentStatus.REFUND_PENDING: "возврат выполняется",
+        PaymentStatus.PARTIALLY_REFUNDED: "частично возвращена",
+        PaymentStatus.REFUNDED: "полностью возвращена",
+    }[item.payment_status]
+    lines = [
+        f"Предоплата #{item.payment_id}: "
+        f"{_format_money(item.payment_amount, item.currency)} · {payment_status}"
+    ]
+    if item.payment_status in {
+        PaymentStatus.SUCCEEDED,
+        PaymentStatus.REFUND_PENDING,
+        PaymentStatus.PARTIALLY_REFUNDED,
+        PaymentStatus.REFUNDED,
+    }:
+        net_paid = max(item.payment_amount - item.refunded_amount, Decimal("0"))
+        lines.append(f"Подтверждено в боте: {_format_money(net_paid, item.currency)}")
+    if item.refunded_amount > 0:
+        lines.append(f"Возвращено: {_format_money(item.refunded_amount, item.currency)}")
+    if item.paid_at is not None:
+        paid_at = item.paid_at.astimezone(ZoneInfo(item.timezone))
+        lines.append(f"Предоплата подтверждена: {paid_at:%d.%m.%Y %H:%M}")
+    return lines
+
+
+def _format_money(value: Decimal, currency: str) -> str:
+    suffix = "₽" if currency == "RUB" else escape(currency)
+    return f"{value:.2f} {suffix}"
 
 
 @router.callback_query(CrmCallback.filter(F.action == "client_tags"))

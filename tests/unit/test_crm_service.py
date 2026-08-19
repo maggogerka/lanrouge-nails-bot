@@ -1,13 +1,14 @@
 """CRM cards, access control, tags, private notes and self-booking tests."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.database.models import ClientNote, ClientTag, User
-from app.domain.enums import AppointmentStatus, UserRole
+from app.domain.enums import AppointmentStatus, PaymentMode, PaymentStatus, UserRole
 from app.domain.errors import AuthorizationError, CrmStateError
 from app.schemas.crm import ClientNoteCreate
 from app.schemas.pagination import PageRequest
@@ -67,6 +68,54 @@ async def test_admin_sees_card_aggregates_and_masked_list_phone() -> None:
     assert card.phone == "+79991234567"
     assert card.completed_visits == 3
     assert card.no_shows == 1
+
+
+@pytest.mark.asyncio
+async def test_client_history_contains_local_time_and_latest_payment() -> None:
+    unit_of_work = build_uow()
+    target_appointment = SimpleNamespace(
+        id=11,
+        status=AppointmentStatus.COMPLETED,
+        service_name_snapshot="Маникюр",
+        master_name_snapshot="Руслана",
+        price_snapshot=Decimal("2700.00"),
+        prepayment_snapshot=Decimal("500.00"),
+        currency_snapshot="RUB",
+        payment_mode_snapshot=PaymentMode.MANUAL,
+        completed_at=NOW,
+        cancelled_at=None,
+    )
+    target_window = SimpleNamespace(
+        start_at=datetime(2026, 7, 22, 10, tzinfo=UTC),
+        end_at=datetime(2026, 7, 22, 12, tzinfo=UTC),
+    )
+    payment = SimpleNamespace(
+        id=31,
+        status=PaymentStatus.PARTIALLY_REFUNDED,
+        amount=Decimal("500.00"),
+        refunded_amount=Decimal("100.00"),
+        paid_at=datetime(2026, 7, 20, 9, tzinfo=UTC),
+    )
+    unit_of_work.appointments.list_history_for_client.return_value = (
+        [(target_appointment, target_window)],
+        1,
+    )
+    unit_of_work.settings.get = AsyncMock(return_value=SimpleNamespace(timezone="Europe/Moscow"))
+    unit_of_work.payments.get_latest_for_appointment = AsyncMock(return_value=payment)
+    service = CrmService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    history = await service.list_history(
+        admin(),
+        5,
+        PageRequest(page=1, page_size=5),
+    )
+
+    assert history.total == 1
+    assert history.items[0].master_name == "Руслана"
+    assert history.items[0].payment_status is PaymentStatus.PARTIALLY_REFUNDED
+    assert history.items[0].refunded_amount == Decimal("100.00")
+    assert history.items[0].timezone == "Europe/Moscow"
+    unit_of_work.payments.get_latest_for_appointment.assert_awaited_once_with(11)
 
 
 @pytest.mark.asyncio

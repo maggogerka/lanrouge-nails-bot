@@ -263,8 +263,10 @@ class MasterWorkspaceService:
                 AppointmentStatus.CLIENT_CONFIRMED,
             }:
                 raise AppointmentStateError("Изменить можно только активную запись.")
-            if window.end_at > current:
-                raise AppointmentStateError("Действие доступно после окончания записи.")
+            if target is AppointmentStatus.COMPLETED and window.start_at > current:
+                raise AppointmentStateError("Завершить визит можно после начала окна записи.")
+            if target is AppointmentStatus.NO_SHOW and window.end_at > current:
+                raise AppointmentStateError("Неявку можно отметить после окончания записи.")
             previous = appointment.status
             ensure_appointment_transition(previous, target)
             appointment.status = target

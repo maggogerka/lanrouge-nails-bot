@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.methods import SendMessage
 
 from app.domain.enums import NotificationType
+from app.keyboards.admin.appointments import AdminAppointmentCallback
 from app.schemas.notification import NotificationDelivery
 from app.workers.reminder_messages import reminder_keyboard, render_reminder
 from app.workers.reminders import process_delivery, retry_delay_seconds
@@ -42,6 +43,19 @@ def test_24_hour_client_reminder_is_safe_and_has_confirmation_button() -> None:
     assert "Консультация &lt;premium&gt;" in text
     assert "Дом &lt;20&gt;" in text
     assert "Подтверждаю визит" in keyboard.inline_keyboard[0][0].text
+
+
+def test_admin_reminder_opens_appointment_instead_of_master_profile() -> None:
+    item = delivery().model_copy(update={"notification_type": NotificationType.ADMIN_REMINDER})
+
+    keyboard = reminder_keyboard(item)
+
+    button = keyboard.inline_keyboard[0][0]
+    assert button.text == "📋 Перейти к записи"
+    assert button.url is None
+    callback = AdminAppointmentCallback.unpack(button.callback_data or "")
+    assert callback.action == "view"
+    assert callback.appointment_id == item.appointment_id
 
 
 def test_backoff_is_bounded() -> None:

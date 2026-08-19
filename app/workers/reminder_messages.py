@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.enums import NotificationType
+from app.keyboards.admin.appointments import AdminAppointmentCallback
 from app.keyboards.client.payments import manual_payment_report_button
 from app.keyboards.client.reminders import confirm_visit_keyboard
 from app.keyboards.client.repeat_booking import repeat_reminder_keyboard
@@ -67,6 +68,21 @@ def reminder_keyboard(delivery: NotificationDelivery) -> InlineKeyboardMarkup:
         )
     if delivery.notification_type is NotificationType.PAYMENT_REVIEW_STAFF:
         return InlineKeyboardMarkup(inline_keyboard=[])
+    if delivery.notification_type is NotificationType.ADMIN_REMINDER:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📋 Перейти к записи",
+                        callback_data=AdminAppointmentCallback(
+                            action="view",
+                            appointment_id=delivery.appointment_id,
+                            object_id=0,
+                        ).pack(),
+                    )
+                ]
+            ]
+        )
     if delivery.notification_type is NotificationType.REVIEW_REQUEST:
         return review_request_keyboard(delivery.appointment_id)
     if delivery.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:

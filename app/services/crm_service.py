@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from app.database.models import ClientNote, ClientTag, User
 from app.domain.enums import AppointmentStatus
 from app.domain.errors import CrmStateError, EntityNotFoundError
 from app.repositories.uow import SqlAlchemyUnitOfWork
 from app.schemas.crm import (
+    ClientAppointmentHistoryView,
     ClientAppointmentView,
     ClientCardView,
     ClientNoteCreate,
@@ -20,7 +22,7 @@ from app.schemas.crm import (
     ClientTagView,
     safe_telegram_profile_url,
 )
-from app.schemas.pagination import PageRequest
+from app.schemas.pagination import Page, PageRequest
 from app.schemas.service import AdminActor
 from app.services.appointment_common import ensure_admin
 
@@ -97,6 +99,61 @@ class CrmService:
                 ],
                 tags=[ClientTagView.model_validate(tag) for tag in tags],
                 notes=[ClientNoteView.model_validate(note) for note in notes],
+            )
+
+    async def list_history(
+        self,
+        actor: AdminActor,
+        client_id: int,
+        page: PageRequest,
+    ) -> Page[ClientAppointmentHistoryView]:
+        """Return a bounded local-time history with the latest payment snapshot."""
+
+        ensure_admin(actor, self._admin_telegram_ids)
+        async with self._unit_of_work_factory() as unit_of_work:
+            client = await unit_of_work.users.get_by_id(client_id)
+            settings = await unit_of_work.settings.get()
+            if client is None:
+                raise EntityNotFoundError("Клиент больше не существует.")
+            if settings is None:
+                raise EntityNotFoundError("Настройки бизнеса не найдены.")
+            rows, total = await unit_of_work.appointments.list_history_for_client(
+                client_id,
+                limit=page.page_size,
+                offset=page.offset,
+            )
+            items: list[ClientAppointmentHistoryView] = []
+            for appointment, window in rows:
+                payment = await unit_of_work.payments.get_latest_for_appointment(appointment.id)
+                items.append(
+                    ClientAppointmentHistoryView(
+                        id=appointment.id,
+                        status=appointment.status,
+                        service_name=appointment.service_name_snapshot,
+                        master_name=appointment.master_name_snapshot,
+                        price=appointment.price_snapshot,
+                        prepayment_amount=appointment.prepayment_snapshot,
+                        currency=appointment.currency_snapshot,
+                        payment_mode=appointment.payment_mode_snapshot,
+                        start_at=window.start_at,
+                        end_at=window.end_at,
+                        timezone=settings.timezone,
+                        completed_at=appointment.completed_at,
+                        cancelled_at=appointment.cancelled_at,
+                        payment_id=payment.id if payment is not None else None,
+                        payment_status=payment.status if payment is not None else None,
+                        payment_amount=payment.amount if payment is not None else Decimal("0"),
+                        refunded_amount=(
+                            payment.refunded_amount if payment is not None else Decimal("0")
+                        ),
+                        paid_at=payment.paid_at if payment is not None else None,
+                    )
+                )
+            return Page(
+                items=items,
+                total=total,
+                page=page.page,
+                page_size=page.page_size,
             )
 
     async def list_tags(
