@@ -9,7 +9,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.enums import AppointmentStatus
+from app.domain.enums import AppointmentStatus, PaymentMode, PaymentStatus
 
 
 class ClientTagCreate(BaseModel):
@@ -73,6 +73,29 @@ class ClientAppointmentView(BaseModel):
     price: Decimal
     start_at: datetime
     end_at: datetime
+
+
+class ClientAppointmentHistoryView(BaseModel):
+    """Financially explicit appointment snapshot for the staff CRM history."""
+
+    id: int
+    status: AppointmentStatus
+    service_name: str
+    master_name: str
+    price: Decimal
+    prepayment_amount: Decimal
+    currency: str
+    payment_mode: PaymentMode
+    start_at: datetime
+    end_at: datetime
+    timezone: str
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    payment_id: int | None = None
+    payment_status: PaymentStatus | None = None
+    payment_amount: Decimal = Decimal("0")
+    refunded_amount: Decimal = Decimal("0")
+    paid_at: datetime | None = None
 
 
 class ClientCardView(ClientSummaryView):

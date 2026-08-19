@@ -510,8 +510,8 @@ class AppointmentService:
                 AppointmentStatus.CLIENT_CONFIRMED,
             }:
                 raise AppointmentStateError("Завершить можно только активную запись.")
-            if window.end_at > current_time:
-                raise AppointmentStateError("Завершить визит можно после окончания окна записи.")
+            if window.start_at > current_time:
+                raise AppointmentStateError("Завершить визит можно после начала окна записи.")
             previous = appointment.status
             ensure_appointment_transition(appointment.status, AppointmentStatus.COMPLETED)
             appointment.status = AppointmentStatus.COMPLETED

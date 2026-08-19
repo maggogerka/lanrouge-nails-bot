@@ -22,7 +22,11 @@ from app.domain.enums import (
     MediaType,
     NotificationType,
 )
-from app.domain.errors import AppointmentNotFoundError, CancellationDeadlineError
+from app.domain.errors import (
+    AppointmentNotFoundError,
+    AppointmentStateError,
+    CancellationDeadlineError,
+)
 from app.schemas.booking import ClientActor, ReferenceMediaDraft
 from app.schemas.service import AdminActor
 from app.services.appointment_service import AppointmentService
@@ -352,6 +356,34 @@ async def test_completed_visit_schedules_exactly_one_review_request() -> None:
 
     await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
     assert unit_of_work.notifications.add_all.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_can_complete_visit_while_window_is_in_progress() -> None:
+    target_appointment = appointment()
+    target_window = window(hours_until=-1)
+    unit_of_work = build_uow(
+        target_appointment=target_appointment,
+        target_window=target_window,
+    )
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    result = await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+
+    assert result.status is AppointmentStatus.COMPLETED
+    assert target_appointment.completed_at == NOW
+    assert target_window.end_at > NOW
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_complete_visit_before_window_starts() -> None:
+    unit_of_work = build_uow(target_window=window(hours_until=1))
+    service = AppointmentService(lambda: unit_of_work, frozenset({900}))  # type: ignore[arg-type]
+
+    with pytest.raises(AppointmentStateError, match="после начала"):
+        await service.complete_visit(AdminActor(telegram_id=900), 11, now=NOW)
+
+    unit_of_work.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

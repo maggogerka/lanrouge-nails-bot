@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.4] - 2026-08-19
+
+### Fixed
+
+- an administrator or assigned master can complete an active visit from the scheduled start time
+  when the procedure finishes earlier than the availability window; completion before the start
+  remains blocked and no-show remains available only after the scheduled end;
+- staff appointment reminders now contain a tenant-authorized «Перейти к записи» callback instead
+  of the client-facing master contact button.
+
+### Changed
+
+- CRM client history is paginated and shows business-local date/time, master, localized appointment
+  status, recorded service price, prepayment status, confirmed amount and refunds;
+- operator documentation now describes the updated completion boundary, reminder action and
+  financial-history semantics. No database migration is required for this release.
+
 ## [0.4.3] - 2026-08-16
 
 ### Fixed

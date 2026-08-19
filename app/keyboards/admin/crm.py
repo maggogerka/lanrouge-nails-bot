@@ -67,6 +67,26 @@ def client_card_keyboard(card: ClientCardView, *, page: int = 1) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def client_history_keyboard(
+    client_id: int,
+    *,
+    page: int,
+    pages: int,
+) -> InlineKeyboardMarkup:
+    """Keep long client histories bounded and returnable to the same CRM card."""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    navigation: list[InlineKeyboardButton] = []
+    if page > 1:
+        navigation.append(_button("◀️", "history", client_id=client_id, page=page - 1))
+    if page < pages:
+        navigation.append(_button("▶️", "history", client_id=client_id, page=page + 1))
+    if navigation:
+        rows.append(navigation)
+    rows.append([_button("🔙 К карточке клиента", "view", client_id=client_id)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def booking_limit_override_keyboard(client_id: int) -> InlineKeyboardMarkup:
     """Require a distinct confirmation before an authorized quota override."""
 

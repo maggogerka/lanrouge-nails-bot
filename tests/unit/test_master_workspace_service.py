@@ -271,6 +271,21 @@ async def test_master_completes_only_own_ended_visit_with_history_and_audit() ->
 
 
 @pytest.mark.asyncio
+async def test_master_can_complete_own_visit_while_window_is_in_progress() -> None:
+    unit_of_work, appointment, window = build_action_uow(
+        start_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
+        end_at=datetime(2026, 8, 10, 10, tzinfo=UTC),
+    )
+    service = MasterWorkspaceService(lambda: unit_of_work)  # type: ignore[arg-type]
+
+    result = await service.complete_own_visit(actor(), appointment.id, now=NOW)
+
+    assert result.status is AppointmentStatus.COMPLETED
+    assert appointment.completed_at == NOW
+    assert window.end_at > NOW
+
+
+@pytest.mark.asyncio
 async def test_master_cannot_mutate_another_masters_appointment() -> None:
     unit_of_work, appointment, _window = build_action_uow(
         start_at=datetime(2026, 8, 10, 7, tzinfo=UTC),
