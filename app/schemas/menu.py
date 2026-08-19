@@ -13,7 +13,7 @@ class MenuCapabilities:
     portfolio_management_visible: bool = True
     reviews_visible: bool = True
     notifications_visible: bool = True
-    repeat_booking_visible: bool = True
+    payments_visible: bool = True
     waitlist_visible: bool = True
     support_visible: bool = True
     privacy_visible: bool = True

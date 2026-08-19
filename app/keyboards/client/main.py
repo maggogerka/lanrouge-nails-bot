@@ -14,7 +14,9 @@ CLIENT_PORTFOLIO_TEXT = "🖼 Портфолио"
 CLIENT_NOTIFICATIONS_TEXT = "🔔 Настройки уведомлений"
 CLIENT_WAITLIST_TEXT = "⏳ Лист ожидания"
 CLIENT_REVIEWS_TEXT = "⭐ Отзывы"
+# Retained only to recognize keyboards cached by Telegram before v0.4.5.
 CLIENT_REPEAT_TEXT = "🔁 Повторить запись"
+CLIENT_PAYMENTS_TEXT = "💳 Мои оплаты"
 CLIENT_PRIVACY_TEXT = "🔐 Приватность"
 
 
@@ -58,8 +60,8 @@ def client_main_keyboard(capabilities: MenuCapabilities | None = None) -> ReplyK
         rows.append(preferences)
 
     follow_up = []
-    if visible.repeat_booking_visible:
-        follow_up.append(KeyboardButton(text=CLIENT_REPEAT_TEXT))
+    if visible.payments_visible:
+        follow_up.append(KeyboardButton(text=CLIENT_PAYMENTS_TEXT))
     if visible.support_visible:
         follow_up.append(KeyboardButton(text=CLIENT_SUPPORT_TEXT))
     if follow_up:

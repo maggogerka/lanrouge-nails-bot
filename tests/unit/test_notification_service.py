@@ -149,7 +149,7 @@ async def test_review_request_is_delivered_only_for_completed_without_existing_r
 
 
 @pytest.mark.asyncio
-async def test_repeat_reminder_requires_live_marketing_consent_and_no_future_booking() -> None:
+async def test_legacy_repeat_reminder_is_cancelled_without_delivery() -> None:
     target_job = job()
     target_job.notification_type = NotificationType.REPEAT_BOOKING_REMINDER
     unit_of_work, target_job, recipient = build_uow(
@@ -165,11 +165,9 @@ async def test_repeat_reminder_requires_live_marketing_consent_and_no_future_boo
         max_attempts=5,
     )
 
-    assert await service.prepare_delivery(21, "worker-1", now=NOW) is not None
-
-    unit_of_work.appointments.has_future_active_for_client.return_value = True
     assert await service.prepare_delivery(21, "worker-1", now=NOW) is None
-    assert target_job.last_error == "repeat_booking_not_actionable"
+    assert target_job.last_error == "feature_removed"
+    assert target_job.status is NotificationJobStatus.CANCELLED
 
 
 @pytest.mark.asyncio

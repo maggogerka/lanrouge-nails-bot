@@ -7,6 +7,7 @@ from app.domain.errors import DomainError
 from app.keyboards.admin.features import FeatureAdminCallback, feature_flags_keyboard
 from app.keyboards.admin.main import ADMIN_FEATURES_TEXT
 from app.schemas.authorization import StaffContext, StaffPermission
+from app.schemas.features import FeatureName
 from app.services.feature_flag_service import FeatureFlagService
 
 router = Router(name="admin.features")
@@ -52,6 +53,12 @@ async def toggle_feature(
     staff_context: StaffContext,
     correlation_id: str,
 ) -> None:
+    if callback_data.name is FeatureName.REPEAT_BOOKING:
+        await callback.answer(
+            "Повторная запись удалена из клиентских функций в v0.4.5.",
+            show_alert=True,
+        )
+        return
     try:
         snapshot = await feature_flag_service.set_enabled(
             staff_context,

@@ -510,23 +510,6 @@ class MasterWorkspaceService:
                     available_at=scheduled_at,
                 )
             )
-        if (
-            client.marketing_consent_at is not None
-            and client.repeat_booking_opt_out_at is None
-            and not client.is_blocked
-        ):
-            repeat_at = now + timedelta(days=settings.repeat_booking_reminder_days)
-            jobs.append(
-                NotificationJob(
-                    business_id=unit_of_work.business_id,
-                    appointment_id=appointment.id,
-                    recipient_user_id=client.id,
-                    notification_type=NotificationType.REPEAT_BOOKING_REMINDER,
-                    offset_minutes=settings.repeat_booking_reminder_days * 1440,
-                    scheduled_at=repeat_at,
-                    available_at=repeat_at,
-                )
-            )
         if jobs:
             await unit_of_work.notifications.add_all(jobs)
 

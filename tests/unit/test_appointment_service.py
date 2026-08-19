@@ -406,7 +406,7 @@ async def test_no_show_retention_starts_at_planned_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_completed_visit_schedules_repeat_only_with_marketing_consent() -> None:
+async def test_completed_visit_does_not_schedule_removed_repeat_reminder() -> None:
     target_client = client()
     target_client.marketing_consent_at = NOW
     target_appointment = appointment()
@@ -421,8 +421,4 @@ async def test_completed_visit_schedules_repeat_only_with_marketing_consent() ->
 
     batches = [call.args[0] for call in unit_of_work.notifications.add_all.await_args_list]
     jobs = [job for batch in batches for job in batch]
-    assert [job.notification_type for job in jobs] == [
-        NotificationType.REVIEW_REQUEST,
-        NotificationType.REPEAT_BOOKING_REMINDER,
-    ]
-    assert jobs[1].available_at == NOW + timedelta(days=28)
+    assert [job.notification_type for job in jobs] == [NotificationType.REVIEW_REQUEST]

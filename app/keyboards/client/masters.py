@@ -18,7 +18,6 @@ def public_master_keyboard(
     *,
     page: int = 1,
     pages: int = 1,
-    has_photo: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         *[[InlineKeyboardButton(text=f"🔗 {link.label}", url=link.url)] for link in social_links],
@@ -32,17 +31,6 @@ def public_master_keyboard(
             )
         ],
     ]
-    if has_photo:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🖼 Посмотреть фотографию",
-                    callback_data=PublicMasterCallback(
-                        action="photo", staff_member_id=staff_member_id, page=page
-                    ).pack(),
-                )
-            ]
-        )
     if pages > 1:
         navigation: list[InlineKeyboardButton] = []
         if page > 1:

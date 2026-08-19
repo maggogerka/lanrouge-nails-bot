@@ -70,6 +70,10 @@ class NotificationService:
             job = await self._claimed_job(unit_of_work, job_id, worker_id)
             if job is None:
                 return None
+            if job.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
+                await self._cancel_job(unit_of_work, job, "feature_removed")
+                await unit_of_work.commit()
+                return None
             required_feature = self._required_feature(job.notification_type)
             if not await is_feature_enabled(unit_of_work, required_feature):
                 await self._cancel_job(unit_of_work, job, "feature_disabled")
@@ -122,21 +126,6 @@ class NotificationService:
                     or await unit_of_work.reviews.get_for_appointment(appointment.id) is not None
                 ):
                     await self._cancel_job(unit_of_work, job, "review_not_actionable")
-                    await unit_of_work.commit()
-                    return None
-            elif job.notification_type is NotificationType.REPEAT_BOOKING_REMINDER:
-                service = await unit_of_work.services.get(appointment.service_id)
-                if (
-                    appointment.status is not AppointmentStatus.COMPLETED
-                    or recipient.marketing_consent_at is None
-                    or recipient.repeat_booking_opt_out_at is not None
-                    or await unit_of_work.appointments.has_future_active_for_client(
-                        recipient.id, current_time
-                    )
-                    or service is None
-                    or not service.is_active
-                ):
-                    await self._cancel_job(unit_of_work, job, "repeat_booking_not_actionable")
                     await unit_of_work.commit()
                     return None
             elif appointment.status not in ACTIVE_APPOINTMENT_STATUSES:

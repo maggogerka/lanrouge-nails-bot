@@ -7,7 +7,7 @@ from datetime import date
 from secrets import token_urlsafe
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InputMediaPhoto, Message, ReplyKeyboardRemove
@@ -57,9 +57,13 @@ async def cancel_booking_callback(
 ) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("Оформление записи отменено.")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).casefold():
+                raise
         await callback.message.answer(
-            "Главное меню:",
+            "Оформление записи отменено.",
             reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
         )
     await callback.answer()
@@ -256,7 +260,7 @@ async def handle_reference_action(
     menu_service: MenuService,
 ) -> None:
     if callback_data.action == "cancel":
-        await cancel_booking_callback(callback, state)
+        await cancel_booking_callback(callback, state, menu_service)
         return
     if callback_data.action == "back":
         await state.update_data(reference_media=[])

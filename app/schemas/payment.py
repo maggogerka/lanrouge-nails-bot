@@ -145,6 +145,23 @@ class PaymentAdminSection(StrEnum):
     HISTORY = "history"
 
 
+class ClientPaymentSection(StrEnum):
+    ACTIVE = "active"
+    HISTORY = "history"
+
+
+class ClientPaymentView(PaymentView):
+    """Client-owned payment plus safe appointment and instruction context."""
+
+    created_at: datetime
+    appointment_start_at: datetime
+    appointment_end_at: datetime
+    timezone: str
+    service_name: str
+    master_name: str
+    manual_payment_instructions: str | None = None
+
+
 class PaymentAdminView(PaymentView):
     """Payment plus safe appointment/client context for the staff panel."""
 

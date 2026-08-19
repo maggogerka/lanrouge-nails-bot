@@ -148,6 +148,87 @@ class PaymentRepository(TenantScopedRepository):
         rows = await self._session.execute(statement)
         return [(row[0], row[1], row[2]) for row in rows.all()]
 
+    async def list_for_client(
+        self,
+        client_id: int,
+        *,
+        statuses: Collection[PaymentStatus],
+        limit: int = 10,
+        offset: int = 0,
+    ) -> list[tuple[Payment, Appointment]]:
+        """Return only payments owned by one client in the current business."""
+
+        if client_id <= 0 or not statuses:
+            return []
+        if not 1 <= limit <= 50:
+            raise ValueError("limit must be between 1 and 50")
+        if offset < 0:
+            raise ValueError("offset must not be negative")
+        statement = (
+            select(Payment, Appointment)
+            .join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            )
+            .where(
+                Payment.business_id == self.business_id,
+                Appointment.client_id == client_id,
+                Payment.status.in_(statuses),
+            )
+            .order_by(Payment.created_at.desc(), Payment.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = await self._session.execute(statement)
+        return [(row[0], row[1]) for row in rows.all()]
+
+    async def count_for_client(
+        self,
+        client_id: int,
+        *,
+        statuses: Collection[PaymentStatus],
+    ) -> int:
+        if client_id <= 0 or not statuses:
+            return 0
+        statement = (
+            select(func.count(Payment.id))
+            .join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            )
+            .where(
+                Payment.business_id == self.business_id,
+                Appointment.client_id == client_id,
+                Payment.status.in_(statuses),
+            )
+        )
+        return int((await self._session.scalar(statement)) or 0)
+
+    async def get_for_client(
+        self,
+        payment_id: int,
+        client_id: int,
+    ) -> tuple[Payment, Appointment] | None:
+        if payment_id <= 0 or client_id <= 0:
+            return None
+        statement = (
+            select(Payment, Appointment)
+            .join(
+                Appointment,
+                (Appointment.id == Payment.appointment_id)
+                & (Appointment.business_id == self.business_id),
+            )
+            .where(
+                Payment.id == payment_id,
+                Payment.business_id == self.business_id,
+                Appointment.client_id == client_id,
+            )
+        )
+        row = (await self._session.execute(statement)).one_or_none()
+        return (row[0], row[1]) if row is not None else None
+
     async def count_with_context(
         self,
         *,

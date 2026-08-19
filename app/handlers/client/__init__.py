@@ -2,7 +2,7 @@
 
 from aiogram import Router
 
-from app.filters import IsAnyFeatureEnabled, IsFeatureEnabled
+from app.filters import IsFeatureEnabled
 from app.handlers.client.appointments import router as appointments_router
 from app.handlers.client.booking import router as booking_router
 from app.handlers.client.marketing import router as marketing_router
@@ -29,15 +29,9 @@ def _require_feature(target: Router, feature: FeatureName) -> None:
 _require_feature(booking_router, FeatureName.ONLINE_BOOKING)
 _require_feature(portfolio_router, FeatureName.PORTFOLIO)
 _require_feature(reviews_router, FeatureName.REVIEWS)
-_require_feature(repeat_booking_router, FeatureName.REPEAT_BOOKING)
 _require_feature(waitlist_router, FeatureName.WAITLIST)
 _require_feature(reminders_router, FeatureName.REMINDERS)
-notifications_router.message.filter(
-    IsAnyFeatureEnabled(FeatureName.REMINDERS, FeatureName.REPEAT_BOOKING)
-)
-notifications_router.callback_query.filter(
-    IsAnyFeatureEnabled(FeatureName.REMINDERS, FeatureName.REPEAT_BOOKING)
-)
+_require_feature(notifications_router, FeatureName.REMINDERS)
 router.include_routers(
     onboarding_router,
     payments_router,

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.5] - 2026-08-19
+
+### Fixed
+
+- public master cards now show their published photograph immediately and preserve safe one-card
+  pagination across photo/text transitions; the obsolete separate photo button is no longer shown;
+- cancelling booking from a photo-backed service card clears the active controls, ends the FSM and
+  returns the client to the current main menu without a Telegram media-edit error;
+- a missing dependency in the reference-photo cancellation path was corrected.
+
+### Changed
+
+- the client-facing repeat-booking feature and its controls are retired; no new repeat reminders are
+  scheduled, queued legacy reminders are cancelled without delivery, and stale Telegram buttons
+  receive a safe compatibility response;
+- «Мои оплаты» replaces the repeat-booking button and provides owner-scoped active/history lists,
+  bounded pagination, appointment context, current manual instructions, YooKassa links, receipt
+  actions, payment/refund states and strict server-side client ownership checks;
+- user documentation and release metadata now describe v0.4.5. No database migration is required.
+
 ## [0.4.4] - 2026-08-19
 
 ### Fixed
