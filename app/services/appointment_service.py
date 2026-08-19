@@ -552,25 +552,6 @@ class AppointmentService:
                         )
                     ]
                 )
-            if (
-                client.marketing_consent_at is not None
-                and client.repeat_booking_opt_out_at is None
-                and not client.is_blocked
-            ):
-                repeat_at = current_time + timedelta(days=settings.repeat_booking_reminder_days)
-                await unit_of_work.notifications.add_all(
-                    [
-                        NotificationJob(
-                            business_id=unit_of_work.business_id,
-                            appointment_id=appointment.id,
-                            recipient_user_id=client.id,
-                            notification_type=NotificationType.REPEAT_BOOKING_REMINDER,
-                            offset_minutes=settings.repeat_booking_reminder_days * 1440,
-                            scheduled_at=repeat_at,
-                            available_at=repeat_at,
-                        )
-                    ]
-                )
             await unit_of_work.audit.add(
                 actor_user_id=actor_user.id,
                 action="appointment.completed",
@@ -582,11 +563,6 @@ class AppointmentService:
                         "after": AppointmentStatus.COMPLETED.value,
                     },
                     "review_request_scheduled": settings.reviews_enabled,
-                    "repeat_reminder_scheduled": (
-                        client.marketing_consent_at is not None
-                        and client.repeat_booking_opt_out_at is None
-                        and not client.is_blocked
-                    ),
                 },
                 correlation_id=correlation_id,
             )

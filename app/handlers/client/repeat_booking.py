@@ -1,146 +1,29 @@
-"""Fast repeat booking from the latest completed appointment."""
+"""Compatibility response for stale repeat-booking callback buttons."""
 
 from __future__ import annotations
 
-from html import escape
-
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
-from app.domain.errors import DomainError
-from app.handlers.client.booking_common import available_dates
-from app.handlers.client.common import actor_from_telegram
-from app.keyboards.client.booking import BookingCallback, dates_keyboard
-from app.keyboards.client.main import CLIENT_REPEAT_TEXT
+from app.keyboards.client.main import client_main_keyboard
 from app.keyboards.client.repeat_booking import RepeatBookingCallback
-from app.keyboards.client.waitlist import WaitlistCallback
-from app.services.booking_service import BookingService
-from app.services.repeat_booking_service import RepeatBookingService
-from app.states.booking import BookingFlow
-from app.utils.pricing import format_rub_price
+from app.services.menu_service import MenuService
 
 router = Router(name="client.repeat_booking")
 
 
-async def _show_repeat_offer(
-    target: Message | CallbackQuery,
+@router.callback_query(RepeatBookingCallback.filter())
+async def stale_repeat_booking_callback(
+    callback: CallbackQuery,
     state: FSMContext,
-    repeat_service: RepeatBookingService,
-    booking_service: BookingService,
+    menu_service: MenuService,
 ) -> None:
-    if target.from_user is None:
-        return
-    actor = actor_from_telegram(target.from_user)
-    try:
-        offer = await repeat_service.get_offer(actor)
-    except DomainError as exc:
-        message = target.message if isinstance(target, CallbackQuery) else target
-        if isinstance(message, Message):
-            await message.answer(str(exc), parse_mode=None)
-        return
-    message = target.message if isinstance(target, CallbackQuery) else target
-    if not isinstance(message, Message):
-        return
-    if not offer.service_active:
-        await message.answer(
-            "Услуга из прошлой записи сейчас недоступна. Выберите действующую услугу "
-            "или уточните варианты у мастера.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Выбрать другую услугу",
-                            callback_data=BookingCallback(
-                                action="back_services", object_id=0
-                            ).pack(),
-                        )
-                    ],
-                    *(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    text="Написать мастеру", url=offer.master_telegram_url
-                                )
-                            ]
-                        ]
-                        if offer.master_telegram_url
-                        else []
-                    ),
-                ]
-            ),
-        )
-        return
-    availability = await booking_service.list_availability(actor, offer.service_id)
-    if offer.current_price is None:
-        await message.answer(
-            "Не удалось определить текущую цену услуги. Выберите другую услугу "
-            "или уточните стоимость у мастера."
-        )
-        return
-    price_text = f"Текущая цена: {format_rub_price(offer.current_price)}."
-    if offer.price_changed:
-        price_text += f" Ранее было {format_rub_price(offer.previous_price)}."
-    dates = available_dates(availability.windows)
-    if not dates:
-        await message.answer(
-            f"{escape(offer.service_name)}. {price_text}\nСейчас свободных окон нет.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="Добавить в лист ожидания",
-                            callback_data=WaitlistCallback(
-                                action="service", object_id=offer.service_id
-                            ).pack(),
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
     await state.clear()
-    await state.update_data(service_id=offer.service_id)
-    await state.set_state(BookingFlow.date)
-    await message.answer(
-        f"Повторяем услугу «{escape(offer.service_name)}». {price_text}\nВыберите новую дату:",
-        reply_markup=dates_keyboard(dates),
-    )
-
-
-@router.message(F.text == CLIENT_REPEAT_TEXT)
-async def repeat_from_menu(
-    message: Message,
-    state: FSMContext,
-    repeat_booking_service: RepeatBookingService,
-    booking_service: BookingService,
-) -> None:
-    await _show_repeat_offer(message, state, repeat_booking_service, booking_service)
-
-
-@router.callback_query(RepeatBookingCallback.filter(F.action == "start"))
-async def repeat_from_reminder(
-    callback: CallbackQuery,
-    state: FSMContext,
-    repeat_booking_service: RepeatBookingService,
-    booking_service: BookingService,
-) -> None:
-    await _show_repeat_offer(callback, state, repeat_booking_service, booking_service)
-    await callback.answer()
-
-
-@router.callback_query(RepeatBookingCallback.filter(F.action == "opt_out"))
-async def opt_out_repeat_reminders(
-    callback: CallbackQuery,
-    repeat_booking_service: RepeatBookingService,
-    correlation_id: str,
-) -> None:
-    await repeat_booking_service.opt_out(
-        actor_from_telegram(callback.from_user), correlation_id=correlation_id
-    )
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            "Напоминания о повторной записи отключены. Сервисные сообщения о ваших "
-            "действующих записях продолжат приходить."
+            "Раздел «Повторить запись» больше не используется. Для новой записи нажмите "
+            "«✨ Записаться».",
+            reply_markup=client_main_keyboard(await menu_service.get_capabilities()),
         )
-    await callback.answer()
+    await callback.answer("Меню обновлено")

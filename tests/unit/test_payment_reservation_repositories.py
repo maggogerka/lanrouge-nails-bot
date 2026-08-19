@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.database.models.commerce import BookingReservation
 from app.database.models.payment import PaymentWebhookEvent, Refund
-from app.domain.enums import PaymentMode, RefundStatus, ReservationStatus
+from app.domain.enums import PaymentMode, PaymentStatus, RefundStatus, ReservationStatus
 from app.domain.payments import WebhookProcessingStatus
 from app.repositories.appointment_repository import AppointmentRepository
 from app.repositories.payment_repository import PaymentRepository
@@ -140,6 +140,21 @@ async def test_payment_pending_refund_sum_is_business_scoped() -> None:
     assert "refunds.business_id" in compiled
     assert "refunds.payment_id" in compiled
     assert "refunds.status" in compiled
+
+
+@pytest.mark.asyncio
+async def test_client_payment_query_is_tenant_and_owner_scoped() -> None:
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=ScalarRows(rows=[]))
+    repository = PaymentRepository(session, 7)
+
+    await repository.list_for_client(31, statuses={PaymentStatus.PENDING}, limit=7, offset=0)
+
+    compiled = sql(session.execute.await_args.args[0])
+    assert "payments.business_id" in compiled
+    assert "appointments.business_id" in compiled
+    assert "appointments.client_id" in compiled
+    assert "payments.status" in compiled
 
 
 @pytest.mark.asyncio

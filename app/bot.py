@@ -45,6 +45,7 @@ from app.services import (
     BookingService,
     BroadcastService,
     BusinessAdministrationService,
+    ClientPaymentService,
     ConsentService,
     CrmService,
     DeletionRequestNotificationService,
@@ -61,7 +62,6 @@ from app.services import (
     PresentationService,
     PrivacyDeletionRuntimeService,
     ReferenceCleanupService,
-    RepeatBookingService,
     RescheduleService,
     ReviewService,
     ServiceCatalog,
@@ -157,6 +157,7 @@ def create_dispatcher(
     manual_prepayment_service = ManualPrepaymentService(
         lambda: SqlAlchemyUnitOfWork(database.sessions)
     )
+    client_payment_service = ClientPaymentService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     manual_payment_service = configured_payment_services[PaymentMode.MANUAL]
     payment_admin_service = PaymentAdministrationService(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
@@ -205,7 +206,6 @@ def create_dispatcher(
         lambda: SqlAlchemyUnitOfWork(database.sessions),
         runtime_admin_ids,
     )
-    repeat_booking_service = RepeatBookingService(lambda: SqlAlchemyUnitOfWork(database.sessions))
     broadcast_service = BroadcastService(
         lambda: SqlAlchemyUnitOfWork(database.sessions), runtime_admin_ids
     )
@@ -253,6 +253,7 @@ def create_dispatcher(
         deletion_request_notification_service=deletion_request_notification_service,
         booking_service=booking_service,
         manual_prepayment_service=manual_prepayment_service,
+        client_payment_service=client_payment_service,
         business_service=business_service,
         subscription_service=subscription_service,
         payment_admin_service=payment_admin_service,
@@ -263,7 +264,6 @@ def create_dispatcher(
         crm_service=crm_service,
         waitlist_service=waitlist_service,
         review_service=review_service,
-        repeat_booking_service=repeat_booking_service,
         broadcast_service=broadcast_service,
         marketing_event_service=marketing_event_service,
         master_profile_service=master_profile_service,

@@ -4,8 +4,10 @@ from collections.abc import Sequence
 from html import escape
 
 from aiogram import F, Router
+from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app.domain.errors import DomainError
 from app.handlers.client.booking_browse import show_service_cards, start_booking
@@ -32,7 +34,13 @@ from app.services.feature_flag_service import FeatureFlagService
 from app.services.menu_service import MenuService
 from app.services.presentation_service import PresentationService
 from app.utils.pagination import paginate_sequence
-from app.utils.telegram import edit_text_safely
+from app.utils.telegram import (
+    answer_html_safely,
+    answer_photo_with_html,
+    edit_photo_safely,
+    edit_text_safely,
+)
+from app.utils.telegram_text import fits_telegram_caption, split_telegram_html
 
 router = Router(name="client.menu")
 
@@ -85,6 +93,7 @@ async def show_contacts(
 @router.message(F.text == CLIENT_MASTERS_TEXT)
 async def show_masters(
     message: Message,
+    state: FSMContext,
     presentation_service: PresentationService,
 ) -> None:
     try:
@@ -95,11 +104,50 @@ async def show_masters(
     if not masters:
         await message.answer("Доступные мастера пока не опубликованы.")
         return
-    await _render_master_card(message, masters, page=1, edit=False)
+    await state.clear()
+    await state.update_data(master_auxiliary_message_ids=[])
+    await _render_master_card(message, state, masters, page=1, edit=False)
+
+
+async def _remember_master_auxiliary_messages(state: FSMContext, sent: list[Message]) -> None:
+    message_ids = [
+        raw_message_id
+        for item in sent[:-1]
+        if isinstance((raw_message_id := getattr(item, "message_id", None)), int)
+    ]
+    await state.update_data(master_auxiliary_message_ids=message_ids)
+
+
+async def _clear_master_auxiliary_messages(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    raw_message_ids = data.get("master_auxiliary_message_ids", [])
+    message_ids = (
+        [item for item in raw_message_ids if isinstance(item, int) and item > 0]
+        if isinstance(raw_message_ids, list)
+        else []
+    )
+    bot = message.bot
+    if bot is not None:
+        for message_id in message_ids:
+            try:
+                await bot.delete_message(message.chat.id, message_id)
+            except TelegramBadRequest as exc:
+                if "message to delete not found" not in str(exc).casefold():
+                    raise
+    await state.update_data(master_auxiliary_message_ids=[])
+
+
+async def _delete_master_card_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except TelegramBadRequest as exc:
+        if "message to delete not found" not in str(exc).casefold():
+            raise
 
 
 async def _render_master_card(
     message: Message,
+    state: FSMContext,
     masters: Sequence[PublicMasterPresentation],
     *,
     page: int,
@@ -115,26 +163,45 @@ async def _render_master_card(
         lines.append(escape(master.specialization))
     if master.bio:
         lines.append(escape(master.bio))
-    if master.telegram_photo_file_id:
-        lines.append("🖼 Фотография доступна по кнопке ниже.")
     text = "\n".join(lines)
     keyboard = public_master_keyboard(
         master.staff_member_id,
         master.social_links,
         page=paged.page,
         pages=paged.pages,
-        has_photo=bool(master.telegram_photo_file_id),
     )
-    if edit and not message.photo:
+    photo_file_id = master.telegram_photo_file_id
+    if not edit:
+        if photo_file_id:
+            sent = await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+        else:
+            sent = await answer_html_safely(message, text, reply_markup=keyboard)
+        await _remember_master_auxiliary_messages(state, sent)
+    elif message.photo and photo_file_id and fits_telegram_caption(text, html=True):
+        await _clear_master_auxiliary_messages(message, state)
+        await edit_photo_safely(
+            message,
+            InputMediaPhoto(media=photo_file_id, caption=text, parse_mode=ParseMode.HTML),
+            reply_markup=keyboard,
+        )
+    elif not message.photo and not photo_file_id and len(split_telegram_html(text)) == 1:
+        await _clear_master_auxiliary_messages(message, state)
         await edit_text_safely(message, text, reply_markup=keyboard)
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await _clear_master_auxiliary_messages(message, state)
+        await _delete_master_card_message(message)
+        if photo_file_id:
+            sent = await answer_photo_with_html(message, photo_file_id, text, reply_markup=keyboard)
+        else:
+            sent = await answer_html_safely(message, text, reply_markup=keyboard)
+        await _remember_master_auxiliary_messages(state, sent)
 
 
 @router.callback_query(PublicMasterCallback.filter(F.action == "page"))
 async def browse_masters(
     callback: CallbackQuery,
     callback_data: PublicMasterCallback,
+    state: FSMContext,
     presentation_service: PresentationService,
 ) -> None:
     masters = await presentation_service.list_bookable_masters()
@@ -142,7 +209,9 @@ async def browse_masters(
         await callback.answer("Мастера больше не доступны.", show_alert=True)
         return
     if isinstance(callback.message, Message):
-        await _render_master_card(callback.message, masters, page=callback_data.page, edit=True)
+        await _render_master_card(
+            callback.message, state, masters, page=callback_data.page, edit=True
+        )
     await callback.answer()
 
 
@@ -152,19 +221,11 @@ async def show_master_photo(
     callback_data: PublicMasterCallback,
     presentation_service: PresentationService,
 ) -> None:
-    masters = await presentation_service.list_bookable_masters()
-    master = next(
-        (item for item in masters if item.staff_member_id == callback_data.staff_member_id), None
+    del callback_data, presentation_service
+    await callback.answer(
+        "Фотография теперь показывается прямо в карточке мастера. Обновите раздел «Мастера».",
+        show_alert=True,
     )
-    if master is None or not master.telegram_photo_file_id:
-        await callback.answer("Фотография больше не доступна.", show_alert=True)
-        return
-    if isinstance(callback.message, Message):
-        await callback.message.answer_photo(
-            master.telegram_photo_file_id,
-            caption=f"<b>{escape(master.display_name)}</b>",
-        )
-    await callback.answer()
 
 
 @router.callback_query(PublicMasterCallback.filter(F.action == "book"))

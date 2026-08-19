@@ -30,7 +30,11 @@ FEATURE_LABELS: dict[FeatureName, str] = {
     FeatureName.CLIENT_SUPPORT: "Поддержка клиентов",
 }
 
-_HIDDEN_UNFINISHED_FEATURES = {FeatureName.LOYALTY, FeatureName.MINI_APP}
+_HIDDEN_UNFINISHED_FEATURES = {
+    FeatureName.LOYALTY,
+    FeatureName.MINI_APP,
+    FeatureName.REPEAT_BOOKING,
+}
 
 
 def feature_flags_keyboard(

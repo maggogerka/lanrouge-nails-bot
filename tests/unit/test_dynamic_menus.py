@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.domain.enums import PortfolioDisplayMode, StaffRole
+from app.keyboards.admin.features import feature_flags_keyboard
 from app.keyboards.admin.main import (
     ADMIN_CLIENTS_TEXT,
     ADMIN_REVIEWS_TEXT,
@@ -17,11 +18,14 @@ from app.keyboards.admin.main import (
 from app.keyboards.client.main import (
     CLIENT_MASTER_PROFILE_TEXT,
     CLIENT_MASTERS_TEXT,
+    CLIENT_PAYMENTS_TEXT,
     CLIENT_PORTFOLIO_TEXT,
+    CLIENT_REPEAT_TEXT,
     CLIENT_REVIEWS_TEXT,
     client_main_keyboard,
 )
 from app.schemas.authorization import StaffContext
+from app.schemas.features import FeatureSnapshot
 from app.schemas.menu import MenuCapabilities
 from app.services.menu_service import MenuService
 
@@ -168,7 +172,7 @@ async def test_central_flags_drive_client_capabilities_and_fail_closed() -> None
     assert not capabilities.portfolio_visible
     assert not capabilities.reviews_visible
     assert not capabilities.notifications_visible
-    assert not capabilities.repeat_booking_visible
+    assert capabilities.payments_visible
     assert not capabilities.support_visible
 
 
@@ -216,6 +220,19 @@ def test_admin_menu_hides_reviews_when_feature_is_disabled() -> None:
 
 def test_default_keyboards_remain_backward_compatible() -> None:
     assert CLIENT_REVIEWS_TEXT in texts(client_main_keyboard())
+    assert CLIENT_PAYMENTS_TEXT in texts(client_main_keyboard())
+    assert CLIENT_REPEAT_TEXT not in texts(client_main_keyboard())
+
+
+def test_removed_repeat_booking_is_hidden_from_admin_features() -> None:
+    snapshot = FeatureSnapshot.model_validate(
+        {field: True for field in FeatureSnapshot.model_fields}
+    )
+
+    keyboard = feature_flags_keyboard(snapshot, can_manage=True)
+    labels = {button.text for row in keyboard.inline_keyboard for button in row}
+
+    assert all("Повторная запись" not in label for label in labels)
 
 
 def test_admin_keyboard_fails_closed_without_verified_staff_context() -> None:

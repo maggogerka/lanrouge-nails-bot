@@ -1,4 +1,4 @@
-"""Client-managed marketing and repeat-booking notification preferences."""
+"""Client-managed marketing notification preferences."""
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
@@ -18,16 +18,12 @@ router = Router(name="client.notifications")
 
 def _text(preferences: NotificationPreferences) -> str:
     marketing = "включены" if preferences.marketing_enabled else "отключены"
-    repeat = "включены" if preferences.repeat_booking_enabled else "отключены"
     return (
         "<b>Настройки уведомлений</b>\n\n"
         "✅ Сервисные сообщения о записи: всегда включены\n"
-        f"{'✅' if preferences.marketing_enabled else '❌'} Рекламные сообщения: {marketing}\n"
-        f"{'✅' if preferences.repeat_booking_enabled else '❌'} "
-        f"Напоминания о повторной записи: {repeat}\n\n"
-        "Отказ от рекламы не отключает подтверждения, переносы и напоминания "
-        "по действующей записи. Повторные напоминания отправляются только при "
-        "включённой рекламной подписке."
+        f"{'✅' if preferences.marketing_enabled else '❌'} Рекламные сообщения: {marketing}\n\n"
+        "Отказ от рекламы не отключает подтверждения, переносы, оплату и напоминания "
+        "по действующей записи."
     )
 
 
@@ -71,11 +67,10 @@ async def change_notification_settings(
             ).repeat_booking_enabled,
         )
     else:
-        preferences = await consent_service.set_repeat_booking(
-            actor,
-            accepted=callback_data.action == "repeat_on",
-            correlation_id=correlation_id,
+        await callback.answer(
+            "Напоминания о повторной записи больше не используются.", show_alert=True
         )
+        return
     if isinstance(callback.message, Message):
         await _render(callback.message, preferences, edit=True)
     await callback.answer("Настройки сохранены")

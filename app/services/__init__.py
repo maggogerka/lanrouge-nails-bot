@@ -28,7 +28,6 @@ from app.services.privacy_service import (
     PrivacyDeletionRuntimeService,
 )
 from app.services.reference_cleanup_service import ReferenceCleanupService
-from app.services.repeat_booking_service import RepeatBookingService
 from app.services.reschedule_service import RescheduleService
 from app.services.review_service import ReviewService
 from app.services.service_catalog import ServiceCatalog
@@ -67,7 +66,6 @@ __all__ = [
     "PresentationService",
     "PrivacyDeletionRuntimeService",
     "ReferenceCleanupService",
-    "RepeatBookingService",
     "RescheduleService",
     "ReviewService",
     "ServiceCatalog",
