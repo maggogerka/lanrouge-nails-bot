@@ -45,6 +45,7 @@ lanrouge-reminders = "app.workers.reminders:run"
 lanrouge-broadcasts = "app.workers.broadcasts:run"
 lanrouge-reference-cleanup = "app.workers.reference_cleanup:run"
 lanrouge-cleanup-references = "app.maintenance.cleanup_references:main"
+lanrouge-demo-cleanup = "app.maintenance.demo_cleanup:run"
 booking-crm-bot = "app.bot:run"
 
 [tool.setuptools.packages.find]

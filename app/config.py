@@ -8,6 +8,7 @@ import re
 import stat
 from enum import StrEnum
 from functools import lru_cache
+from hashlib import sha256
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Self
@@ -35,6 +36,13 @@ class AppEnvironment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     PRODUCTION = "production"
+
+
+class AppMode(StrEnum):
+    """Mutually exclusive product runtimes sharing one codebase."""
+
+    PRODUCTION = "production"
+    DEMO = "demo"
 
 
 class YooKassaFiscalizationMode(StrEnum):
@@ -148,6 +156,40 @@ class Settings(BaseSettings):
     app_env: AppEnvironment = Field(
         default=AppEnvironment.DEVELOPMENT,
         validation_alias="APP_ENV",
+    )
+    app_mode: AppMode = Field(default=AppMode.PRODUCTION, validation_alias="APP_MODE")
+    production_bot_token_sha256: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias="PRODUCTION_BOT_TOKEN_SHA256",
+    )
+    production_database_url_sha256: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias="PRODUCTION_DATABASE_URL_SHA256",
+    )
+    demo_site_url: AnyHttpUrl | None = Field(default=None, validation_alias="DEMO_SITE_URL")
+    demo_session_ttl_hours: int = Field(
+        default=2,
+        ge=1,
+        le=12,
+        validation_alias="DEMO_SESSION_TTL_HOURS",
+    )
+    demo_data_retention_hours: int = Field(
+        default=24,
+        ge=2,
+        le=72,
+        validation_alias="DEMO_DATA_RETENTION_HOURS",
+    )
+    demo_reset_cooldown_seconds: int = Field(
+        default=60,
+        ge=30,
+        le=3600,
+        validation_alias="DEMO_RESET_COOLDOWN_SECONDS",
+    )
+    demo_rate_limit_per_minute: int = Field(
+        default=30,
+        ge=5,
+        le=60,
+        validation_alias="DEMO_RATE_LIMIT_PER_MINUTE",
     )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     privacy_policy_url: AnyHttpUrl | None = Field(
@@ -685,6 +727,7 @@ class Settings(BaseSettings):
             missing.insert(0, "BOT_TOKEN")
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
+        self._validate_mode_boundary()
 
     def validate_dependency_runtime(self) -> None:
         """Check values required by migrations and dependency health checks."""
@@ -692,12 +735,14 @@ class Settings(BaseSettings):
         missing = self._missing_connections()
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
+        self._validate_database_mode_marker()
 
     def validate_database_runtime(self) -> None:
         """Check the single value required by the Alembic process."""
 
         if not self.database_url.get_secret_value():
             raise RuntimeConfigurationError(("DATABASE_URL",))
+        self._validate_database_mode_marker()
 
     def validate_worker_runtime(self) -> None:
         """Check values used by the independent reminder worker."""
@@ -790,6 +835,59 @@ class Settings(BaseSettings):
         if not self.redis_url.get_secret_value():
             missing.append("REDIS_URL")
         return missing
+
+    @property
+    def is_demo(self) -> bool:
+        """Return whether this process is the isolated public demonstration."""
+
+        return self.app_mode is AppMode.DEMO
+
+    def _validate_mode_boundary(self) -> None:
+        """Fail closed before a demo process can touch production integrations."""
+
+        self._validate_database_mode_marker()
+        if not self.is_demo:
+            return
+
+        missing: list[str] = []
+        bot_fingerprint = self.production_bot_token_sha256.get_secret_value().lower()
+        database_fingerprint = self.production_database_url_sha256.get_secret_value().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", bot_fingerprint):
+            missing.append("PRODUCTION_BOT_TOKEN_SHA256")
+        if not re.fullmatch(r"[0-9a-f]{64}", database_fingerprint):
+            missing.append("PRODUCTION_DATABASE_URL_SHA256")
+        if missing:
+            raise RuntimeConfigurationError(tuple(missing))
+
+        bot_digest = sha256(self.bot_token.get_secret_value().encode("utf-8")).hexdigest()
+        database_digest = sha256(
+            self.database_url.get_secret_value().encode("utf-8")
+        ).hexdigest()
+        if bot_digest == bot_fingerprint:
+            raise ValueError("Demo BOT_TOKEN must differ from the production token")
+        if database_digest == database_fingerprint:
+            raise ValueError("Demo DATABASE_URL must differ from the production database")
+        if self.admin_telegram_ids:
+            raise ValueError("ADMIN_TELEGRAM_IDS must be empty in demo mode")
+        if self.sentry_dsn is not None:
+            raise ValueError("SENTRY_DSN is forbidden in demo mode")
+        if self.yookassa_values_present:
+            raise ValueError("YooKassa credentials and return URLs are forbidden in demo mode")
+        if self.mini_app_allowed_origins:
+            raise ValueError("Production API and Mini App settings are forbidden in demo mode")
+
+    def _validate_database_mode_marker(self) -> None:
+        """Require an obvious database-name marker to prevent profile mix-ups."""
+
+        configured = self.database_url.get_secret_value()
+        if not configured:
+            return
+        database_name = urlsplit(configured).path.rsplit("/", maxsplit=1)[-1].casefold()
+        marked_as_demo = "demo" in database_name
+        if self.is_demo and not marked_as_demo:
+            raise ValueError("Demo DATABASE_URL database name must contain 'demo'")
+        if not self.is_demo and marked_as_demo:
+            raise ValueError("Production mode refuses a DATABASE_URL marked as demo")
 
     @staticmethod
     def _require_secret_length(name: str, value: SecretStr) -> None:

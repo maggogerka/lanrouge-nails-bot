@@ -14,6 +14,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 
 from app.config import RuntimeConfigurationError, Settings, get_settings
 from app.database import Database
+from app.demo.composition import create_demo_dispatcher
 from app.domain.enums import PaymentMode
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.handlers import root_router
@@ -84,6 +85,9 @@ def create_dispatcher(
     payment_services: Mapping[PaymentMode, PaymentService] | None = None,
 ) -> Dispatcher:
     """Build a Dispatcher without opening Telegram connections."""
+
+    if settings.is_demo:
+        return create_demo_dispatcher(settings, database)
 
     authorization_service = authorization_service or AuthorizationService(database.sessions)
     # ADMIN_TELEGRAM_IDS is consumed only by startup bootstrap. Runtime legacy
@@ -297,47 +301,51 @@ async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
     database = Database.from_settings(settings)
     dispatcher: Dispatcher | None = None
     payment_transport: AioHttpTransport | None = None
-    if not settings.admin_telegram_ids:
+    if not settings.is_demo and not settings.admin_telegram_ids:
         log_event(logger, logging.WARNING, "configuration.admin_ids_empty")
 
     try:
-        authorization_service = AuthorizationService(database.sessions)
-        bootstrap_result = await authorization_service.bootstrap_owners(
-            business_id=DEFAULT_BUSINESS_ID,
-            telegram_ids=settings.configured_owner_telegram_ids,
-        )
-        log_event(
-            logger,
-            logging.INFO,
-            "authorization.owner_bootstrap_completed",
-            created_count=len(bootstrap_result.created),
-            skipped_existing_count=bootstrap_result.skipped_existing_count,
-            owner_already_present=bootstrap_result.owner_already_present,
-        )
-        payment_services: dict[PaymentMode, PaymentService] = {
-            PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())
-        }
-        if settings.yookassa_runtime_ready:
-            payment_transport = AioHttpTransport()
-            await payment_transport.start()
-            payment_services[PaymentMode.YOOKASSA] = PaymentService(
-                YooKassaPaymentProvider(
-                    payment_transport,
-                    shop_id=settings.yookassa_shop_id.get_secret_value(),
-                    secret_key=settings.yookassa_secret_key,
-                )
+        if settings.is_demo:
+            dispatcher = create_demo_dispatcher(settings, database)
+        else:
+            authorization_service = AuthorizationService(database.sessions)
+            bootstrap_result = await authorization_service.bootstrap_owners(
+                business_id=DEFAULT_BUSINESS_ID,
+                telegram_ids=settings.configured_owner_telegram_ids,
             )
-        dispatcher = create_dispatcher(
-            settings,
-            database,
-            authorization_service,
-            payment_services,
-        )
+            log_event(
+                logger,
+                logging.INFO,
+                "authorization.owner_bootstrap_completed",
+                created_count=len(bootstrap_result.created),
+                skipped_existing_count=bootstrap_result.skipped_existing_count,
+                owner_already_present=bootstrap_result.owner_already_present,
+            )
+            payment_services: dict[PaymentMode, PaymentService] = {
+                PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())
+            }
+            if settings.yookassa_runtime_ready:
+                payment_transport = AioHttpTransport()
+                await payment_transport.start()
+                payment_services[PaymentMode.YOOKASSA] = PaymentService(
+                    YooKassaPaymentProvider(
+                        payment_transport,
+                        shop_id=settings.yookassa_shop_id.get_secret_value(),
+                        secret_key=settings.yookassa_secret_key,
+                    )
+                )
+            dispatcher = create_dispatcher(
+                settings,
+                database,
+                authorization_service,
+                payment_services,
+            )
         log_event(
             logger,
             logging.INFO,
             "bot.starting",
             app_env=settings.app_env.value,
+            app_mode=settings.app_mode.value,
             bootstrap_admin_count=len(settings.admin_telegram_ids),
         )
         async with Bot(
@@ -373,6 +381,7 @@ def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     try:
+        settings.validate_bot_runtime()
         initialize_observability(settings)
         asyncio.run(run_polling(settings))
     except RuntimeConfigurationError as exc:
