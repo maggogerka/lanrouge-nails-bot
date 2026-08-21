@@ -1,28 +1,28 @@
-"""Public demo configuration, policy and relative-date guarantees."""
+"""Public demo safety, configuration and immutable-catalogue contracts."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+import ast
+import inspect
 from hashlib import sha256
-from zoneinfo import ZoneInfo
+from pathlib import Path
 
 import pytest
 
 from app.config import AppMode, RuntimeConfigurationError, Settings
-from app.database.models.demo import DemoSession
+from app.demo.composition import create_demo_dispatcher
+from app.demo.keyboards import admin_menu, client_menu, main_menu, master_menu
 from app.demo.policy import DemoActionBlocked, DemoOperation, DemoPolicy
-from app.demo.seed import build_slot_seed
-from app.demo.service import DemoService, DemoStaleAction
+from app.demo.service import DemoForm, DemoScreen, DemoService
 
 
 def demo_settings(**overrides: str) -> Settings:
     values = {
         "APP_MODE": "demo",
         "BOT_TOKEN": "123456:separate-demo-token",
-        "DATABASE_URL": "postgresql+asyncpg://demo:password@localhost/crm_demo",
+        "DATABASE_URL": "",
         "REDIS_URL": "redis://localhost:6379/1",
         "PRODUCTION_BOT_TOKEN_SHA256": sha256(b"production-token").hexdigest(),
-        "PRODUCTION_DATABASE_URL_SHA256": sha256(b"production-database").hexdigest(),
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[arg-type]
@@ -34,87 +34,135 @@ def test_production_is_the_default_mode() -> None:
     assert settings.app_mode is AppMode.PRODUCTION
 
 
-def test_demo_requires_production_fingerprints() -> None:
-    settings = demo_settings(
-        PRODUCTION_BOT_TOKEN_SHA256="",
-        PRODUCTION_DATABASE_URL_SHA256="",
-    )
+def test_demo_requires_only_redis_token_and_production_token_fingerprint() -> None:
+    settings = demo_settings(PRODUCTION_BOT_TOKEN_SHA256="")
 
     with pytest.raises(RuntimeConfigurationError) as error:
         settings.validate_bot_runtime()
 
-    assert error.value.missing == (
-        "PRODUCTION_BOT_TOKEN_SHA256",
-        "PRODUCTION_DATABASE_URL_SHA256",
-    )
+    assert error.value.missing == ("PRODUCTION_BOT_TOKEN_SHA256",)
 
 
-def test_demo_rejects_reused_token_and_database_without_rendering_secrets() -> None:
+def test_demo_rejects_reused_token_without_rendering_secret() -> None:
     token = "123456:separate-demo-token"
-    database_url = "postgresql+asyncpg://demo:password@localhost/crm_demo"
-    token_settings = demo_settings(
-        PRODUCTION_BOT_TOKEN_SHA256=sha256(token.encode()).hexdigest()
-    )
-    with pytest.raises(ValueError, match="must differ") as token_error:
-        token_settings.validate_bot_runtime()
-    assert token not in str(token_error.value)
+    settings = demo_settings(PRODUCTION_BOT_TOKEN_SHA256=sha256(token.encode()).hexdigest())
 
-    database_settings = demo_settings(
-        PRODUCTION_DATABASE_URL_SHA256=sha256(database_url.encode()).hexdigest()
-    )
-    with pytest.raises(ValueError, match="must differ") as database_error:
-        database_settings.validate_bot_runtime()
-    assert "password" not in str(database_error.value)
+    with pytest.raises(ValueError, match="must differ") as error:
+        settings.validate_bot_runtime()
+
+    assert token not in str(error.value)
 
 
-def test_mode_database_markers_fail_closed() -> None:
-    with pytest.raises(ValueError, match="contain 'demo'"):
-        demo_settings(DATABASE_URL="postgresql+asyncpg://demo@localhost/crm").validate_bot_runtime()
+def test_demo_forbids_every_database_url() -> None:
+    settings = demo_settings(DATABASE_URL="postgresql+asyncpg://demo:secret@localhost/crm_demo")
 
-    production = Settings(  # type: ignore[call-arg]
-        _env_file=None,
-        BOT_TOKEN="123456:production",
-        DATABASE_URL="postgresql+asyncpg://prod@localhost/crm_demo",
-        REDIS_URL="redis://localhost:6379/0",
-    )
-    with pytest.raises(ValueError, match="refuses"):
-        production.validate_bot_runtime()
+    with pytest.raises(ValueError, match="forbidden") as error:
+        settings.validate_bot_runtime()
+
+    assert "secret" not in str(error.value)
 
 
-def test_demo_policy_blocks_every_external_side_effect() -> None:
+@pytest.mark.parametrize(
+    "validator",
+    [
+        "validate_dependency_runtime",
+        "validate_database_runtime",
+        "validate_worker_runtime",
+        "validate_api_runtime",
+        "validate_yookassa_runtime",
+        "validate_reservation_worker_runtime",
+    ],
+)
+def test_demo_forbids_every_production_component(validator: str) -> None:
+    settings = demo_settings()
+
+    with pytest.raises(ValueError, match="forbidden in demo mode"):
+        getattr(settings, validator)()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ADMIN_TELEGRAM_IDS", "100"),
+        ("SENTRY_DSN", "https://key@example.com/1"),
+        ("YOOKASSA_SHOP_ID", "shop"),
+        ("MINI_APP_ALLOWED_ORIGINS", "https://example.com"),
+    ],
+)
+def test_demo_forbids_production_integrations(name: str, value: str) -> None:
+    with pytest.raises(ValueError):
+        demo_settings(**{name: value}).validate_bot_runtime()
+
+
+def test_demo_policy_blocks_every_business_side_effect() -> None:
     policy = DemoPolicy()
-    for operation in (
-        DemoOperation.PAYMENT,
-        DemoOperation.REFUND,
-        DemoOperation.BROADCAST,
-        DemoOperation.EXTERNAL_NOTIFICATION,
-        DemoOperation.STAFF_INVITATION,
-        DemoOperation.OWNER_BOOTSTRAP,
-        DemoOperation.BACKUP,
-        DemoOperation.PERSONAL_DATA_EXPORT,
-        DemoOperation.FILE_UPLOAD,
-        DemoOperation.PRODUCTION_API,
-    ):
-        with pytest.raises(DemoActionBlocked):
+    allowed = {
+        DemoOperation.READ,
+        DemoOperation.NAVIGATE,
+        DemoOperation.TRANSIENT_STATE,
+    }
+
+    for operation in DemoOperation:
+        if operation in allowed:
             policy.require(operation)
+        else:
+            with pytest.raises(DemoActionBlocked):
+                policy.require(operation)
 
 
-def test_seed_windows_are_relative_to_current_date() -> None:
-    now = datetime(2031, 2, 10, 14, 20, tzinfo=UTC)
-    slots = build_slot_seed(now, ZoneInfo("Europe/Moscow"))
+def test_every_form_finishes_at_a_blocked_operation() -> None:
+    service = DemoService(demo_settings().timezone_info)
 
-    assert slots
-    assert all(item.start_at > now for item in slots)
-    assert max(item.start_at for item in slots) <= now + timedelta(days=15)
-    assert len({item.start_at.date() for item in slots}) >= 7
+    for form_id in DemoForm:
+        spec = service.form(form_id)
+        assert spec.steps
+        with pytest.raises(DemoActionBlocked):
+            service.reject(spec.operation)
 
 
-def test_old_callback_generation_is_invalid_after_reset() -> None:
-    workspace = DemoSession(
-        telegram_user_id=100,
-        generation=2,
-        expires_at=datetime.now(UTC) + timedelta(hours=2),
-    )
+def test_demo_catalogue_is_fictional_and_read_only() -> None:
+    service = DemoService(demo_settings().timezone_info)
 
-    with pytest.raises(DemoStaleAction):
-        DemoService._validate_workspace(workspace, generation=1)
+    first = service.entities(DemoScreen.SERVICES)
+    second = service.entities(DemoScreen.SERVICES)
+
+    assert first is second
+    assert first
+    with pytest.raises((AttributeError, TypeError)):
+        first[0].title = "changed"  # type: ignore[misc]
+
+
+def test_demo_runtime_composition_has_no_database_parameter() -> None:
+    signature = inspect.signature(create_demo_dispatcher)
+
+    assert tuple(signature.parameters) == ("settings",)
+
+
+def test_demo_package_has_no_persistence_imports_or_calls() -> None:
+    root = Path("app/demo")
+    forbidden_imports = ("app.database", "app.repositories", "sqlalchemy")
+    forbidden_calls = {"add", "commit", "delete", "execute", "flush", "merge"}
+
+    for path in root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith(forbidden_imports), path
+            if isinstance(node, ast.Import):
+                assert all(not alias.name.startswith(forbidden_imports) for alias in node.names), (
+                    path
+                )
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in forbidden_calls, (path, node.func.attr)
+
+
+def test_public_menus_are_bounded_and_callback_payloads_fit_telegram() -> None:
+    markups = (main_menu(), client_menu(), admin_menu(0), admin_menu(1), master_menu())
+
+    for markup in markups:
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        assert len(buttons) <= 20
+        assert all(
+            button.callback_data is None or len(button.callback_data.encode("utf-8")) <= 64
+            for button in buttons
+        )

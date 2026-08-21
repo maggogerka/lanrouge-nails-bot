@@ -247,12 +247,20 @@ Compose/Docker, gitleaks и Trivy. См. [docs/testing-v0.4.md](docs/testing-v0.
 - CRM-подписка отделена от платежей клиентов; рублёвая продажа цифровой подписки внутри
   Telegram не реализована.
 
-## Лицензия
-
 ## Публичная демоверсия
 
-Код поддерживает два явных режима: `APP_MODE=production` по умолчанию и изолированный `APP_MODE=demo`. Демоверсия запускается только отдельным файлом `compose.demo.yml`, с отдельными Telegram-токеном, PostgreSQL, Redis, volumes, сетью и логами.
+Код поддерживает два явных режима: `APP_MODE=production` по умолчанию и изолированный
+`APP_MODE=demo`. Демоверсия запускается только через `compose.demo.yml` с отдельным Telegram-токеном
+и отдельным непостоянным Redis. PostgreSQL, рабочие routers, платежи, рассылки, workers и API в
+demo runtime не создаются и не подключаются.
 
-Подготовка и запуск описаны в [DEMO_DEPLOY.md](DEMO_DEPLOY.md). Пользовательский сценарий — в [DEMO_BOT_GUIDE.md](DEMO_BOT_GUIDE.md). Не подключайте к demo Compose production env-файл и не запускайте production workers рядом с ним.
+Посетитель может открыть клиентское меню, админ-панель и панель мастера, пройти формы до
+финального подтверждения и увидеть полный сценарий. Любая бизнес-операция на финальном шаге
+централизованно блокируется; введённый текст не сохраняется даже в FSM.
+
+Подготовка и запуск описаны в [DEMO_DEPLOY.md](DEMO_DEPLOY.md), пользовательский сценарий — в
+[DEMO_BOT_GUIDE.md](DEMO_BOT_GUIDE.md). Не подключайте к demo Compose production env или secrets.
+
+## Лицензия
 
 [MIT](LICENSE)

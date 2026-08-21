@@ -18,7 +18,7 @@ from app.demo.composition import create_demo_dispatcher
 from app.domain.enums import PaymentMode
 from app.domain.tenancy import DEFAULT_BUSINESS_ID
 from app.handlers import root_router
-from app.healthcheck import check_dependencies
+from app.healthcheck import check_dependencies, check_redis
 from app.logging import configure_logging, log_event
 from app.middlewares.correlation import CorrelationIdMiddleware
 from app.middlewares.navigation import GlobalNavigationMiddleware
@@ -85,9 +85,6 @@ def create_dispatcher(
     payment_services: Mapping[PaymentMode, PaymentService] | None = None,
 ) -> Dispatcher:
     """Build a Dispatcher without opening Telegram connections."""
-
-    if settings.is_demo:
-        return create_demo_dispatcher(settings, database)
 
     authorization_service = authorization_service or AuthorizationService(database.sessions)
     # ADMIN_TELEGRAM_IDS is consumed only by startup bootstrap. Runtime legacy
@@ -290,9 +287,51 @@ async def run_polling(settings: Settings) -> None:
     """Validate dependencies and run long polling until shutdown."""
 
     settings.validate_bot_runtime()
-    await check_dependencies(settings)
+    if settings.is_demo:
+        await check_redis(settings.redis_url.get_secret_value())
+    else:
+        await check_dependencies(settings)
     async with open_component_heartbeat(settings, "bot") as heartbeat:
-        await _run_polling(settings, heartbeat)
+        if settings.is_demo:
+            await _run_demo_polling(settings, heartbeat)
+        else:
+            await _run_polling(settings, heartbeat)
+
+
+async def _run_demo_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
+    """Run the public demo without constructing any PostgreSQL dependency."""
+
+    dispatcher = create_demo_dispatcher(settings)
+    try:
+        log_event(
+            logger,
+            logging.INFO,
+            "bot.starting",
+            app_env=settings.app_env.value,
+            app_mode=settings.app_mode.value,
+            bootstrap_admin_count=0,
+        )
+        async with Bot(
+            token=settings.bot_token.get_secret_value(),
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        ) as bot:
+            await bot.delete_webhook(drop_pending_updates=False)
+            await heartbeat.beat()
+            heartbeat_task = asyncio.create_task(
+                heartbeat.run_periodically(interval_seconds=BOT_HEARTBEAT_INTERVAL_SECONDS),
+                name="demo-bot-heartbeat",
+            )
+            try:
+                await dispatcher.start_polling(
+                    bot,
+                    allowed_updates=dispatcher.resolve_used_update_types(),
+                )
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+    finally:
+        await dispatcher.storage.close()
+        log_event(logger, logging.INFO, "bot.stopped")
 
 
 async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
@@ -301,45 +340,42 @@ async def _run_polling(settings: Settings, heartbeat: RuntimeHeartbeat) -> None:
     database = Database.from_settings(settings)
     dispatcher: Dispatcher | None = None
     payment_transport: AioHttpTransport | None = None
-    if not settings.is_demo and not settings.admin_telegram_ids:
+    if not settings.admin_telegram_ids:
         log_event(logger, logging.WARNING, "configuration.admin_ids_empty")
 
     try:
-        if settings.is_demo:
-            dispatcher = create_demo_dispatcher(settings, database)
-        else:
-            authorization_service = AuthorizationService(database.sessions)
-            bootstrap_result = await authorization_service.bootstrap_owners(
-                business_id=DEFAULT_BUSINESS_ID,
-                telegram_ids=settings.configured_owner_telegram_ids,
-            )
-            log_event(
-                logger,
-                logging.INFO,
-                "authorization.owner_bootstrap_completed",
-                created_count=len(bootstrap_result.created),
-                skipped_existing_count=bootstrap_result.skipped_existing_count,
-                owner_already_present=bootstrap_result.owner_already_present,
-            )
-            payment_services: dict[PaymentMode, PaymentService] = {
-                PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())
-            }
-            if settings.yookassa_runtime_ready:
-                payment_transport = AioHttpTransport()
-                await payment_transport.start()
-                payment_services[PaymentMode.YOOKASSA] = PaymentService(
-                    YooKassaPaymentProvider(
-                        payment_transport,
-                        shop_id=settings.yookassa_shop_id.get_secret_value(),
-                        secret_key=settings.yookassa_secret_key,
-                    )
+        authorization_service = AuthorizationService(database.sessions)
+        bootstrap_result = await authorization_service.bootstrap_owners(
+            business_id=DEFAULT_BUSINESS_ID,
+            telegram_ids=settings.configured_owner_telegram_ids,
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "authorization.owner_bootstrap_completed",
+            created_count=len(bootstrap_result.created),
+            skipped_existing_count=bootstrap_result.skipped_existing_count,
+            owner_already_present=bootstrap_result.owner_already_present,
+        )
+        payment_services: dict[PaymentMode, PaymentService] = {
+            PaymentMode.MANUAL: PaymentService(ManualPaymentProvider())
+        }
+        if settings.yookassa_runtime_ready:
+            payment_transport = AioHttpTransport()
+            await payment_transport.start()
+            payment_services[PaymentMode.YOOKASSA] = PaymentService(
+                YooKassaPaymentProvider(
+                    payment_transport,
+                    shop_id=settings.yookassa_shop_id.get_secret_value(),
+                    secret_key=settings.yookassa_secret_key,
                 )
-            dispatcher = create_dispatcher(
-                settings,
-                database,
-                authorization_service,
-                payment_services,
             )
+        dispatcher = create_dispatcher(
+            settings,
+            database,
+            authorization_service,
+            payment_services,
+        )
         log_event(
             logger,
             logging.INFO,

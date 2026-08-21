@@ -1,4 +1,4 @@
-"""Single fail-closed policy for every public-demo capability."""
+"""Central fail-closed capability policy for the public demo."""
 
 from __future__ import annotations
 
@@ -7,11 +7,16 @@ from enum import StrEnum
 
 class DemoOperation(StrEnum):
     READ = "read"
-    BOOK = "book"
+    NAVIGATE = "navigate"
+    TRANSIENT_STATE = "transient_state"
+    CREATE_APPOINTMENT = "create_appointment"
     UPDATE_APPOINTMENT = "update_appointment"
+    CREATE_WAITLIST_ENTRY = "create_waitlist_entry"
+    CREATE_REVIEW = "create_review"
     ADD_SERVICE = "add_service"
     ADD_WINDOW = "add_window"
-    RESET = "reset"
+    CHANGE_SETTINGS = "change_settings"
+    CHANGE_PAYMENT = "change_payment"
     PAYMENT = "payment"
     REFUND = "refund"
     BROADCAST = "broadcast"
@@ -25,28 +30,21 @@ class DemoOperation(StrEnum):
 
 
 class DemoActionBlocked(PermissionError):
-    """Raised when a production side effect is requested by demo code."""
+    """Raised before a demonstration can perform a business side effect."""
 
 
 class DemoPolicy:
-    """Allow only mutations contained inside the caller's demo workspace."""
+    """Only read-only navigation and short-lived FSM state are permitted."""
 
     _ALLOWED = frozenset(
-        {
-            DemoOperation.READ,
-            DemoOperation.BOOK,
-            DemoOperation.UPDATE_APPOINTMENT,
-            DemoOperation.ADD_SERVICE,
-            DemoOperation.ADD_WINDOW,
-            DemoOperation.RESET,
-        }
+        {DemoOperation.READ, DemoOperation.NAVIGATE, DemoOperation.TRANSIENT_STATE}
     )
 
     def require(self, operation: DemoOperation) -> None:
         if operation not in self._ALLOWED:
             raise DemoActionBlocked(
-                "Это демонстрация функции. В рабочем боте действие выполняется после "
-                "явного подтверждения владельца; здесь внешние запросы не отправляются."
+                "Это действие показано полностью, но сохранение доступно только в рабочей "
+                "версии после покупки. Демо ничего не записало, не отправило и не изменило."
             )
 
     def is_allowed(self, operation: DemoOperation) -> bool:

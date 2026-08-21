@@ -21,38 +21,54 @@ class DemoRedis(RedisEvalClient, Protocol):
 
 
 class DemoGuardMiddleware(BaseMiddleware):
-    """Enforce the global 30/minute limit and one-time callback processing."""
+    """Enforce per-user/global limits and one-time callback processing."""
 
-    def __init__(self, redis: DemoRedis, *, namespace: str, limit: int) -> None:
+    def __init__(
+        self,
+        redis: DemoRedis,
+        *,
+        namespace: str,
+        user_limit: int,
+        global_limit: int,
+    ) -> None:
         self._redis = redis
         self._limiter = RedisRateLimiter(redis, namespace=namespace)
         self._namespace = namespace
-        self._limit = limit
+        self._user_limit = user_limit
+        self._global_limit = global_limit
 
-    async def __call__(
-        self, handler: Handler, event: TelegramObject, data: dict[str, Any]
-    ) -> Any:
+    async def __call__(self, handler: Handler, event: TelegramObject, data: dict[str, Any]) -> Any:
         if not isinstance(event, (Message, CallbackQuery)) or event.from_user is None:
             return await handler(event, data)
         raw_request_id = (
-            event.id
-            if isinstance(event, CallbackQuery)
-            else f"{event.chat.id}:{event.message_id}"
+            event.id if isinstance(event, CallbackQuery) else f"{event.chat.id}:{event.message_id}"
         )
         request_id = f"demo-{sha256(raw_request_id.encode('utf-8')).hexdigest()}"
         try:
+            global_decision = await self._limiter.consume(
+                "demo_global_actions",
+                business_id=1,
+                subject_id=0,
+                request_id=request_id,
+                limit=self._global_limit,
+                window_seconds=60,
+            )
             decision = await self._limiter.consume(
                 "demo_actions",
                 business_id=1,
                 subject_id=event.from_user.id,
                 request_id=request_id,
-                limit=self._limit,
+                limit=self._user_limit,
                 window_seconds=60,
             )
-            if not decision.allowed:
+            if not global_decision.allowed or not decision.allowed:
+                retry_after = max(
+                    global_decision.retry_after_seconds,
+                    decision.retry_after_seconds,
+                )
                 await self._reject(
                     event,
-                    f"Слишком много действий. Повторите через {decision.retry_after_seconds} сек.",
+                    f"Слишком много действий. Повторите через {retry_after} сек.",
                 )
                 return None
             if isinstance(event, CallbackQuery):

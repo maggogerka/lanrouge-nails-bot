@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feat/**
       - feature/**
       - fix/**
       - release/**
@@ -67,7 +68,9 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
           python -m pip check
       - name: Reject tracked local environment files
-        run: test -z "$(git ls-files -- '.env' '.env.*' '.secrets/**' ':(exclude).env.example')"
+        run: >-
+          test -z "$(git ls-files -- '.env' '.env.*' '.secrets/**'
+          ':(exclude).env.example' ':(exclude).env.demo.example')"
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format
@@ -157,6 +160,9 @@ jobs:
       POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/postgres_password
       RESTORE_POSTGRES_PASSWORD_SECRET_FILE: .ci-secrets/restore_postgres_password
       REDIS_PASSWORD_SECRET_FILE: .ci-secrets/redis_password
+      DEMO_ENV_FILE: .env.demo.example
+      DEMO_BOT_TOKEN_SECRET_FILE: .ci-secrets/demo_bot_token
+      DEMO_REDIS_PASSWORD_SECRET_FILE: .ci-secrets/demo_redis_password
       RESTIC_PASSWORD_SECRET_FILE: .ci-secrets/restic_password
       YOOKASSA_SHOP_ID_SECRET_FILE: .ci-secrets/yookassa_shop_id
       YOOKASSA_SECRET_KEY_SECRET_FILE: .ci-secrets/yookassa_secret_key
@@ -169,6 +175,8 @@ jobs:
           printf '%s' 'ci-postgres-password-only' > .ci-secrets/postgres_password
           printf '%s' 'ci-restore-password-only' > .ci-secrets/restore_postgres_password
           printf '%s' 'ci_redis_password_0123456789abcdef' > .ci-secrets/redis_password
+          printf '%s' '123456:ci-demo-token-only' > .ci-secrets/demo_bot_token
+          printf '%s' 'ci_demo_redis_password_0123456789' > .ci-secrets/demo_redis_password
           printf '%s' 'ci-restic-password-only' > .ci-secrets/restic_password
           printf '%s' 'ci-shop-id' > .ci-secrets/yookassa_shop_id
           printf '%s' 'ci-yookassa-secret-key' > .ci-secrets/yookassa_secret_key
@@ -211,6 +219,17 @@ jobs:
             and ([.services.bot.secrets[].source] | index("yookassa_secret_key") != null)
             and ([.services.api.secrets[].source] | index("yookassa_shop_id") != null)
             and ([.services.api.secrets[].source] | index("yookassa_secret_key") != null)
+          '
+          docker compose -p crm-public-demo -f compose.demo.yml config --quiet
+          docker compose -p crm-public-demo -f compose.demo.yml config --format json | jq -e '
+            (.services | keys | sort) == ["bot", "redis"] and
+            ((.volumes // {}) | length) == 0 and
+            .networks["demo-backend"].internal == true and
+            ((.services.redis.ports // []) | length) == 0 and
+            ((.services.bot.environment.DATABASE_URL // "") == "") and
+            (.services.bot.environment.APP_MODE == "demo") and
+            ([.services.bot.secrets[].source] | sort) ==
+              ["demo_bot_token", "demo_redis_password"]
           '
       - name: Smoke PostgreSQL and authenticated Redis
         run: |

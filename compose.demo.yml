@@ -6,58 +6,7 @@ x-logging: &demo-logging
     max-size: "10m"
     max-file: "3"
 
-x-app-environment: &demo-app-environment
-  APP_MODE: demo
-  DATABASE_PASSWORD_FILE: /run/secrets/demo_postgres_password
-  REDIS_PASSWORD_FILE: /run/secrets/demo_redis_password
-
-x-app-runtime: &demo-app-runtime
-  build:
-    context: .
-    target: runtime
-  env_file: ${DEMO_ENV_FILE:-.env.demo}
-  environment: *demo-app-environment
-  secrets:
-    - demo_postgres_password
-    - demo_redis_password
-  init: true
-  read_only: true
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,size=32m,mode=1777
-  cap_drop:
-    - ALL
-  security_opt:
-    - no-new-privileges:true
-  pids_limit: 128
-  logging: *demo-logging
-
 services:
-  postgres:
-    image: postgres:18.4-bookworm
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: crm_public_demo
-      POSTGRES_USER: crm_demo
-      POSTGRES_PASSWORD_FILE: /run/secrets/demo_postgres_password
-    secrets:
-      - demo_postgres_password
-    volumes:
-      - demo-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crm_demo -d crm_public_demo"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-    networks:
-      - demo-backend
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 128
-    mem_limit: 512m
-    cpus: 0.75
-    logging: *demo-logging
-
   redis:
     image: redis:8.2.7-alpine
     user: redis
@@ -71,9 +20,7 @@ services:
       - -ec
       - |
         password="$$(cat /run/secrets/demo_redis_password)"
-        exec redis-server --appendonly yes --requirepass "$$password"
-    volumes:
-      - demo-redis-data:/data
+        exec redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru --requirepass "$$password"
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/secrets/demo_redis_password) redis-cli ping | grep -qx PONG"]
       interval: 5s
@@ -87,61 +34,49 @@ services:
     cap_drop:
       - ALL
     pids_limit: 64
-    mem_limit: 256m
+    mem_limit: 192m
     cpus: 0.25
     logging: *demo-logging
 
-  migrate:
-    <<: *demo-app-runtime
-    command: ["alembic", "upgrade", "head"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - demo-backend
-    restart: "no"
-    healthcheck:
-      disable: true
-
   bot:
-    <<: *demo-app-runtime
-    command: ["python", "-m", "app.bot"]
+    build:
+      context: .
+      target: runtime
+    env_file: ${DEMO_ENV_FILE:-.env.demo}
     environment:
-      <<: *demo-app-environment
+      APP_MODE: demo
+      BOT_TOKEN_FILE: /run/secrets/demo_bot_token
+      REDIS_PASSWORD_FILE: /run/secrets/demo_redis_password
       HEALTHCHECK_COMPONENT: bot
+    secrets:
+      - demo_bot_token
+      - demo_redis_password
+    command: ["python", "-m", "app.bot"]
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - demo-backend
       - demo-egress
-    restart: unless-stopped
-    mem_limit: 512m
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 96
+    mem_limit: 384m
     cpus: 0.5
-
-  cleanup:
-    <<: *demo-app-runtime
-    command: ["python", "-m", "app.maintenance.demo_cleanup", "--loop", "--interval-seconds", "3600"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    networks:
-      - demo-backend
     restart: unless-stopped
-    mem_limit: 256m
-    cpus: 0.25
     healthcheck:
-      disable: true
-
-volumes:
-  demo-postgres-data:
-  demo-redis-data:
+      test: ["CMD", "python", "-m", "app.demo.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    logging: *demo-logging
 
 networks:
   demo-backend:
@@ -149,7 +84,7 @@ networks:
   demo-egress:
 
 secrets:
-  demo_postgres_password:
-    file: ${DEMO_POSTGRES_PASSWORD_SECRET_FILE:-./.secrets/demo_postgres_password}
+  demo_bot_token:
+    file: ${DEMO_BOT_TOKEN_SECRET_FILE:-./.secrets/demo_bot_token}
   demo_redis_password:
     file: ${DEMO_REDIS_PASSWORD_SECRET_FILE:-./.secrets/demo_redis_password}

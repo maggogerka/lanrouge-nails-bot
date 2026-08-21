@@ -62,12 +62,6 @@ EXPECTED_TABLES = {
     "consent_history",
     "data_deletion_request_events",
     "data_deletion_requests",
-    "demo_appointments",
-    "demo_clients",
-    "demo_services",
-    "demo_sessions",
-    "demo_slots",
-    "demo_staff",
     "marketing_events",
     "master_profiles",
     "master_public_links",
@@ -241,24 +235,8 @@ def test_review_revision_is_registered_and_restricts_review_deletion() -> None:
 
 def test_foreign_keys_restrict_history_deletion() -> None:
     foreign_keys = [
-        foreign_key
-        for table in Base.metadata.tables.values()
-        if not table.name.startswith("demo_")
-        for foreign_key in table.foreign_keys
+        foreign_key for table in Base.metadata.tables.values() for foreign_key in table.foreign_keys
     ]
 
     assert foreign_keys
     assert all(foreign_key.ondelete == "RESTRICT" for foreign_key in foreign_keys)
-
-
-def test_ephemeral_demo_children_are_deleted_with_their_workspace() -> None:
-    demo_foreign_keys = [
-        foreign_key
-        for table in Base.metadata.tables.values()
-        if table.name.startswith("demo_")
-        for foreign_key in table.foreign_keys
-        if foreign_key.target_fullname == "demo_sessions.id"
-    ]
-
-    assert demo_foreign_keys
-    assert all(foreign_key.ondelete == "CASCADE" for foreign_key in demo_foreign_keys)

@@ -26,14 +26,6 @@ from app.database.models.commerce import (
     BusinessSubscription,
 )
 from app.database.models.crm import ClientNote, ClientTag, ConsentHistory, UserClientTag
-from app.database.models.demo import (
-    DemoAppointment,
-    DemoClient,
-    DemoService,
-    DemoSession,
-    DemoSlot,
-    DemoStaff,
-)
 from app.database.models.master_profile import MasterProfile, MasterPublicLink
 from app.database.models.notification import NotificationJob
 from app.database.models.payment import Payment, PaymentWebhookEvent, Refund
@@ -83,12 +75,6 @@ __all__ = [
     "ConsentHistory",
     "DataDeletionRequest",
     "DataDeletionRequestEvent",
-    "DemoAppointment",
-    "DemoClient",
-    "DemoService",
-    "DemoSession",
-    "DemoSlot",
-    "DemoStaff",
     "MarketingEvent",
     "MasterProfile",
     "MasterPublicLink",

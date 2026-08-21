@@ -162,10 +162,6 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         validation_alias="PRODUCTION_BOT_TOKEN_SHA256",
     )
-    production_database_url_sha256: SecretStr = Field(
-        default=SecretStr(""),
-        validation_alias="PRODUCTION_DATABASE_URL_SHA256",
-    )
     demo_site_url: AnyHttpUrl | None = Field(default=None, validation_alias="DEMO_SITE_URL")
     demo_session_ttl_hours: int = Field(
         default=2,
@@ -173,23 +169,17 @@ class Settings(BaseSettings):
         le=12,
         validation_alias="DEMO_SESSION_TTL_HOURS",
     )
-    demo_data_retention_hours: int = Field(
-        default=24,
-        ge=2,
-        le=72,
-        validation_alias="DEMO_DATA_RETENTION_HOURS",
-    )
-    demo_reset_cooldown_seconds: int = Field(
-        default=60,
-        ge=30,
-        le=3600,
-        validation_alias="DEMO_RESET_COOLDOWN_SECONDS",
-    )
     demo_rate_limit_per_minute: int = Field(
         default=30,
         ge=5,
         le=60,
         validation_alias="DEMO_RATE_LIMIT_PER_MINUTE",
+    )
+    demo_global_rate_limit_per_minute: int = Field(
+        default=600,
+        ge=30,
+        le=10_000,
+        validation_alias="DEMO_GLOBAL_RATE_LIMIT_PER_MINUTE",
     )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     privacy_policy_url: AnyHttpUrl | None = Field(
@@ -722,7 +712,9 @@ class Settings(BaseSettings):
     def validate_bot_runtime(self) -> None:
         """Check values required before the Telegram polling process starts."""
 
-        missing = self._missing_connections()
+        missing = [] if self.is_demo else self._missing_connections()
+        if self.is_demo and not self.redis_url.get_secret_value():
+            missing.append("REDIS_URL")
         if not self.bot_token.get_secret_value():
             missing.insert(0, "BOT_TOKEN")
         if missing:
@@ -732,6 +724,7 @@ class Settings(BaseSettings):
     def validate_dependency_runtime(self) -> None:
         """Check values required by migrations and dependency health checks."""
 
+        self._reject_demo_component("production dependency healthcheck")
         missing = self._missing_connections()
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
@@ -740,6 +733,7 @@ class Settings(BaseSettings):
     def validate_database_runtime(self) -> None:
         """Check the single value required by the Alembic process."""
 
+        self._reject_demo_component("database migration")
         if not self.database_url.get_secret_value():
             raise RuntimeConfigurationError(("DATABASE_URL",))
         self._validate_database_mode_marker()
@@ -747,6 +741,7 @@ class Settings(BaseSettings):
     def validate_worker_runtime(self) -> None:
         """Check values used by the independent reminder worker."""
 
+        self._reject_demo_component("production worker")
         missing: list[str] = []
         if not self.bot_token.get_secret_value():
             missing.append("BOT_TOKEN")
@@ -758,6 +753,7 @@ class Settings(BaseSettings):
     def validate_api_runtime(self) -> None:
         """Check API-only secrets and exact public-origin restrictions."""
 
+        self._reject_demo_component("production API")
         missing = self._missing_connections()
         if not self.bot_token.get_secret_value():
             missing.insert(0, "BOT_TOKEN")
@@ -785,6 +781,7 @@ class Settings(BaseSettings):
     def validate_yookassa_runtime(self) -> None:
         """Require provider credentials only for a process serving its webhook."""
 
+        self._reject_demo_component("YooKassa runtime")
         missing: list[str] = []
         if not self.yookassa_shop_id.get_secret_value():
             missing.append("YOOKASSA_SHOP_ID")
@@ -824,6 +821,7 @@ class Settings(BaseSettings):
     def validate_reservation_worker_runtime(self) -> None:
         """Reservation expiry uses PostgreSQL and Redis component heartbeats."""
 
+        self._reject_demo_component("reservation worker")
         missing = self._missing_connections()
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
@@ -845,28 +843,22 @@ class Settings(BaseSettings):
     def _validate_mode_boundary(self) -> None:
         """Fail closed before a demo process can touch production integrations."""
 
-        self._validate_database_mode_marker()
         if not self.is_demo:
+            self._validate_database_mode_marker()
             return
 
         missing: list[str] = []
         bot_fingerprint = self.production_bot_token_sha256.get_secret_value().lower()
-        database_fingerprint = self.production_database_url_sha256.get_secret_value().lower()
         if not re.fullmatch(r"[0-9a-f]{64}", bot_fingerprint):
             missing.append("PRODUCTION_BOT_TOKEN_SHA256")
-        if not re.fullmatch(r"[0-9a-f]{64}", database_fingerprint):
-            missing.append("PRODUCTION_DATABASE_URL_SHA256")
         if missing:
             raise RuntimeConfigurationError(tuple(missing))
 
         bot_digest = sha256(self.bot_token.get_secret_value().encode("utf-8")).hexdigest()
-        database_digest = sha256(
-            self.database_url.get_secret_value().encode("utf-8")
-        ).hexdigest()
         if bot_digest == bot_fingerprint:
             raise ValueError("Demo BOT_TOKEN must differ from the production token")
-        if database_digest == database_fingerprint:
-            raise ValueError("Demo DATABASE_URL must differ from the production database")
+        if self.database_url.get_secret_value():
+            raise ValueError("DATABASE_URL is forbidden in demo mode")
         if self.admin_telegram_ids:
             raise ValueError("ADMIN_TELEGRAM_IDS must be empty in demo mode")
         if self.sentry_dsn is not None:
@@ -888,6 +880,10 @@ class Settings(BaseSettings):
             raise ValueError("Demo DATABASE_URL database name must contain 'demo'")
         if not self.is_demo and marked_as_demo:
             raise ValueError("Production mode refuses a DATABASE_URL marked as demo")
+
+    def _reject_demo_component(self, component: str) -> None:
+        if self.is_demo:
+            raise ValueError(f"{component} is forbidden in demo mode")
 
     @staticmethod
     def _require_secret_length(name: str, value: SecretStr) -> None:
