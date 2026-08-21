@@ -249,4 +249,10 @@ Compose/Docker, gitleaks и Trivy. См. [docs/testing-v0.4.md](docs/testing-v0.
 
 ## Лицензия
 
+## Публичная демоверсия
+
+Код поддерживает два явных режима: `APP_MODE=production` по умолчанию и изолированный `APP_MODE=demo`. Демоверсия запускается только отдельным файлом `compose.demo.yml`, с отдельными Telegram-токеном, PostgreSQL, Redis, volumes, сетью и логами.
+
+Подготовка и запуск описаны в [DEMO_DEPLOY.md](DEMO_DEPLOY.md). Пользовательский сценарий — в [DEMO_BOT_GUIDE.md](DEMO_BOT_GUIDE.md). Не подключайте к demo Compose production env-файл и не запускайте production workers рядом с ним.
+
 [MIT](LICENSE)
